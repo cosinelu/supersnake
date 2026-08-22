@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>蜡笔贪吃蛇 · 网页版</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #FBF6E9; /* 浅奶油纸底 */
+  }
+  #game {
+    display: block;
+    touch-action: none;          /* 禁止浏览器默认触摸滚动/缩放 */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    cursor: crosshair;
+  }
+  /* 竖屏时的小提示（游戏本身仍可玩） */
+  #rotateTip {
+    display: none;
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 14px;
+    border: 2px solid #3A3238;
+    border-radius: 14px;
+    background: #FFFDF5;
+    color: #3A3238;
+    font: 13px sans-serif;
+    pointer-events: none;
+    z-index: 10;
+  }
+  @media (orientation: portrait) {
+    #rotateTip { display: block; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="rotateTip">横屏体验更佳</div>
+<!-- file:// 直开可用：纯 IIFE 全局命名空间 CS，按依赖顺序引入，无 ES Module / 无构建 -->
+<script src="js/config.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/levels.js"></script>
+<script src="js/walls.js"></script>
+<script src="js/snake.js"></script>
+<script src="js/spawner.js"></script>
+<script src="js/particles.js"></script>
+<script src="js/joystick.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/multiplayer.js"></script>
+<script src="js/renderer.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
