@@ -61,9 +61,15 @@
         if (u.dist(x, y, this.blocks[i].x, this.blocks[i].y) < cfg.BLOCK_MIN_DIST) { ok = false; break; }
       }
       if (!ok) continue;                                              // 与已有色块 ≥140px
+      // 决定类型：默认普通色块；按概率改为特殊道具（万能色 / 炸弹 / 减速）
+      var kind = 'color';
+      if (Math.random() < cfg.ITEM_SPECIAL_CHANCE) {
+        kind = (Math.random() < cfg.ITEM_WILD_RATIO) ? 'wild' : (Math.random() < 0.5 ? 'bomb' : 'slow');
+      }
       this.blocks.push({
         x: x, y: y,
-        color: this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)],
+        kind: kind,
+        color: kind === 'color' ? this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)] : null,
         phase: Math.random() * Math.PI * 2 // 脉动相位
       });
       return true;

@@ -148,6 +148,12 @@
     this.computeBody(); // 立即对齐身体渲染（新节位于头后 SEG_SPACING 处）
   };
 
+  /** 吃到万能色块：头部插入一个 'wild' 节（消除时可匹配任意相邻同色，见 findRuns） */
+  Snake.prototype.growWild = function () {
+    this.colors.unshift('wild');
+    this.computeBody();
+  };
+
   /**
    * 收集判定辅助：蛇头或任一身体节中心距 (x,y) 是否 < r + SEG_RADIUS
    * （「身体穿过也算」的圆形重叠判定）。
@@ -187,14 +193,24 @@
     return { color: color, x: p.x, y: p.y };
   };
 
-  /** 找出所有长度 ≥ runLen 的同色连续段（返回下标段数组） */
+  /**
+   * 找出所有长度 ≥ runLen 的同色连续段（返回下标段数组）。
+   * 支持万能色 'wild'：一段连续节中，非 wild 节必须同色、wild 可充当中介/两端；
+   * 该段整体视作该颜色（wild 节也计入长度并参与消除）——「万能色」即由此实现。
+   */
   Snake.prototype.findRuns = function (runLen) {
-    var runs = [];
-    var i = 0, n = this.colors.length;
+    var runs = [], i = 0, n = this.colors.length;
     while (i < n) {
       var j = i;
-      while (j + 1 < n && this.colors[j + 1] === this.colors[i]) j++;
-      if (j - i + 1 >= runLen) {
+      var runColor = this.colors[i] === 'wild' ? null : this.colors[i];
+      while (j + 1 < n) {
+        var c = this.colors[j + 1];
+        if (c === 'wild') { j++; continue; }
+        if (runColor === null) { runColor = c; j++; continue; }
+        if (c === runColor) { j++; continue; }
+        break;
+      }
+      if (runColor !== null && j - i + 1 >= runLen) {
         var r = [];
         for (var k = i; k <= j; k++) r.push(k);
         runs.push(r);

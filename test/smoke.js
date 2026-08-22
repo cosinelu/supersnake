@@ -36,8 +36,8 @@ ok(cfg.unlockedColorKeys(4).join(',') === 'red,blue,green,orange', 'unlockedColo
 // ---------------- 2. 关卡曲线（世界大地图） ----------------
 section('关卡曲线');
 var l1 = lv.levelConfig(1), l10 = lv.levelConfig(10);
-ok(l1.W === 2400 && l1.H === 1600, 'L1 世界 2400x1600', l1.W + 'x' + l1.H);
-ok(l10.W === 5200 && l10.H === 3600, 'L10 世界 5200x3600', l10.W + 'x' + l10.H);
+ok(l1.W === 1500 && l1.H === 1000, 'L1 世界 1500x1000（v2.5 起始更小）', l1.W + 'x' + l1.H);
+ok(l10.W === 4800 && l10.H === 3200, 'L10 世界 4800x3200（v2.5 随关卡递增）', l10.W + 'x' + l10.H);
 ok(l1.W > l1.H && l10.W > l10.H, '横版：所有关 宽>高');
 ok(l1.speed === 150 && l10.speed === 231, '蛇速 150→231 px/s');
 ok(l1.wallSegments === 3 && l10.wallSegments === 10, '墙段 3→10');
@@ -104,6 +104,45 @@ ok(cfg.ELIM_SCORE * 2 === 10 && cfg.ELIM_SCORE * 3 === 15,
 ok(cfg.CHAIN_FX_STEP > 0 && 1 + cfg.CHAIN_FX_STEP === 1.6 && 1 + 2 * cfg.CHAIN_FX_STEP > 2,
   '特效放大倍率：chain2=1.6×、chain3=2.2×（chain≥2 弹「N连锁！」，渲染层表现）');
 // 需求 3：解锁横幅已改为无底板纯文字+色块图标（渲染层，node 侧不断言绘制，仅说明）
+
+// ---------------- 4e. 特殊道具行为（v2.5 需求 5：万能色 / 炸弹 / 减速） ----------------
+section('特殊道具行为');
+// 万能色通配：wild 桥接两侧同色，使原本不成的 4 连成立
+var sw = makeSnake(['red', 'wild', 'red', 'red', 'red']);
+var runsW = sw.findRuns(cfg.ELIM_RUN);
+ok(runsW.length === 1 && runsW[0].length === 5, '万能色桥接：red,wild,red,red,red → 5 连（wild 充当中介）', JSON.stringify(runsW));
+// 万能色不串接异色：red,wild,blue,blue,blue 中 wild 不能把红蓝连成同色
+var sw2 = makeSnake(['red', 'wild', 'blue', 'blue', 'blue']);
+var runsW2 = sw2.findRuns(cfg.ELIM_RUN);
+ok(runsW2.length === 0, '万能色不串接异色：red,wild,blue×3 不产生跨色 4 连', JSON.stringify(runsW2));
+// growWild：头部插入 'wild' 节且长度 +1
+var gw = makeSnake(['red', 'blue', 'green']);
+var gwBefore = gw.length();
+gw.growWild();
+ok(gw.colors[0] === 'wild' && gw.length() === gwBefore + 1, 'growWild：头插 wild 节且总长 +1');
+// 炸弹消除（eliminate(2,2)）：普通规则(需 4 连)不消除 2 连，炸弹规则可消除
+var eb = makeSnake(['red', 'red', 'blue', 'blue']);
+var ebNormal = eb.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN); // 需 4 连
+ok(ebNormal.length === 0 && eb.length() === 4, '普通规则：仅 2 连不触发消除');
+var ebBomb = eb.eliminate(2, 2); // 炸弹：≥2 连即消
+ok(ebBomb.length === 2 && eb.colors.join(',') === 'blue,blue', '炸弹规则(2,2)：清除 2 连（剩保底 2 节）', 'removed=' + ebBomb.length);
+// 减速道具：currentSpeed 在 slowUntil 内 ×SLOW_FACTOR
+var sg2 = new CS.Game(960, 540); sg2.startLevel(1);
+var spdNormal = sg2.currentSpeed();
+sg2.timeMs = 1000; sg2.slowUntil = sg2.timeMs + cfg.SLOW_MS; // 启用减速
+var spdSlow = sg2.currentSpeed();
+ok(Math.abs(spdSlow - spdNormal * cfg.SLOW_FACTOR) < 1e-9 && spdSlow < spdNormal,
+  '减速道具：slowUntil 内速度 = 常态 ×' + cfg.SLOW_FACTOR, 'normal=' + spdNormal.toFixed(1) + ' slow=' + spdSlow.toFixed(1));
+sg2.slowUntil = 0;
+ok(Math.abs(sg2.currentSpeed() - spdNormal) < 1e-9, '减速结束：速度恢复常态');
+
+// ---------------- 4f. v2.5 调参锁定（边界墙 / 加速感知） ----------------
+section('v2.5 调参');
+ok(cfg.WALL_THICK >= 40, '边界墙加粗至 ' + cfg.WALL_THICK + 'px（可见；撞即死逻辑不变）', 'WALL_THICK=' + cfg.WALL_THICK);
+ok(cfg.SPEED_LEN_COEF >= 2 && cfg.LEVEL_SPEED_TIME_COEF >= 1,
+  '加速感知：长度加成系数 ' + cfg.SPEED_LEN_COEF + ' / 时间加成系数 ' + cfg.LEVEL_SPEED_TIME_COEF + '（均显著上调）');
+ok(lv.levelConfig(1).W < lv.levelConfig(5).W && lv.levelConfig(5).W < lv.levelConfig(10).W,
+  '关卡地图随关卡递增：L1(' + lv.levelConfig(1).W + ') < L5 < L10(' + lv.levelConfig(10).W + ')');
 
 // ---------------- 5. 转向速率钳制 + 轨迹跟随 ----------------
 section('转向与轨迹');
@@ -176,10 +215,18 @@ sp.unlockedKeys = ['red', 'blue']; // 模拟只解锁 2 色
 ok(sp.target === u.clamp(Math.round(3600 * 2400 / cfg.BLOCK_AREA_DIV), cfg.BLOCKS_MIN, cfg.BLOCKS_MAX),
   '目标数 = 世界面积/90000 夹取 [8,40]', 'target=' + sp.target);
 for (i = 0; i < 300; i++) sp.spawnOne();
-var colorOk = sp.blocks.length > 0 && sp.blocks.every(function (blk) {
-  return blk.color === 'red' || blk.color === 'blue';
+// 新结构：每块必须带 kind 字段；普通色块落在已解锁色、特殊道具 color=null
+var shapeOk = sp.blocks.length > 0 && sp.blocks.every(function (blk) {
+  if (typeof blk.kind !== 'string') return false;
+  if (blk.kind === 'color') return blk.color === 'red' || blk.color === 'blue';
+  if (blk.kind === 'wild' || blk.kind === 'bomb' || blk.kind === 'slow') return blk.color === null;
+  return false;
 });
-ok(colorOk, '300 次生成全部落在已解锁色 [red,blue]', 'blocks=' + sp.blocks.length);
+ok(shapeOk, '300 次生成：每块带 kind，普通块=已解锁色、特殊道具 color=null', 'blocks=' + sp.blocks.length);
+var colorCount = sp.blocks.filter(function (b) { return b.kind === 'color'; }).length;
+var specialCount = sp.blocks.filter(function (b) { return b.kind !== 'color'; }).length;
+ok(colorCount > 0, '生成包含普通色块（color 块=' + colorCount + '）');
+ok(specialCount > 0, '生成包含特殊道具（wild/bomb/slow 块=' + specialCount + '）');
 var distOk = true;
 for (i = 0; i < sp.blocks.length; i++) {
   var blk = sp.blocks[i];

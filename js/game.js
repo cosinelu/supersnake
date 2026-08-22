@@ -49,6 +49,7 @@
     this.mpResult = null; // 多人结算数据 {surviveSec, score, survivalScore, elimScore, elimTotal,
                         //   rank, kills, finalLen, maxLen, bestLen, bestScore, newBest}
     this.overAt = 0;      // 进入结算界面的时刻（timeMs，结算卡片/逐行动画计时起点）
+    this.slowUntil = 0;   // 减速道具到期时刻（timeMs），0 表示未生效
 
     // ---- 颜色解锁系统（本局状态）----
     this.unlockedCount = 0;     // 当前已解锁颜色数
@@ -135,6 +136,7 @@
     this.elimScore = 0;
     this.mp = null;
     this.mpResult = null;
+    this.slowUntil = 0;
     this.snake = new Snake(spawn.x, spawn.y, cfg.START_LENGTH, 0, this.unlockedKeys);
     this.snake.speed = this.currentSpeed();
     this.spawner = new Spawner(this.walls, this.snake);
@@ -275,13 +277,49 @@
   Game.prototype.currentSpeed = function () {
     var len = this.snake ? this.snake.length() : cfg.START_LENGTH;
     var sec = this.elapsed / 1000;
+    var sp, base;
     if (this.mode === 'endless') {
-      return Math.min(cfg.SPEED_MAX,
-        cfg.SNAKE_SPEED + sec * cfg.ENDLESS_SPEEDUP_PER_SEC + len * cfg.SPEED_LEN_COEF);
+      sp = cfg.SNAKE_SPEED + sec * cfg.ENDLESS_SPEEDUP_PER_SEC + len * cfg.SPEED_LEN_COEF;
+      sp = Math.min(cfg.SPEED_MAX, sp);
+    } else {
+      base = this.levelCfg.speed;
+      sp = base + len * cfg.SPEED_LEN_COEF + sec * cfg.LEVEL_SPEED_TIME_COEF;
+      sp = Math.min(base + cfg.LEVEL_SPEED_CAP_ADD, sp);
     }
-    var base = this.levelCfg.speed;
-    return Math.min(base + cfg.LEVEL_SPEED_CAP_ADD,
-      base + len * cfg.SPEED_LEN_COEF + sec * cfg.LEVEL_SPEED_TIME_COEF);
+    if (this.slowUntil && this.timeMs < this.slowUntil) sp *= cfg.SLOW_FACTOR; // 减速道具
+    return sp;
+  };
+
+  /**
+   * 统一的消除计分 + 特效（连锁倍率、逐级放大粒子/星闪、N 连锁文字）。
+   * @param {Array} removed 被移除节 [{color,x,y,chain}]
+   * @param {number} fxBoost 特效放大（炸弹更强）
+   * @param {number} perSegBonus 每节额外得分（炸弹道具）
+   */
+  Game.prototype.applyElim = function (removed, fxBoost, perSegBonus) {
+    if (!removed || !removed.length) return;
+    var waves = {};
+    for (var i = 0; i < removed.length; i++) {
+      var ch = removed[i].chain || 1;
+      (waves[ch] = waves[ch] || []).push(removed[i]);
+    }
+    var chainLv = Object.keys(waves).map(Number).sort(function (a, b) { return a - b; });
+    for (var w = 0; w < chainLv.length; w++) {
+      var chain = chainLv[w], segs = waves[chain];
+      var fxScale = (1 + (chain - 1) * cfg.CHAIN_FX_STEP) * (fxBoost || 1);
+      this.elimScore += segs.length * (cfg.ELIM_SCORE * chain + (perSegBonus || 0));
+      var sx = 0, sy = 0;
+      for (i = 0; i < segs.length; i++) {
+        var col = segs[i].color === 'wild' ? '#FFD94A' : cfg.COLORS[segs[i].color];
+        this.particles.burst(segs[i].x, segs[i].y, col, Math.round(5 * fxScale), fxScale);
+        sx += segs[i].x; sy += segs[i].y;
+      }
+      var ccx = sx / segs.length, ccy = sy / segs.length;
+      this.particles.flash(ccx, ccy, '#FFD94A', fxScale, Math.min(4, chain));
+      if (chain >= cfg.CHAIN_TEXT_MIN) {
+        this.particles.chainText(ccx, ccy - 24, chain + '连锁！', 20 + (chain - 1) * 6);
+      }
+    }
   };
 
   // ---------------- 主循环 ----------------
@@ -326,42 +364,29 @@
       return;
     }
 
-    // 收集：蛇头或任一身体节压到的色块都收集；新颜色进头部（unshift），总长 +1
+    // 收集：蛇头或任一身体节压到的色块都收集；按类型触发不同效果
     var got = this.spawner.collectAt(this.snake);
     for (var i = 0; i < got.length; i++) {
-      this.snake.grow(got[i].color);
-      this.particles.burst(got[i].x, got[i].y, cfg.COLORS[got[i].color], 4);
+      var b = got[i];
+      if (b.kind === 'wild') {
+        this.snake.growWild();                      // 万能色：头部插入通配节
+        this.particles.burst(b.x, b.y, '#FFD94A', 7);
+      } else if (b.kind === 'bomb') {
+        this.particles.burst(b.x, b.y, '#E8552F', 12, 1.5);
+        var remB = this.snake.eliminate(2, 2);      // 炸弹：清掉所有 ≥2 连同色段
+        this.applyElim(remB, 1.4, cfg.BOMB_SCORE);
+      } else if (b.kind === 'slow') {
+        this.slowUntil = this.timeMs + cfg.SLOW_MS; // 减速：临时喘息
+        this.particles.burst(b.x, b.y, '#2EC4B6', 9);
+      } else {
+        this.snake.grow(b.color);
+        this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 4);
+      }
     }
 
     // 消除：相邻连续 ≥4 节同色立即消除（含连锁），保底 3 节。
-    // 连锁倍率：第 chain 次消除每节得分 = ELIM_SCORE × chain（chain1=+5、chain2=+10、chain3=+15…）；
-    // 特效逐级放大：粒子数量/星形大小与数量 ×(1 + (chain-1)×CHAIN_FX_STEP)；
-    // chain ≥ CHAIN_TEXT_MIN 时在消除点弹手绘风「N连锁！」文字（字号随 chain 增大）。
     var removed = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
-    if (removed.length) {
-      var waves = {}; // chain 等级 → 该次连锁消除的节数组
-      for (i = 0; i < removed.length; i++) {
-        var ch = removed[i].chain || 1;
-        (waves[ch] = waves[ch] || []).push(removed[i]);
-      }
-      var chainLv = Object.keys(waves).map(Number).sort(function (a, b) { return a - b; });
-      for (var w = 0; w < chainLv.length; w++) {
-        var chain = chainLv[w], segs = waves[chain];
-        var fxScale = 1 + (chain - 1) * cfg.CHAIN_FX_STEP;
-        this.elimScore += segs.length * cfg.ELIM_SCORE * chain;
-        var sx = 0, sy = 0;
-        for (i = 0; i < segs.length; i++) {
-          this.particles.burst(segs[i].x, segs[i].y, cfg.COLORS[segs[i].color],
-            Math.round(5 * fxScale), fxScale);
-          sx += segs[i].x; sy += segs[i].y;
-        }
-        var ccx = sx / segs.length, ccy = sy / segs.length;
-        this.particles.flash(ccx, ccy, '#FFD94A', fxScale, Math.min(4, chain));
-        if (chain >= cfg.CHAIN_TEXT_MIN) {
-          this.particles.chainText(ccx, ccy - 24, chain + '连锁！', 20 + (chain - 1) * 6);
-        }
-      }
-    }
+    this.applyElim(removed, 1, 0);
 
     this.spawner.update(dt);
 

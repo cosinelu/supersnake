@@ -151,57 +151,132 @@
     ];
     for (var i = 0; i < 4; i++) {
       var b = bands[i];
-      // 视口裁剪
       if (b.x + b.w < cam.x || b.x > cam.x + vw || b.y + b.h < cam.y || b.y > cam.y + vh) continue;
-      wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 8, 3 + i * 7, 9 + i * 5, 2.4);
-      ctx.fillStyle = cfg.WALL_FILL;
+      wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 10, 3 + i * 7, 9 + i * 5, 2.4);
+      ctx.fillStyle = '#9A948A';   // 比内部墙更深的灰，明显区别于压暗背景
       ctx.fill();
-      hatchClip(ctx, b.x, b.y, b.w, b.h, 12); // 排线裁剪在墙带轮廓内
-      wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 8, 3 + i * 7, 9 + i * 5, 2.4);
+      hatchClip(ctx, b.x, b.y, b.w, b.h, 9); // 排线更密
+      wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 10, 3 + i * 7, 9 + i * 5, 2.4);
       ctx.strokeStyle = cfg.INK;
-      ctx.lineWidth = 2.6;
+      ctx.lineWidth = 3.4;          // 更粗深色描边
       ctx.stroke();
     }
-    // 世界内边缘一条手绘描边（可玩范围的明确界线）
+    // 世界内边缘：一道明显粗黑线，明确「可玩范围界线、碰即死」
     wobblyRoundRect(ctx, 0, 0, walls.W, walls.H, 6, 5, 5, 3.0);
     ctx.strokeStyle = cfg.INK;
-    ctx.lineWidth = 2.6;
+    ctx.lineWidth = 3.4;
+    ctx.stroke();
+  }
+
+  /** 万能色蛇节：白底蜡笔块 + 彩色描边 + 中心手绘星标（一眼可辨「万能、通配任何色」） */
+  function drawWildSeg(ctx, px, py, size, seedX, seedY) {
+    var r = size * 0.30;
+    wobblyRoundRect(ctx, 0, 0, size, size, r, seedX, seedY, 1.1);
+    ctx.fillStyle = '#FFFDF5';
+    ctx.fill();
+    crayonStrokes(ctx, 0, 0, size, size, seedX, seedY);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = cfg.SEG_STROKE;
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(0.8, -0.6);
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = Math.max(0.8, cfg.SEG_STROKE * 0.55);
+    ctx.stroke();
+    ctx.restore();
+    // 四角彩色小点（暗示「可匹配任意颜色」）
+    var cols = ['#E8552F', '#4A7FD4', '#6FBF4A', '#F5A623'];
+    for (var c = 0; c < 4; c++) {
+      ctx.beginPath();
+      ctx.arc(size * (0.3 + 0.4 * (c % 2)), size * (0.3 + 0.4 * (c < 2 ? 0 : 1)), size * 0.07, 0, Math.PI * 2);
+      ctx.fillStyle = cols[c];
+      ctx.fill();
+    }
+    starPath(ctx, size / 2, size / 2, size * 0.20, 0.3);
+    ctx.fillStyle = '#FFD94A';
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 1.1;
     ctx.stroke();
   }
 
   /**
-   * 尾巴节（v2.3）：深色蜡笔小尾鳍/圆锥（蝌蚪尾巴），明显区别于颜色节——
-   * 它不参与消除、不可被咬掉，一眼认出"这节消不掉"。
-   * 形状：基部贴在身体末节、尖端朝外（沿前一节 → 尾巴节方向）的手绘三角锥，
-   * 顶点带确定性抖动（同物每帧一致），叠两条浅色涂抹笔触模拟蜡笔质感。
+   * 特殊道具绘制（地图上的万能色/炸弹/减速）。普通色块由 drawCrayonBlock 处理。
+   * @param {string} kind 'wild' | 'bomb' | 'slow'
+   */
+  function drawItemBlock(ctx, b, cx, cy, size, seedX, seedY, rot, pulse) {
+    if (b.kind === 'wild') {
+      // 万能色：白底圆块 + 星标 + 彩色环，明显区别于普通色块
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(pulse, pulse);
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, '#FFFDF5', seedX, seedY, { rot: rot, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      var cols = ['#E8552F', '#4A7FD4', '#6FBF4A', '#F5A623'];
+      for (var c = 0; c < 4; c++) {
+        ctx.beginPath();
+        ctx.arc(Math.cos(c * Math.PI / 2) * size * 0.34, Math.sin(c * Math.PI / 2) * size * 0.34, size * 0.10, 0, Math.PI * 2);
+        ctx.fillStyle = cols[c];
+        ctx.fill();
+        ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1; ctx.stroke();
+      }
+      starPath(ctx, 0, 0, size * 0.26, 0.3);
+      ctx.fillStyle = '#FFD94A'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.3; ctx.stroke();
+      ctx.restore();
+    } else if (b.kind === 'bomb') {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(pulse, pulse);
+      ctx.beginPath();
+      ctx.arc(0, 0, size * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = '#3A3238';
+      ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2; ctx.stroke();
+      // 引线火光
+      ctx.beginPath();
+      ctx.moveTo(0, -size * 0.42);
+      ctx.quadraticCurveTo(size * 0.18, -size * 0.62, size * 0.06, -size * 0.72);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.beginPath(); ctx.arc(size * 0.06, -size * 0.72, size * 0.09, 0, Math.PI * 2);
+      ctx.fillStyle = '#F5A623'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1; ctx.stroke();
+      ctx.restore();
+    } else if (b.kind === 'slow') {
+      // 减速：蓝绿圆 + 时钟指针
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(pulse, pulse);
+      ctx.beginPath(); ctx.arc(0, 0, size * 0.44, 0, Math.PI * 2);
+      ctx.fillStyle = '#2EC4B6'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -size * 0.26);
+      ctx.moveTo(0, 0); ctx.lineTo(size * 0.20, size * 0.06);
+      ctx.strokeStyle = '#FFFDF5'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /**
+   * 尾巴节（v2.3+）：不可消除的尾巴节，一眼可辨「消不掉」。
+   * 重做版：主体为深色圆润圆角蜡笔块（与颜色节统一风格，不突兀），
+   * 朝外方向再叠一个小小的圆润尾尖（深色小半圆），整体可爱、不像尖三角。
    * @param {number} dx,dy 尾巴朝向单位向量（指向蛇尾外侧）
    */
   function drawTail(ctx, cx, cy, dx, dy, size, seedX, seedY) {
-    var pxp = -dy, pyp = dx; // 垂直方向
-    function jx(k) { return (u.hash2(seedX, seedY, 60 + k) - 0.5) * 2.4; }
-    function jy(k) { return (u.hash2(seedY, seedX, 70 + k) - 0.5) * 2.4; }
-    var tipX = cx + dx * size * 0.72 + jx(1), tipY = cy + dy * size * 0.72 + jy(1);
-    var b1x = cx - dx * size * 0.28 + pxp * size * 0.40 + jx(2);
-    var b1y = cy - dy * size * 0.28 + pyp * size * 0.40 + jy(2);
-    var b2x = cx - dx * size * 0.28 - pxp * size * 0.40 + jx(3);
-    var b2y = cy - dy * size * 0.28 - pyp * size * 0.40 + jy(3);
+    var jx = (u.hash2(seedX, seedY, 60) - 0.5) * 2.0;
+    var jy = (u.hash2(seedY, seedX, 70) - 0.5) * 2.0;
+    // 主体：深色圆润圆角块（与颜色节同风格）
+    drawCrayonBlock(ctx, cx - size / 2 + jx, cy - size / 2 + jy, size, cfg.TAIL_COLOR, seedX, seedY, {
+      rot: (u.hash2(seedX, seedY, 3) - 0.5) * 0.4, wobble: 1.0
+    });
+    // 朝外小圆润尾尖（短、圆，不突兀）
+    var tipX = cx + dx * size * 0.5, tipY = cy + dy * size * 0.5;
     ctx.beginPath();
-    ctx.moveTo(b1x, b1y);
-    ctx.quadraticCurveTo(cx + pxp * size * 0.52, cy + pyp * size * 0.52, tipX, tipY);
-    ctx.quadraticCurveTo(cx - pxp * size * 0.52, cy - pyp * size * 0.52, b2x, b2y);
-    ctx.quadraticCurveTo(cx - dx * size * 0.42, cy - dy * size * 0.42, b1x, b1y);
-    ctx.closePath();
+    ctx.arc(tipX, tipY, size * 0.24, 0, Math.PI * 2);
     ctx.fillStyle = cfg.TAIL_COLOR;
     ctx.fill();
-    // 蜡笔涂抹感：两条浅色短笔触
-    ctx.strokeStyle = 'rgba(255,253,245,0.22)';
-    ctx.lineWidth = 1.2;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(cx - dx * size * 0.08 + pxp * size * 0.14, cy - dy * size * 0.08 + pyp * size * 0.14);
-    ctx.lineTo(cx + dx * size * 0.38 + pxp * size * 0.06, cy + dy * size * 0.38 + pyp * size * 0.06);
-    ctx.moveTo(cx - dx * size * 0.08 - pxp * size * 0.14, cy - dy * size * 0.08 - pyp * size * 0.14);
-    ctx.lineTo(cx + dx * size * 0.34 - pxp * size * 0.08, cy + dy * size * 0.34 - pyp * size * 0.08);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 1.6;
     ctx.stroke();
   }
 
@@ -423,18 +498,22 @@
       drawWallRect(ctx, r, i + 11);
     }
 
-    // 道具色块：略小、轻微旋转 + 脉动
+    // 道具：普通色块 + 特殊道具（万能色/炸弹/减速）；略小、旋转 + 脉动
     var bs = cfg.BLOCK_RADIUS * 2;
     for (i = 0; i < spawner.blocks.length; i++) {
       var b = spawner.blocks[i];
       if (b.x < cam.x - 40 || b.x > cam.x + vw + 40 || b.y < cam.y - 40 || b.y > cam.y + vh + 40) continue;
       var pulse = 1 + 0.09 * Math.sin(game.timeMs / 280 + b.phase);
       var seedX = Math.round(b.x / 10), seedY = Math.round(b.y / 10);
-      drawCrayonBlock(ctx, b.x - bs / 2, b.y - bs / 2, bs, cfg.COLORS[b.color], seedX, seedY, {
-        rot: (u.hash2(seedX, seedY, 7) - 0.5) * 0.55,
-        scale: pulse,
-        wobble: 1.0
-      });
+      if (b.kind && b.kind !== 'color') {
+        drawItemBlock(ctx, b, b.x, b.y, bs, seedX, seedY, (u.hash2(seedX, seedY, 7) - 0.5) * 0.55, pulse);
+      } else {
+        drawCrayonBlock(ctx, b.x - bs / 2, b.y - bs / 2, bs, cfg.COLORS[b.color], seedX, seedY, {
+          rot: (u.hash2(seedX, seedY, 7) - 0.5) * 0.55,
+          scale: pulse,
+          wobble: 1.0
+        });
+      }
     }
 
     // 蛇：从尾画到头，头在最上层；节为圆形蜡笔块沿轨迹排布
@@ -483,7 +562,24 @@
       }
       var px = p.x + ox2, py = p.y + oy2;
       if (px < cam.x - 60 || px > cam.x + vw + 60 || py < cam.y - 60 || py > cam.y + vh + 60) continue;
-      if (i >= snake.colors.length) { // 尾巴节：深色圆锥小尾鳍，朝向 = 前一节 → 尾巴节
+      if (snake.colors[i] === 'wild') { // 万能色节：白底星标块（消除时通配任意相邻同色）
+        ctx.save();
+        ctx.translate(px - ss / 2, py - ss / 2);
+        drawWildSeg(ctx, 0, 0, ss, seedBase + i, 41);
+        ctx.restore();
+        if (shake > 0) {
+          ctx.save();
+          ctx.globalAlpha = 0.6 * shake;
+          ctx.save();
+          ctx.translate(px - ss / 2, py - ss / 2);
+          drawWildSeg(ctx, 0, 0, ss, seedBase + i, 41);
+          ctx.restore();
+          ctx.restore();
+        }
+        if (i === 0) drawEyes(ctx, px, py, ss, snake.headDir());
+        continue;
+      }
+      if (i >= snake.colors.length) { // 尾巴节：深色圆润圆块 + 小尾尖，朝向 = 前一节 → 尾巴节
         var prev = snake.segPos[i - 1] ||
           { x: p.x - Math.cos(snake.angle) * cfg.SEG_SPACING, y: p.y - Math.sin(snake.angle) * cfg.SEG_SPACING };
         var tdx = p.x - prev.x, tdy = p.y - prev.y;
@@ -748,6 +844,12 @@
     ctx.font = '10px sans-serif';
     ctx.globalAlpha = 0.6;
     ctx.fillText('存活 ' + game.survivalScore + ' · 消除 ' + game.elimScore, cx, 160);
+    // 当前速度（动态加速可视化：随长度/时间提升，吃减速道具时回落）
+    var spd = Math.round(game.currentSpeed());
+    var slow = (game.slowUntil && game.timeMs < game.slowUntil);
+    ctx.fillStyle = slow ? '#2EC4B6' : cfg.INK;
+    ctx.fillText('速度 ' + spd + (slow ? ' (减速)' : '') + ' px/s', cx, 176);
+    ctx.fillStyle = cfg.INK;
     ctx.globalAlpha = 1;
 
     // 多人对战：实时排行榜（按当前节数降序，玩家高亮加粗）

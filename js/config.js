@@ -44,12 +44,12 @@
 
     // ---------- 蛇与连续移动（贪食蛇大作战式）----------
     SNAKE_SPEED: 150,            // 初始前进速度（px/s），闯关由 levels.js 覆盖
-    SPEED_MAX: 340,              // 无尽模式提速上限（px/s）
-    ENDLESS_SPEEDUP_PER_SEC: 1.5,// 无尽：每秒速度提升（px/s）
+    SPEED_MAX: 380,              // 无尽模式提速上限（px/s）
+    ENDLESS_SPEEDUP_PER_SEC: 2.5,// 无尽：每秒速度提升（px/s）
     // ---- 局内动态加速（只改速度，不改节间距/判定等几何参数）----
-    SPEED_LEN_COEF: 1.2,         // 长度加成：每节 +1.2 px/s（闯关/无尽通用）
-    LEVEL_SPEED_TIME_COEF: 0.5,  // 闯关时间加成：每存活 1 秒 +0.5 px/s
-    LEVEL_SPEED_CAP_ADD: 120,    // 闯关封顶 = 关卡基础速度 + 120 px/s
+    SPEED_LEN_COEF: 2.5,         // 长度加成：每节 +2.5 px/s（闯关/无尽通用，加速更明显）
+    LEVEL_SPEED_TIME_COEF: 1.2,  // 闯关时间加成：每存活 1 秒 +1.2 px/s
+    LEVEL_SPEED_CAP_ADD: 170,    // 闯关封顶 = 关卡基础速度 + 170 px/s
     TURN_RATE: 4.5,              // 最大转向速率（rad/s）≈ 258°/s
     SEG_RADIUS: 13,              // 节半径（px）
     SEG_SPACING: 30,             // 节间弧长间距（px）= 直径 26 + 4px 纸色间隙，保证节可逐个数清
@@ -85,12 +85,19 @@
     BLOCK_EDGE_MARGIN: 60,    // 色块距世界边界最小距离（px）
     SPAWN_TRIES: 50,          // 拒绝采样最大尝试次数
 
+    // ---------- 特殊道具（消除游戏常见：万能色 / 炸弹 / 减速）----------
+    ITEM_SPECIAL_CHANCE: 0.14,  // 每次生成色块时改为特殊道具的概率（否则普通色块）
+    ITEM_WILD_RATIO: 0.45,      // 特殊道具中万能色(白色星标)占比，其余炸弹/减速各半
+    SLOW_MS: 4000,              // 减速道具生效时长（ms）
+    SLOW_FACTOR: 0.6,           // 减速道具期间速度倍率（缓解加速压力，临时喘息）
+    BOMB_SCORE: 8,              // 炸弹消除每节额外得分
+
     // ---------- 墙壁（世界像素坐标，矩形组合）----------
     WALL_MAX_RATIO: 0.08,     // 内部墙壁总面积 ≤ 世界面积 8%
     WALL_UNIT: 48,            // 墙段基本单元边长（px），一字/L/2x2 均由整数个单元矩形组合
     WALL_EDGE_MARGIN: 70,     // 内部墙距世界边界最小距离（px）
     WALL_GAP: 60,             // 墙段之间最小间隙（px，保证通道）
-    WALL_THICK: 30,           // 边界墙视觉厚度（px，排线墙带，纯视觉；撞界判定不变）
+    WALL_THICK: 44,           // 边界墙视觉厚度（px），排线墙带，纯视觉；撞界判定不变
     SPAWN_SAFE_RADIUS: 180,   // 出生点保护半径（px，内无墙）
 
     // ---------- 无尽模式世界（像素）----------
