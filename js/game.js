@@ -378,10 +378,43 @@
       } else if (b.kind === 'slow') {
         this.slowUntil = this.timeMs + cfg.SLOW_MS; // 减速：临时喘息
         this.particles.burst(b.x, b.y, '#2EC4B6', 9);
+      } else if (b.kind === 'clear') {
+        // 消色：消除全体现该颜色节
+        var remC = this.snake.removeByColor(b.color);
+        this.applyElim(remC, 1.3, cfg.CLEAR_SCORE);
+        var remC2 = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+        this.applyElim(remC2, 1, 0);
+        this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 12, 1.5);
+      } else if (b.kind === 'clear3') {
+        // 后 3 消色：消除该颜色最靠尾的至多 3 节
+        var rem3 = this.snake.removeRearByColor(b.color, 3);
+        this.applyElim(rem3, 1.2, cfg.CLEAR3_SCORE);
+        var rem32 = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+        this.applyElim(rem32, 1, 0);
+        this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 9, 1.3);
+      } else if (b.kind === 'rand1' || b.kind === 'rand2' || b.kind === 'rand3') {
+        // 随机消除 1/2/3 节
+        var rn = b.kind === 'rand1' ? 1 : (b.kind === 'rand2' ? 2 : 3);
+        var remR = this.snake.removeRandom(rn);
+        this.applyElim(remR, 1.2, cfg.RAND_SCORE);
+        var remR2 = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+        this.applyElim(remR2, 1, 0);
+        this.particles.burst(b.x, b.y, '#FFD94A', 9, 1.3);
       } else {
         this.snake.grow(b.color);
         this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 4);
       }
+    }
+
+    // 流星砖块：移动 + 碰撞注入（命中身体即把该色注入中段，衔接消除连锁）
+    var mev = this.spawner.updateMeteors(dt, this.snake);
+    for (var mi = 0; mi < mev.length; mi++) {
+      var ev = mev[mi];
+      this.snake.insertAt(ev.idx, ev.color);
+      this.particles.burst(ev.x, ev.y, cfg.COLORS[ev.color], 7, 1.3);
+      this.elimScore += cfg.METEOR_SCORE;
+      var remM = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.applyElim(remM, 1, 0);
     }
 
     // 消除：相邻连续 ≥4 节同色立即消除（含连锁），保底 3 节。

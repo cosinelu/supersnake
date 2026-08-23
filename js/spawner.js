@@ -13,11 +13,22 @@
   var cfg = CS.config;
   var u = CS.utils;
 
+  /** 按权重抽取一个特殊道具 kind（wild/bomb/slow/clear/clear3/rand1-3） */
+  function pickSpecialKind() {
+    var w = cfg.ITEM_WEIGHTS, total = 0, k;
+    for (k in w) total += w[k];
+    var r = Math.random() * total;
+    for (k in w) { r -= w[k]; if (r <= 0) return k; }
+    return 'wild';
+  }
+
   function Spawner(walls, snake) {
     this.walls = walls;
     this.snake = snake;
-    this.blocks = []; // {x, y, color, phase}（世界坐标）
+    this.blocks = []; // {x, y, color, phase, kind}（世界坐标）
     this.timer = 0;
+    this.meteors = [];   // 流星砖块：{x,y,vx,vy,color,ttl,trail,phase}（移动实体）
+    this.meteorTimer = 0;
     this.others = []; // 其他活蛇数组（多人模式由 multiplayer 挂活引用，刷新时同样避让）
     this.unlockedKeys = cfg.COLOR_KEYS.slice(); // 默认全部；game 会按本局解锁数覆盖
     var area = walls.W * walls.H;
@@ -61,15 +72,18 @@
         if (u.dist(x, y, this.blocks[i].x, this.blocks[i].y) < cfg.BLOCK_MIN_DIST) { ok = false; break; }
       }
       if (!ok) continue;                                              // 与已有色块 ≥140px
-      // 决定类型：默认普通色块；按概率改为特殊道具（万能色 / 炸弹 / 减速）
+      // 决定类型：默认普通色块；按概率改为特殊道具（按权重抽取）
       var kind = 'color';
-      if (Math.random() < cfg.ITEM_SPECIAL_CHANCE) {
-        kind = (Math.random() < cfg.ITEM_WILD_RATIO) ? 'wild' : (Math.random() < 0.5 ? 'bomb' : 'slow');
+      if (Math.random() < cfg.ITEM_SPECIAL_CHANCE) kind = pickSpecialKind();
+      // clear / clear3 携带目标颜色（消除该色）；其余特殊道具 color=null
+      var color = null;
+      if (kind === 'color' || kind === 'clear' || kind === 'clear3') {
+        color = this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)];
       }
       this.blocks.push({
         x: x, y: y,
         kind: kind,
-        color: kind === 'color' ? this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)] : null,
+        color: color,
         phase: Math.random() * Math.PI * 2 // 脉动相位
       });
       return true;
@@ -91,6 +105,62 @@
     }
     this.blocks = rest;
     return got;
+  };
+
+  /** 生成一颗流星砖块：在蛇头环周随机方向、距 METEOR_SPAWN_DIST 处出生，朝蛇头略带归向飞行 */
+  Spawner.prototype.spawnMeteor = function (snake) {
+    var ang = Math.random() * Math.PI * 2;
+    var mx = u.clamp(snake.x + Math.cos(ang) * cfg.METEOR_SPAWN_DIST, 0, this.walls.W);
+    var my = u.clamp(snake.y + Math.sin(ang) * cfg.METEOR_SPAWN_DIST, 0, this.walls.H);
+    var dx = snake.x - mx, dy = snake.y - my;
+    var d = Math.sqrt(dx * dx + dy * dy) || 1;
+    this.meteors.push({
+      x: mx, y: my,
+      vx: dx / d * cfg.METEOR_SPEED, vy: dy / d * cfg.METEOR_SPEED,
+      color: this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)],
+      ttl: cfg.METEOR_TTL_MS,
+      trail: [],
+      phase: Math.random() * Math.PI * 2
+    });
+  };
+
+  /**
+   * 每帧更新流星：移动（轻微归向蛇头，保证大概率命中身体）+ 碰撞检测。
+   * 命中任意身体节 → 返回注入事件 [{idx, x, y, color}]，由 game 调用 snake.insertAt 注入中段。
+   * 未命中且超时/出界则消失。
+   * @returns {Array} 本帧发生的注入事件
+   */
+  Spawner.prototype.updateMeteors = function (dtMs, snake) {
+    this.meteorTimer -= dtMs;
+    if (this.meteorTimer <= 0 && this.meteors.length < cfg.METEOR_MAX) {
+      this.meteorTimer = cfg.METEOR_INTERVAL_MS;
+      this.spawnMeteor(snake);
+    }
+    var events = [], dt = dtMs / 1000;
+    for (var i = this.meteors.length - 1; i >= 0; i--) {
+      var m = this.meteors[i];
+      // 轻微归向蛇头
+      var dx = snake.x - m.x, dy = snake.y - m.y;
+      var desired = Math.atan2(dy, dx);
+      var cur = Math.atan2(m.vy, m.vx);
+      var na = u.turnToward(cur, desired, cfg.METEOR_TURN_RATE * dt);
+      m.vx = Math.cos(na) * cfg.METEOR_SPEED;
+      m.vy = Math.sin(na) * cfg.METEOR_SPEED;
+      m.trail.push({ x: m.x, y: m.y });
+      if (m.trail.length > 6) m.trail.shift();
+      m.x += m.vx * dt; m.y += m.vy * dt;
+      m.ttl -= dtMs;
+      var hit = snake.segIndexAt(m.x, m.y, cfg.METEOR_HIT_R);
+      if (hit >= 0) {
+        events.push({ idx: hit, x: m.x, y: m.y, color: m.color });
+        this.meteors.splice(i, 1);
+        continue;
+      }
+      if (m.ttl <= 0 || m.x < -60 || m.y < -60 || m.x > this.walls.W + 60 || m.y > this.walls.H + 60) {
+        this.meteors.splice(i, 1);
+      }
+    }
+    return events;
   };
 
   CS.Spawner = Spawner;

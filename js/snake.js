@@ -194,6 +194,72 @@
   };
 
   /**
+   * 流星注入：在身体第 idx 节前插入一个颜色节（中段注入，idx 越界自动夹紧）。
+   * 与 grow（头部插入）共用身体几何派生，缺口自然收拢。用于「流星砖块」可靠的中段注入。
+   */
+  Snake.prototype.insertAt = function (idx, color) {
+    idx = Math.max(0, Math.min(this.colors.length, idx | 0));
+    this.colors.splice(idx, 0, color);
+    this.computeBody();
+  };
+
+  /**
+   * 命中检测：返回第一个与 (x,y) 距离 < r + SEG_RADIUS 的身体节下标（含尾巴节 colors.length），无则 -1。
+   * 供流星砖块碰撞用（命中即在该节注入）。
+   */
+  Snake.prototype.segIndexAt = function (x, y, r) {
+    var rr2 = (r + cfg.SEG_RADIUS) * (r + cfg.SEG_RADIUS);
+    for (var i = 0; i < this.segPos.length; i++) {
+      var dx = this.segPos[i].x - x, dy = this.segPos[i].y - y;
+      if (dx * dx + dy * dy < rr2) return i;
+    }
+    return -1;
+  };
+
+  /** 内部：按下标数组批量移除，返回 [{color,x,y,chain:1}]（移除前捕获世界坐标供特效） */
+  Snake.prototype._removeAt = function (idxs) {
+    if (!idxs || !idxs.length) return [];
+    idxs = idxs.slice().sort(function (a, b) { return a - b; });
+    var removed = [];
+    for (var k = idxs.length - 1; k >= 0; k--) { // 降序 splice，避免位移
+      var idx = idxs[k];
+      if (idx < 0 || idx >= this.colors.length) continue;
+      var p = this.segPos[idx] || { x: this.x, y: this.y };
+      removed.push({ color: this.colors[idx], x: p.x, y: p.y, chain: 1 });
+      this.colors.splice(idx, 1);
+    }
+    this.computeBody();
+    return removed;
+  };
+
+  /** 消色道具：移除所有该颜色的节（尾巴节恒在非颜色序列，天然排除） */
+  Snake.prototype.removeByColor = function (color) {
+    var idxs = [];
+    for (var i = 0; i < this.colors.length; i++) if (this.colors[i] === color) idxs.push(i);
+    return this._removeAt(idxs);
+  };
+
+  /** 后 N 消色：移除该颜色中最靠尾（下标最大）的至多 n 节 */
+  Snake.prototype.removeRearByColor = function (color, n) {
+    var idxs = [];
+    for (var i = 0; i < this.colors.length; i++) if (this.colors[i] === color) idxs.push(i);
+    if (idxs.length > n) idxs = idxs.slice(idxs.length - n);
+    return this._removeAt(idxs);
+  };
+
+  /** 随机消：随机移除 n 节（互异下标），不足 n 则移除全部 */
+  Snake.prototype.removeRandom = function (n) {
+    var pool = [];
+    for (var i = 0; i < this.colors.length; i++) pool.push(i);
+    var idxs = [];
+    for (var k = 0; k < n && pool.length; k++) {
+      var j = Math.floor(Math.random() * pool.length);
+      idxs.push(pool[j]); pool.splice(j, 1);
+    }
+    return this._removeAt(idxs);
+  };
+
+  /**
    * 找出所有长度 ≥ runLen 的同色连续段（返回下标段数组）。
    * 支持万能色 'wild'：一段连续节中，非 wild 节必须同色、wild 可充当中介/两端；
    * 该段整体视作该颜色（wild 节也计入长度并参与消除）——「万能色」即由此实现。

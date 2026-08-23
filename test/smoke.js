@@ -219,7 +219,9 @@ for (i = 0; i < 300; i++) sp.spawnOne();
 var shapeOk = sp.blocks.length > 0 && sp.blocks.every(function (blk) {
   if (typeof blk.kind !== 'string') return false;
   if (blk.kind === 'color') return blk.color === 'red' || blk.color === 'blue';
-  if (blk.kind === 'wild' || blk.kind === 'bomb' || blk.kind === 'slow') return blk.color === null;
+  if (blk.kind === 'wild' || blk.kind === 'bomb' || blk.kind === 'slow' ||
+      blk.kind === 'rand1' || blk.kind === 'rand2' || blk.kind === 'rand3') return blk.color === null;
+  if (blk.kind === 'clear' || blk.kind === 'clear3') return blk.color === 'red' || blk.color === 'blue';
   return false;
 });
 ok(shapeOk, '300 次生成：每块带 kind，普通块=已解锁色、特殊道具 color=null', 'blocks=' + sp.blocks.length);
@@ -248,6 +250,65 @@ var got = csp.collectAt(cs2);
 ok(got.length === 1 && csp.blocks.length === 0, '身体/头部圆形重叠收集色块');
 cs2.grow(got[0].color);
 ok(cs2.colors[0] === 'teal' && cs2.length() === 5, '收集后新色进头部，长度 +1');
+
+// ---------------- 8b. v2.8 道具（消色 / 随机 / 流星注入） ----------------
+section('v2.8 道具');
+// 构造可控颜色的蛇：直接指定 colors 并铺设直线轨迹使 segPos 按 30px 间距排布
+function mkSnake(cols) {
+  var s = new CS.Snake(1000, 1000, cols.length, 0,
+    ['red', 'blue', 'green', 'orange', 'purple', 'yellow', 'teal', 'pink']);
+  s.colors = cols.slice();
+  s.trail = [];
+  for (var t = 0; t < cols.length + 4; t++) s.trail.push({ x: 1000 - t * 30, y: 1000 });
+  s.computeBody();
+  return s;
+}
+
+var s1 = mkSnake(['red', 'blue', 'red', 'green', 'red', 'blue']);
+var r1 = s1.removeByColor('red');
+ok(r1.length === 3 && s1.colors.join(',') === 'blue,green,blue',
+  '消色道具：移除全部 red（3 节），余 blue,green,blue', s1.colors.join(','));
+ok(r1.every(function (x) { return x.color === 'red' && typeof x.x === 'number'; }),
+  '消色：被移除节带颜色 + 世界坐标（特效用）');
+
+var s2 = mkSnake(['red', 'blue', 'red', 'green', 'red', 'blue']);
+var r2 = s2.removeRearByColor('red', 2);
+ok(r2.length === 2 && s2.colors.join(',') === 'red,blue,green,blue',
+  '后3消色：移除最靠尾的 2 个 red，余 red,blue,green,blue', s2.colors.join(','));
+
+var s3 = mkSnake(['red', 'blue', 'green', 'orange', 'purple', 'yellow']);
+var before3 = s3.colors.length;
+var r3 = s3.removeRandom(3);
+ok(r3.length === 3 && s3.colors.length === before3 - 3, '随机消 3：移除 3 节、长度 -3', 'rem=' + r3.length);
+
+var s4 = mkSnake(['red', 'blue', 'green', 'orange', 'purple']);
+s4.insertAt(2, 'yellow');
+ok(s4.colors[2] === 'yellow' && s4.colors.length === 6, 'insertAt(2)：在下标 2 插入 yellow');
+s4.insertAt(-9, 'X');
+ok(s4.colors[0] === 'X', 'insertAt 负下标 → 夹紧到头部');
+s4.insertAt(999, 'Y');
+ok(s4.colors[s4.colors.length - 1] === 'Y', 'insertAt 超界 → 夹紧到尾部');
+
+var s5 = mkSnake(['red', 'blue', 'green', 'orange', 'purple', 'yellow']);
+var seg5 = s5.segPos[3];
+ok(s5.segIndexAt(seg5.x, seg5.y, cfg.METEOR_HIT_R) === 3, 'segIndexAt：命中第 3 节返回下标 3');
+ok(s5.segIndexAt(5000, 5000, cfg.METEOR_HIT_R) === -1, 'segIndexAt：远处返回 -1');
+
+// 流星砖块：命中身体 → 返回注入事件（game 据此 insertAt 注入中段）
+var ms = mkSnake(['red', 'blue', 'green', 'orange', 'purple']);
+var msp = new CS.Spawner(new CS.Walls(2400, 1600, { x: 1200, y: 800 }), ms);
+msp.unlockedKeys = ['red', 'blue', 'green', 'orange', 'purple'];
+var lenBefore = ms.colors.length;
+msp.spawnMeteor(ms);
+var mm = msp.meteors[0];
+var mseg = ms.segPos[3];
+mm.x = mseg.x; mm.y = mseg.y; mm.vx = 0; mm.vy = 0; // 直接放到第 3 节上
+msp.meteorTimer = 1e9; // 防止本帧额外生成，保持测试纯净
+var evs = msp.updateMeteors(16, ms);
+ok(evs.length === 1 && evs[0].idx >= 1 && evs[0].idx <= ms.colors.length,
+  '流星命中身体节 → 返回注入事件(有效身体下标)');
+ms.insertAt(evs[0].idx, evs[0].color);
+ok(ms.colors.length === lenBefore + 1, '流星注入：身体长度 +1（中段新增该色节）');
 
 // ---------------- 9. Game 流程 ----------------
 section('Game 流程');

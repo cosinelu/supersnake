@@ -253,7 +253,75 @@
       ctx.moveTo(0, 0); ctx.lineTo(size * 0.20, size * 0.06);
       ctx.strokeStyle = '#FFFDF5'; ctx.lineWidth = 2; ctx.stroke();
       ctx.restore();
+    } else if (b.kind === 'clear') {
+      // 消色（全部）：该色蜡笔块 + 放射状星芒
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(pulse, pulse);
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.6;
+      for (var a = 0; a < 8; a++) {
+        var an = a * Math.PI / 4;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(an) * size * 0.18, Math.sin(an) * size * 0.18);
+        ctx.lineTo(Math.cos(an) * size * 0.44, Math.sin(an) * size * 0.44);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else if (b.kind === 'clear3') {
+      // 后 3 消色：该色蜡笔块 + ×3 文字
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(pulse, pulse);
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      ctx.fillStyle = cfg.INK;
+      ctx.font = 'bold ' + Math.round(size * 0.5) + 'px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('×3', 0, 0);
+      ctx.restore();
+    } else if (b.kind === 'rand1' || b.kind === 'rand2' || b.kind === 'rand3') {
+      // 随机消除：白底 + 三色点 + ? 与数字
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(pulse, pulse);
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, '#FFFDF5', seedX, seedY, { rot: rot, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      var rc = ['#E8552F', '#4A7FD4', '#6FBF4A'];
+      for (var c = 0; c < 3; c++) {
+        ctx.beginPath(); ctx.arc((c - 1) * size * 0.20, -size * 0.14, size * 0.08, 0, Math.PI * 2);
+        ctx.fillStyle = rc[c]; ctx.fill();
+      }
+      ctx.fillStyle = cfg.INK;
+      ctx.font = 'bold ' + Math.round(size * 0.42) + 'px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('?', 0, size * 0.08);
+      ctx.font = 'bold ' + Math.round(size * 0.26) + 'px sans-serif';
+      ctx.fillText(b.kind === 'rand1' ? '1' : (b.kind === 'rand2' ? '2' : '3'), size * 0.28, size * 0.28);
+      ctx.restore();
     }
+  }
+
+  /**
+   * 流星砖块：带拖尾的彩色光球（在 drawPlay 已做相机平移的世界坐标系内绘制）。
+   * @param {object} m {x,y,color,trail}
+   */
+  function drawMeteor(ctx, m) {
+    for (var t = 0; t < m.trail.length; t++) {
+      var p = m.trail[t];
+      var a = (t + 1) / m.trail.length;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, cfg.METEOR_RADIUS * (0.3 + 0.5 * t / m.trail.length), 0, Math.PI * 2);
+      ctx.fillStyle = cfg.COLORS[m.color];
+      ctx.globalAlpha = a * 0.35;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.arc(m.x, m.y, cfg.METEOR_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = cfg.COLORS[m.color];
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2; ctx.stroke();
+    starPath(ctx, m.x, m.y, cfg.METEOR_RADIUS * 0.5, 0.3);
+    ctx.fillStyle = '#FFD94A'; ctx.fill();
   }
 
   /**
@@ -514,6 +582,13 @@
           wobble: 1.0
         });
       }
+    }
+
+    // 流星砖块：带拖尾的彩色光球，从四周飞入命中身体
+    for (i = 0; i < spawner.meteors.length; i++) {
+      var m = spawner.meteors[i];
+      if (m.x < cam.x - 60 || m.x > cam.x + vw + 60 || m.y < cam.y - 60 || m.y > cam.y + vh + 60) continue;
+      drawMeteor(ctx, m);
     }
 
     // 蛇：从尾画到头，头在最上层；节为圆形蜡笔块沿轨迹排布
