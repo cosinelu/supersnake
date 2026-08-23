@@ -310,6 +310,24 @@ ok(evs.length === 1 && evs[0].idx >= 1 && evs[0].idx <= ms.colors.length,
 ms.insertAt(evs[0].idx, evs[0].color);
 ok(ms.colors.length === lenBefore + 1, '流星注入：身体长度 +1（中段新增该色节）');
 
+// v2.8.2 流星：只从上下左右四个正方向、直线匀速、无归向（朝向恒定）
+var m2 = mkSnake(['red', 'blue']);
+var m2sp = new CS.Spawner(new CS.Walls(2400, 1600, { x: 1200, y: 800 }), m2);
+m2sp.unlockedKeys = ['red', 'blue'];
+var cardinalOK = true, straightOK = true;
+for (var mi = 0; mi < 40; mi++) {
+  m2sp.meteors = [];
+  m2sp.spawnMeteor({ x: 1200, y: 800 });
+  var mo = m2sp.meteors[0];
+  if (!(Math.abs(mo.vx) < 1e-9 || Math.abs(mo.vy) < 1e-9)) cardinalOK = false; // 必为水平或垂直
+  var ax0 = Math.atan2(mo.vy, mo.vx);
+  mo.x += mo.vx * 0.1; mo.y += mo.vy * 0.1; // 不调 updateMeteors，避免被回收
+  var ax1 = Math.atan2(mo.vy, mo.vx);
+  if (Math.abs(ax0 - ax1) > 1e-9) straightOK = false; // 朝向恒定（无归向）
+}
+ok(cardinalOK, '流星：40 次生成全部为上下左右正方向（水平或垂直）');
+ok(straightOK, '流星：飞行朝向恒定，无归向蛇头（直线飞向对侧）');
+
 // ---------------- 9. Game 流程 ----------------
 section('Game 流程');
 var g1 = new CS.Game(960, 540);

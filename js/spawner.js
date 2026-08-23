@@ -107,16 +107,28 @@
     return got;
   };
 
-  /** 生成一颗流星砖块：在蛇头环周随机方向、距 METEOR_SPAWN_DIST 处出生，朝蛇头略带归向飞行 */
+  /**
+   * 生成一颗流星砖块：只从上下左右四个正方向之一，平行于地图边、从一侧直飞到对侧。
+   * 出生在对应边缘（屏幕外一点），沿该正方向匀速直线飞向对侧边缘；
+   * 出生位置在蛇附近 ±band 的带内，保证流星会经过玩家区域、有机会命中身体注入中段。
+   */
   Spawner.prototype.spawnMeteor = function (snake) {
-    var ang = Math.random() * Math.PI * 2;
-    var mx = u.clamp(snake.x + Math.cos(ang) * cfg.METEOR_SPAWN_DIST, 0, this.walls.W);
-    var my = u.clamp(snake.y + Math.sin(ang) * cfg.METEOR_SPAWN_DIST, 0, this.walls.H);
-    var dx = snake.x - mx, dy = snake.y - my;
-    var d = Math.sqrt(dx * dx + dy * dy) || 1;
+    var W = this.walls.W, H = this.walls.H;
+    var dirs = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
+    var d = dirs[Math.floor(Math.random() * 4)];
+    var band = 420; // 在蛇附近 ±band 进入，保证流星经过玩家区域
+    var mx, my, vx, vy;
+    if (d.x !== 0) { // 水平：从左/右边缘进入，朝对侧飞，y 取蛇附近
+      mx = d.x > 0 ? -40 : W + 40;
+      my = u.clamp(snake.y + (Math.random() * 2 - 1) * band, 40, H - 40);
+      vx = d.x * cfg.METEOR_SPEED; vy = 0;
+    } else { // 垂直：从上/下边缘进入，朝对侧飞，x 取蛇附近
+      mx = u.clamp(snake.x + (Math.random() * 2 - 1) * band, 40, W - 40);
+      my = d.y > 0 ? -40 : H + 40;
+      vx = 0; vy = d.y * cfg.METEOR_SPEED;
+    }
     this.meteors.push({
-      x: mx, y: my,
-      vx: dx / d * cfg.METEOR_SPEED, vy: dy / d * cfg.METEOR_SPEED,
+      x: mx, y: my, vx: vx, vy: vy,
       color: this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)],
       ttl: cfg.METEOR_TTL_MS,
       trail: [],
@@ -125,9 +137,9 @@
   };
 
   /**
-   * 每帧更新流星：移动（轻微归向蛇头，保证大概率命中身体）+ 碰撞检测。
+   * 每帧更新流星：直线匀速移动（无归向）+ 碰撞检测。
    * 命中任意身体节 → 返回注入事件 [{idx, x, y, color}]，由 game 调用 snake.insertAt 注入中段。
-   * 未命中且超时/出界则消失。
+   * 未命中且出界/超时则消失。
    * @returns {Array} 本帧发生的注入事件
    */
   Spawner.prototype.updateMeteors = function (dtMs, snake) {
@@ -139,13 +151,6 @@
     var events = [], dt = dtMs / 1000;
     for (var i = this.meteors.length - 1; i >= 0; i--) {
       var m = this.meteors[i];
-      // 轻微归向蛇头
-      var dx = snake.x - m.x, dy = snake.y - m.y;
-      var desired = Math.atan2(dy, dx);
-      var cur = Math.atan2(m.vy, m.vx);
-      var na = u.turnToward(cur, desired, cfg.METEOR_TURN_RATE * dt);
-      m.vx = Math.cos(na) * cfg.METEOR_SPEED;
-      m.vy = Math.sin(na) * cfg.METEOR_SPEED;
       m.trail.push({ x: m.x, y: m.y });
       if (m.trail.length > 6) m.trail.shift();
       m.x += m.vx * dt; m.y += m.vy * dt;
@@ -156,7 +161,7 @@
         this.meteors.splice(i, 1);
         continue;
       }
-      if (m.ttl <= 0 || m.x < -60 || m.y < -60 || m.x > this.walls.W + 60 || m.y > this.walls.H + 60) {
+      if (m.ttl <= 0 || m.x < -80 || m.y < -80 || m.x > this.walls.W + 80 || m.y > this.walls.H + 80) {
         this.meteors.splice(i, 1);
       }
     }
