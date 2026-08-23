@@ -137,9 +137,9 @@
   }
 
   /**
-   * 边界墙：世界四周的排线墙带（带视口裁剪，只画可见带）。
-   * 与内部墙一致的蜡笔排线视觉：灰色涂抹底 + 斜线排线 hatching + 深色抖动描边，
-   * 一眼可读"这是墙不能碰"；撞界判定不变（逻辑仍在 walls.hitsCircle）。
+   * 边界墙：世界四周的墙带（带视口裁剪，只画可见带）。
+   * 直接复用内部墙 drawWallRect 的画法（蜡笔灰底 + 斜线排线 + 深色描边），
+   * 与里面的墙「同一个效果」，一眼可读"这是墙不能碰"；撞界判定不变（逻辑仍在 walls.hitsCircle）。
    */
   function drawBoundary(ctx, walls, cam, vw, vh) {
     var T = cfg.WALL_THICK;
@@ -152,14 +152,7 @@
     for (var i = 0; i < 4; i++) {
       var b = bands[i];
       if (b.x + b.w < cam.x || b.x > cam.x + vw || b.y + b.h < cam.y || b.y > cam.y + vh) continue;
-      wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 10, 3 + i * 7, 9 + i * 5, 2.4);
-      ctx.fillStyle = '#9A948A';   // 比内部墙更深的灰，明显区别于压暗背景
-      ctx.fill();
-      hatchClip(ctx, b.x, b.y, b.w, b.h, 9); // 排线更密
-      wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 10, 3 + i * 7, 9 + i * 5, 2.4);
-      ctx.strokeStyle = cfg.INK;
-      ctx.lineWidth = 3.4;          // 更粗深色描边
-      ctx.stroke();
+      drawWallRect(ctx, b, 91 + i);   // 与内部墙完全相同的蜡笔排线视觉
     }
     // 世界内边缘：一道明显粗黑线，明确「可玩范围界线、碰即死」
     wobblyRoundRect(ctx, 0, 0, walls.W, walls.H, 6, 5, 5, 3.0);
@@ -222,6 +215,10 @@
       starPath(ctx, 0, 0, size * 0.26, 0.3);
       ctx.fillStyle = '#FFD94A'; ctx.fill();
       ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.3; ctx.stroke();
+      // 白底在浅色/白色场景易隐形 → 加一圈粗深色描边，保证可见
+      ctx.beginPath();
+      ctx.arc(0, 0, size * 0.52, 0, Math.PI * 2);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 3.6; ctx.stroke();
       ctx.restore();
     } else if (b.kind === 'bomb') {
       ctx.save();
@@ -305,23 +302,21 @@
    * @param {object} m {x,y,color,trail}
    */
   function drawMeteor(ctx, m) {
+    // 拖尾：淡淡的运动残影，指示来向
     for (var t = 0; t < m.trail.length; t++) {
       var p = m.trail[t];
       var a = (t + 1) / m.trail.length;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, cfg.METEOR_RADIUS * (0.3 + 0.5 * t / m.trail.length), 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, cfg.METEOR_RADIUS * (0.4 + 0.4 * t / m.trail.length), 0, Math.PI * 2);
       ctx.fillStyle = cfg.COLORS[m.color];
-      ctx.globalAlpha = a * 0.35;
+      ctx.globalAlpha = a * 0.25;
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-    ctx.beginPath();
-    ctx.arc(m.x, m.y, cfg.METEOR_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = cfg.COLORS[m.color];
-    ctx.fill();
-    ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2; ctx.stroke();
-    starPath(ctx, m.x, m.y, cfg.METEOR_RADIUS * 0.5, 0.3);
-    ctx.fillStyle = '#FFD94A'; ctx.fill();
+    // 本体：会移动的彩色蜡笔砖块（不是流星光球，就是移动中的砖）
+    var size = cfg.METEOR_RADIUS * 2;
+    drawCrayonBlock(ctx, m.x - size / 2, m.y - size / 2, size, cfg.COLORS[m.color],
+      Math.round(m.x / 10), Math.round(m.y / 10), { rot: 0.2, wobble: 1.0, stroke: cfg.SEG_STROKE });
   }
 
   /**

@@ -86,28 +86,28 @@
     SPAWN_TRIES: 50,          // 拒绝采样最大尝试次数
 
     // ---------- 特殊道具（消除游戏常见：万能色 / 炸弹 / 减速 / 消色 / 随机 / 流星）----------
-    ITEM_SPECIAL_CHANCE: 0.14,  // 每次生成色块时改为特殊道具的概率（否则普通色块）
+    ITEM_SPECIAL_CHANCE: 0.30,  // 每次生成色块时改为特殊道具的概率（否则普通色块）—— 上调以便肉眼频繁遇到
     SLOW_MS: 4000,              // 减速道具生效时长（ms）
     SLOW_FACTOR: 0.6,           // 减速道具期间速度倍率（缓解加速压力，临时喘息）
     BOMB_SCORE: 8,              // 炸弹消除每节额外得分
-    // 特殊道具按权重抽取（覆盖 wild/bomb/slow + 新增 clear/clear3/rand1-3）
+    // 特殊道具按权重抽取（覆盖 wild/bomb/slow + 新增 clear/clear3/rand1-3）；绝对值仅相对意义
     ITEM_WEIGHTS: {
-      wild: 0.30, bomb: 0.16, slow: 0.10,
-      clear: 0.16, clear3: 0.16,          // 消色：消除全部 / 后 3 个该颜色
-      rand1: 0.04, rand2: 0.04, rand3: 0.04 // 随机消除 1/2/3 节
+      wild: 0.16, bomb: 0.08, slow: 0.06,
+      clear: 0.22, clear3: 0.22,          // 消色类显著上调，最易遇到
+      rand1: 0.08, rand2: 0.08, rand3: 0.10 // 随机消除 1/2/3 节
     },
     CLEAR_SCORE: 6,             // 消色道具每节额外得分
     CLEAR3_SCORE: 5,            // 后 3 消色每节额外得分
     RAND_SCORE: 5,              // 随机消除每节额外得分
-    // 流星砖块：从四周飞入，命中身体即把该色注入中段（可靠的中段注入方案，替代旧的静态砖块中段插入）
-    METEOR_INTERVAL_MS: 9000,   // 每隔多久生成一颗流星
-    METEOR_MAX: 3,              // 同屏流星上限
-    METEOR_SPAWN_DIST: 1200,    // 出生距蛇头的世界距离（环周随机方向）
+    // 流星砖块（移动砖块）：从四周飞入，命中身体即把该色注入中段（可靠的中段注入方案）
+    METEOR_INTERVAL_MS: 3500,   // 每隔多久生成一颗（缩短 → 更频繁）
+    METEOR_MAX: 6,              // 同屏上限（提高 → 场上常有）
+    METEOR_SPAWN_DIST: 850,     // 出生距蛇头的世界距离（环周随机方向，缩短 → 更快进入视野）
     METEOR_SPEED: 330,          // 飞行速度（px/s）
     METEOR_TURN_RATE: 2.4,      // 轻微归向蛇头的转向速率（弧度/s，保证大概率命中身体）
-    METEOR_TTL_MS: 7000,        // 未命中则存活该时长后消失
+    METEOR_TTL_MS: 9000,        // 未命中则存活该时长后消失
     METEOR_HIT_R: 16,           // 命中判定半径（px）
-    METEOR_RADIUS: 14,          // 流星视觉半径（px）
+    METEOR_RADIUS: 14,          // 移动砖块视觉半径（px）
     METEOR_SCORE: 3,            // 流星注入每节得分
 
     // ---------- 墙壁（世界像素坐标，矩形组合）----------
