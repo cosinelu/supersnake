@@ -140,6 +140,43 @@
     return placed;
   };
 
+  /**
+   * 动态新增一段障碍墙（随时间生成，让地图越来越复杂）。
+   * 复用 makeSegment 生成候选，并避开：边界内缩区、出生安全区、已有墙（保留 WALL_GAP）、
+   * 总面积预算（WALL_MAX_RATIO）、所有蛇身节点（snakePoints）。
+   * 与 generateWalls 不同：只尝试放 1 段，且必须避开当前蛇身（避免凭空生成在蛇身上致死）。
+   * @param {Array<{x:number,y:number}>} snakePoints 需避让的蛇身节点（玩家 + AI），可为空
+   * @param {number} [maxRects] 矩形总数上限（含初始段），超出则跳过
+   * @returns {boolean} 是否成功放置
+   */
+  Walls.prototype.addRandomWall = function (snakePoints, maxRects) {
+    if (maxRects != null && this.rects.length >= maxRects) return false;
+    var maxArea = this.W * this.H * cfg.WALL_MAX_RATIO;
+    for (var tries = 0; tries < 40; tries++) {
+      var rects = makeSegment(this.W, this.H);
+      var area = 0, ok = true, i, j, r;
+      for (i = 0; i < rects.length; i++) area += rects[i].w * rects[i].h;
+      if (this.area + area > maxArea) return false; // 面积预算耗尽
+      for (i = 0; i < rects.length && ok; i++) {
+        r = rects[i];
+        if (!this.rectInBounds(r) || this.rectHitsSafeZone(r)) { ok = false; break; }
+        for (j = 0; j < this.rects.length; j++) {
+          if (rectsOverlap(r, this.rects[j], cfg.WALL_GAP)) { ok = false; break; }
+        }
+        if (ok && snakePoints) {
+          for (var p = 0; p < snakePoints.length; p++) {
+            if (circleRect(snakePoints[p].x, snakePoints[p].y, cfg.SEG_RADIUS + cfg.WALL_SPAWN_SNAKE_PAD, r)) { ok = false; break; }
+          }
+        }
+      }
+      if (!ok) continue;
+      for (i = 0; i < rects.length; i++) this.rects.push(rects[i]);
+      this.area += area;
+      return true;
+    }
+    return false;
+  };
+
   CS.Walls = Walls;
   CS.walls = { circleRect: circleRect, rectsOverlap: rectsOverlap }; // 测试可用
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -142,51 +142,9 @@
    * 与里面的墙「同一个效果」，一眼可读"这是墙不能碰"；撞界判定不变（逻辑仍在 walls.hitsCircle）。
    */
   /**
-   * 砖墙带：灰色蜡笔底 + 错位砖纹（灰缝）+ 粗黑外框。
-   * 一眼可读「这是墙、不能碰」——比纯排线更明确地像砖块。
-   */
-  function drawBrickWall(ctx, b, seed) {
-    var bw = 44, bh = 22;                 // 砖块单元尺寸
-    // 底：蜡笔灰
-    wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 6, seed, seed + 3, 2.2);
-    ctx.fillStyle = cfg.WALL_FILL;
-    ctx.fill();
-    // 砖纹（裁剪在带内）
-    ctx.save();
-    wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 6, seed, seed + 3, 2.2);
-    ctx.clip();
-    ctx.strokeStyle = 'rgba(58,50,56,0.5)';
-    ctx.lineWidth = 2;
-    // 横向灰缝
-    for (var y = b.y + bh; y < b.y + b.h; y += bh) {
-      ctx.beginPath();
-      ctx.moveTo(b.x, y + (u.hash2(seed, Math.round(y), 1) - 0.5) * 1.6);
-      ctx.lineTo(b.x + b.w, y);
-      ctx.stroke();
-    }
-    // 纵向灰缝（逐行错位，像真实砌砖）
-    var rows = Math.ceil(b.h / bh);
-    for (var r = 0; r < rows; r++) {
-      var yy = b.y + r * bh;
-      var off = (r % 2) * (bw / 2);
-      for (var x = b.x + off; x < b.x + b.w; x += bw) {
-        ctx.beginPath();
-        ctx.moveTo(x, yy);
-        ctx.lineTo(x, Math.min(yy + bh, b.y + b.h));
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-    // 粗黑外框（明确边界「碰即死」）
-    wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 6, seed, seed + 3, 2.2);
-    ctx.strokeStyle = cfg.INK;
-    ctx.lineWidth = 3.4;
-    ctx.stroke();
-  }
-
-  /**
-   * 边界墙：世界四周的砖墙带（带视口裁剪，只画可见带）。
-   * 直接复用 drawBrickWall 的画法（灰砖 + 灰缝 + 粗黑框）；撞界判定不变（逻辑仍在 walls.hitsCircle）。
+   * 边界墙：世界四周的墙带（带视口裁剪，只画可见带）。
+   * 与地图内部墙使用同一套 drawWallRect 画法（蜡笔灰底 + 斜线排线 + 深色描边），
+   * 视觉完全统一；撞界判定不变（逻辑仍在 walls.hitsCircle）。
    */
   function drawBoundary(ctx, walls, cam, vw, vh) {
     var T = cfg.WALL_THICK;
@@ -199,7 +157,7 @@
     for (var i = 0; i < 4; i++) {
       var b = bands[i];
       if (b.x + b.w < cam.x || b.x > cam.x + vw || b.y + b.h < cam.y || b.y > cam.y + vh) continue;
-      drawBrickWall(ctx, b, 91 + i);   // 灰砖墙带，一眼可读「墙不能碰」
+      drawWallRect(ctx, b, 91 + i);   // 与地图内部墙同一套蜡笔排线视觉
     }
     // 世界内边缘：一道明显粗黑线，明确「可玩范围界线、碰即死」
     wobblyRoundRect(ctx, 0, 0, walls.W, walls.H, 6, 5, 5, 3.0);

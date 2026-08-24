@@ -50,6 +50,7 @@
                         //   rank, kills, finalLen, maxLen, bestLen, bestScore, newBest}
     this.overAt = 0;      // 进入结算界面的时刻（timeMs，结算卡片/逐行动画计时起点）
     this.slowUntil = 0;   // 减速道具到期时刻（timeMs），0 表示未生效
+    this.wallSpawnTimer = 0; // 动态墙体生成倒计时（ms），startRun/startMulti 时重置
 
     // ---- 颜色解锁系统（本局状态）----
     this.unlockedCount = 0;     // 当前已解锁颜色数
@@ -144,6 +145,7 @@
     this.spawner.fillNow();
     this.particles.clear();
     this.joystick.onTouchEnd(this.joystick.touchId); // 重置摇杆状态
+    this.wallSpawnTimer = Math.round(cfg.WALL_SPAWN_INTERVAL_MS * 0.5); // 开局延迟约半周期再生成首段
     this.snapCamera();
     this.syncJoystick();
     this.setState('play');
@@ -197,6 +199,7 @@
     this.mp.setup(); // 玩家 Entry + 补足 AI 编制（同时挂 spawner.others 活引用）
     this.spawner.fillNow();
     this.joystick.onTouchEnd(this.joystick.touchId); // 重置摇杆状态
+    this.wallSpawnTimer = Math.round(cfg.WALL_SPAWN_INTERVAL_MS * 0.5); // 开局延迟约半周期再生成首段
     this.snapCamera();
     this.syncJoystick();
     this.setState('play');
@@ -324,6 +327,31 @@
 
   // ---------------- 主循环 ----------------
 
+  /**
+   * 动态墙体生成：按固定间隔在地图上新增一段障碍墙（避开玩家与 AI 蛇身）。
+   * 渲染（drawWallRect）与碰撞（hitsCircle）都自动复用内部墙系统，无需额外接线。
+   */
+  Game.prototype.updateWallSpawn = function (dt) {
+    this.wallSpawnTimer -= dt;
+    if (this.wallSpawnTimer > 0) return;
+    this.wallSpawnTimer = cfg.WALL_SPAWN_INTERVAL_MS;
+    if (!this.walls) return;
+    // 收集所有蛇身节点作为避让点（玩家优先，多人再补 AI）
+    var pts = [];
+    if (this.snake && this.snake.segPos) {
+      for (var i = 0; i < this.snake.segPos.length; i++) pts.push(this.snake.segPos[i]);
+    }
+    if (this.mode === 'multi' && this.mp && this.mp.bots) {
+      for (var b = 0; b < this.mp.bots.length; b++) {
+        var bot = this.mp.bots[b];
+        if (bot.alive && bot.snake && bot.snake.segPos) {
+          for (var k = 0; k < bot.snake.segPos.length; k++) pts.push(bot.snake.segPos[k]);
+        }
+      }
+    }
+    this.walls.addRandomWall(pts, cfg.WALL_SPAWN_MAX);
+  };
+
   Game.prototype.update = function (dt) {
     this.timeMs += dt;
     this.particles.update(dt);
@@ -339,10 +367,12 @@
 
     // 多人对战：蛇群推进/淘汰/补充全部由 mp 编排（含吃色与消除）
     if (this.mode === 'multi') {
+      this.updateWallSpawn(dt);
       this.updateMulti(dt);
       return;
     }
 
+    this.updateWallSpawn(dt);
     this.elapsed += dt;
     this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
     this.score = this.survivalScore + this.elimScore;
