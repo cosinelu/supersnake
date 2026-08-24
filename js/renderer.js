@@ -739,6 +739,24 @@
         ctx.fillStyle = '#FFD94A';
         ctx.fillText(p.text, p.x, p.y);
         ctx.restore();
+      } else if (p.type === 'ring') {
+        // 消除高亮：扩张圆环 + 中心 ✕，标出被消除节位置（非连续消除也清楚可见）
+        var prog = 1 - t; // 0 → 1
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, t * 1.5);
+        var sc = p.scale || 1;
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = Math.max(2, 3 * (1 - prog) + 1.5);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (5 + prog * 30) * sc, 0, Math.PI * 2);
+        ctx.stroke();
+        var s = 6 * sc;
+        ctx.lineWidth = Math.max(1.5, 2 * sc);
+        ctx.beginPath();
+        ctx.moveTo(p.x - s, p.y - s); ctx.lineTo(p.x + s, p.y + s);
+        ctx.moveTo(p.x + s, p.y - s); ctx.lineTo(p.x - s, p.y + s);
+        ctx.stroke();
+        ctx.restore();
       }
     }
   };
@@ -1386,6 +1404,51 @@
     ctx.restore();
   };
 
+  // ---------------- 特殊道具效果提示（HUD，屏幕空间，不遮挡地图） ----------------
+
+  /**
+   * 吃到特殊道具时弹出的效果说明文字（game.itemToast）。
+   * 屏幕顶部居中、手绘描边 + 纸色填充（无底板，与解锁横幅同风格），约 1.6s 后淡出。
+   * 停留在视口区上方，不侵入右侧 HUD 面板与小地图。
+   */
+  Renderer.prototype.drawItemToast = function (game) {
+    var b = game.itemToast;
+    if (!b || !b.text) return;
+    var ctx = this.ctx, l = game.layout();
+    var life = cfg.ITEM_TOAST_MS;
+    var remain = b.until - game.timeMs;
+    var since = life - remain;
+    var a = 1;
+    if (since < 180) a = since / 180;                  // 前 180ms 淡入
+    else if (remain < 320) a = Math.max(0, remain / 320); // 末尾 320ms 淡出
+    a = Math.max(0, Math.min(1, a));
+    if (a <= 0) return;
+
+    var cx = l.areaW / 2;
+    var ty = 64; // 视口区顶部
+
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 19px sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText(b.text, cx, ty);
+    ctx.fillStyle = '#FFFDF5';
+    ctx.fillText(b.text, cx, ty);
+    // 下方一道短装饰线（纯手绘感，无底板）
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = a * 0.6;
+    var dw = Math.min(l.areaW * 0.5, ctx.measureText(b.text).width + 24);
+    ctx.beginPath();
+    ctx.moveTo(cx - dw / 2, ty + 16);
+    ctx.lineTo(cx + dw / 2, ty + 16);
+    ctx.stroke();
+    ctx.restore();
+  };
+
   // ---------------- 总入口 ----------------
 
   Renderer.prototype.draw = function (game) {
@@ -1397,6 +1460,7 @@
     this.drawPanel(game);
     if (game.state === 'play') {
       this.drawUnlockBanner(game); // 解锁提示横幅（在摇杆之上）
+      this.drawItemToast(game);    // 特殊道具效果提示（屏幕空间，不遮挡地图）
       this.drawJoystick(game);
     } else if (game.state === 'clear') this.drawResult(game, true);
     else if (game.state === 'over') {

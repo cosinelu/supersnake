@@ -173,13 +173,13 @@ cg.startLevel(1);
 var vw = cg.layout().areaW, vh = cg.screenH;
 cg.snake.x = 30; cg.snake.y = 30;      // 左上角
 cg.updateCamera(16);
-ok(cg.camera.x >= 0 && cg.camera.y >= 0, '蛇在左上角：相机钳制到 (≥0, ≥0)', cg.camera.x.toFixed(1) + ',' + cg.camera.y.toFixed(1));
+ok(cg.camera.x >= -cfg.WALL_THICK - 1e-6 && cg.camera.y >= -cfg.WALL_THICK - 1e-6, '蛇在左上角：相机可放开到 (≥-T, ≥-T) 以露出左侧边界墙', cg.camera.x.toFixed(1) + ',' + cg.camera.y.toFixed(1));
 cg.camera.x = 99999; cg.camera.y = 99999; // 人为制造越界
 cg.snake.x = cg.walls.W - 30; cg.snake.y = cg.walls.H - 30; // 右下角
 cg.updateCamera(16);
-ok(cg.camera.x <= cg.walls.W - vw + 1e-6 && cg.camera.y <= cg.walls.H - vh + 1e-6,
-  '蛇在右下角：相机钳制到 (≤W-vw, ≤H-vh)', cg.camera.x.toFixed(1) + ',' + cg.camera.y.toFixed(1));
-ok(cg.camera.x >= 0 && cg.camera.y >= 0, '越界相机被拉回合法区间');
+ok(cg.camera.x <= cg.walls.W - vw + cfg.WALL_THICK + 1e-6 && cg.camera.y <= cg.walls.H - vh + cfg.WALL_THICK + 1e-6,
+  '蛇在右下角：相机钳制到 (≤W-vw+T, ≤H-vh+T)，留出边界墙余量', cg.camera.x.toFixed(1) + ',' + cg.camera.y.toFixed(1));
+ok(cg.camera.x >= -cfg.WALL_THICK - 1e-6 && cg.camera.y >= -cfg.WALL_THICK - 1e-6, '越界相机被拉回合法区间');
 
 // ---------------- 7. 世界墙生成约束 ----------------
 section('墙壁生成');

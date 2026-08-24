@@ -64,6 +64,22 @@
   };
 
   /**
+   * 消除高亮环：在被消除节的位置画一个扩张圆环 + 中心 ✕，标出「哪些节被消掉了」。
+   * 尤其针对非连续消除（如消色/随机消除散落各处的节），让玩家一眼看清被消除位置。
+   * @param {number} scale 尺寸倍率（连锁/炸弹逐级放大）
+   */
+  Particles.prototype.ring = function (x, y, colorHex, scale) {
+    this.list.push({
+      type: 'ring',
+      x: x, y: y,
+      color: colorHex,
+      scale: scale || 1,
+      life: 0.55,
+      maxLife: 0.55
+    });
+  };
+
+  /**
    * 连锁文字：「N连锁！」上飘 + 短暂停留淡出（手绘风，描边由 renderer 画）。
    * @param {number} size 字号（px，随连锁等级增大）
    */

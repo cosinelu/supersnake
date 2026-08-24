@@ -20,6 +20,9 @@
   var Particles = CS.Particles;
   var Joystick = CS.Joystick;
 
+  // 颜色中文名（道具效果提示用）
+  var COLOR_NAMES = { red: '红', blue: '蓝', green: '绿', orange: '橙', purple: '紫', yellow: '黄', teal: '青', pink: '粉' };
+
   function Game(screenW, screenH) {
     this.screenW = screenW;
     this.screenH = screenH;
@@ -56,6 +59,7 @@
     this.unlockedCount = 0;     // 当前已解锁颜色数
     this.unlockedKeys = [];     // 已解锁颜色的 key 数组（刷新色块 / 蛇身颜色都用它）
     this.unlockBanner = null;   // 解锁提示横幅 {text, until, keys}
+    this.itemToast = null;      // 特殊道具效果提示 {text, until}（屏幕空间，HUD 层）
 
     this.uiButtons = [];
     this.buildButtons();
@@ -91,10 +95,16 @@
 
   // ---------------- 相机 ----------------
 
-  /** 单轴相机钳制：世界小于视口时居中，否则夹在 [0, world-view] */
+  /**
+   * 单轴相机钳制：世界小于视口时居中，否则夹在 [0, world-view]。
+   * 注意：两侧各放行 WALL_THICK 余量，让"世界四周边界墙带"能进入视口——
+   * 边界墙带画在世界坐标 [-T,0]/[W,W+T] 等外侧，若相机严格夹在 [0,W-view] 内，
+   * 这些带永远在视口之外被裁剪，导致"地图边缘看不到墙"（历史 bug）。
+   */
   function clampCam(v, world, view) {
+    var T = cfg.WALL_THICK;
     if (world <= view) return (world - view) / 2;
-    return u.clamp(v, 0, world - view);
+    return u.clamp(v, -T, world - view + T);
   }
 
   /** 相机平滑跟随蛇头（帧率无关指数趋近）并钳制在世界边界内 */
@@ -315,6 +325,7 @@
       for (i = 0; i < segs.length; i++) {
         var col = segs[i].color === 'wild' ? '#FFD94A' : cfg.COLORS[segs[i].color];
         this.particles.burst(segs[i].x, segs[i].y, col, Math.round(5 * fxScale), fxScale);
+        this.particles.ring(segs[i].x, segs[i].y, col, fxScale); // 消除高亮：扩张环 + ✕，标出被消除节（非连续也可见）
         sx += segs[i].x; sy += segs[i].y;
       }
       var ccx = sx / segs.length, ccy = sy / segs.length;
@@ -359,6 +370,8 @@
 
     // 解锁提示横幅到期自动清除
     if (this.unlockBanner && this.timeMs >= this.unlockBanner.until) this.unlockBanner = null;
+    // 特殊道具效果提示到期自动清除
+    if (this.itemToast && this.timeMs >= this.itemToast.until) this.itemToast = null;
 
     // 无尽/多人模式：随存活时间解锁新颜色（每 ENDLESS_UNLOCK_INTERVAL_SEC 秒 +1，封顶 MAX_COLORS）
     if (this.mode === 'endless' || this.mode === 'multi') {
@@ -398,6 +411,8 @@
     var got = this.spawner.collectAt(this.snake);
     for (var i = 0; i < got.length; i++) {
       var b = got[i];
+      // 特殊道具：弹出效果说明文字（普通色块不弹）
+      if (b.kind && b.kind !== 'color') this.setItemToast(b.kind, b.color);
       if (b.kind === 'wild') {
         this.snake.growWild();                      // 万能色：头部插入通配节
         this.particles.burst(b.x, b.y, '#FFD94A', 7);
@@ -560,6 +575,27 @@
 
   Game.prototype.onTouchEnd = function (id) {
     this.joystick.onTouchEnd(id);
+  };
+
+  /**
+   * 特殊道具效果文字提示：吃到 wild/bomb/slow/clear/clear3/rand1-3 时弹出，
+   * 屏幕顶部居中、手绘描边文字、约 1.6s 后淡出（渲染见 renderer.drawItemToast）。
+   * @param {string} kind 道具类型
+   * @param {string} [colorKey] 消色类道具的对应颜色 key
+   */
+  Game.prototype.setItemToast = function (kind, colorKey) {
+    var cn = COLOR_NAMES[colorKey] || '';
+    var txt;
+    if (kind === 'wild') txt = '万能色！可匹配任意相邻颜色';
+    else if (kind === 'bomb') txt = '炸弹！清除所有≥2连同色段';
+    else if (kind === 'slow') txt = '减速！短暂放慢移动速度';
+    else if (kind === 'clear') txt = '消色！消除全部' + cn + '色节';
+    else if (kind === 'clear3') txt = '后三消色！消除该色最末 3 节';
+    else if (kind === 'rand1') txt = '随机消除 1 节！';
+    else if (kind === 'rand2') txt = '随机消除 2 节！';
+    else if (kind === 'rand3') txt = '随机消除 3 节！';
+    else return;
+    this.itemToast = { text: txt, until: this.timeMs + cfg.ITEM_TOAST_MS };
   };
 
   CS.Game = Game;
