@@ -141,6 +141,53 @@
    * 直接复用内部墙 drawWallRect 的画法（蜡笔灰底 + 斜线排线 + 深色描边），
    * 与里面的墙「同一个效果」，一眼可读"这是墙不能碰"；撞界判定不变（逻辑仍在 walls.hitsCircle）。
    */
+  /**
+   * 砖墙带：灰色蜡笔底 + 错位砖纹（灰缝）+ 粗黑外框。
+   * 一眼可读「这是墙、不能碰」——比纯排线更明确地像砖块。
+   */
+  function drawBrickWall(ctx, b, seed) {
+    var bw = 44, bh = 22;                 // 砖块单元尺寸
+    // 底：蜡笔灰
+    wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 6, seed, seed + 3, 2.2);
+    ctx.fillStyle = cfg.WALL_FILL;
+    ctx.fill();
+    // 砖纹（裁剪在带内）
+    ctx.save();
+    wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 6, seed, seed + 3, 2.2);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(58,50,56,0.5)';
+    ctx.lineWidth = 2;
+    // 横向灰缝
+    for (var y = b.y + bh; y < b.y + b.h; y += bh) {
+      ctx.beginPath();
+      ctx.moveTo(b.x, y + (u.hash2(seed, Math.round(y), 1) - 0.5) * 1.6);
+      ctx.lineTo(b.x + b.w, y);
+      ctx.stroke();
+    }
+    // 纵向灰缝（逐行错位，像真实砌砖）
+    var rows = Math.ceil(b.h / bh);
+    for (var r = 0; r < rows; r++) {
+      var yy = b.y + r * bh;
+      var off = (r % 2) * (bw / 2);
+      for (var x = b.x + off; x < b.x + b.w; x += bw) {
+        ctx.beginPath();
+        ctx.moveTo(x, yy);
+        ctx.lineTo(x, Math.min(yy + bh, b.y + b.h));
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+    // 粗黑外框（明确边界「碰即死」）
+    wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 6, seed, seed + 3, 2.2);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 3.4;
+    ctx.stroke();
+  }
+
+  /**
+   * 边界墙：世界四周的砖墙带（带视口裁剪，只画可见带）。
+   * 直接复用 drawBrickWall 的画法（灰砖 + 灰缝 + 粗黑框）；撞界判定不变（逻辑仍在 walls.hitsCircle）。
+   */
   function drawBoundary(ctx, walls, cam, vw, vh) {
     var T = cfg.WALL_THICK;
     var bands = [
@@ -152,7 +199,7 @@
     for (var i = 0; i < 4; i++) {
       var b = bands[i];
       if (b.x + b.w < cam.x || b.x > cam.x + vw || b.y + b.h < cam.y || b.y > cam.y + vh) continue;
-      drawWallRect(ctx, b, 91 + i);   // 与内部墙完全相同的蜡笔排线视觉
+      drawBrickWall(ctx, b, 91 + i);   // 灰砖墙带，一眼可读「墙不能碰」
     }
     // 世界内边缘：一道明显粗黑线，明确「可玩范围界线、碰即死」
     wobblyRoundRect(ctx, 0, 0, walls.W, walls.H, 6, 5, 5, 3.0);
@@ -197,104 +244,97 @@
    * 特殊道具绘制（地图上的万能色/炸弹/减速）。普通色块由 drawCrayonBlock 处理。
    * @param {string} kind 'wild' | 'bomb' | 'slow'
    */
+  /**
+   * 特殊道具绘制（地图上的万能色/炸弹/减速/消色/后3消色/随机消N）。
+   * 统一：先 translate 到块中心 + 脉动缩放，再按 kind 画；白底块一律加粗黑灰描边（浅色场景可见）。
+   * @param {string} kind 'wild' | 'bomb' | 'slow' | 'clear' | 'clear3' | 'rand1|2|3'
+   */
   function drawItemBlock(ctx, b, cx, cy, size, seedX, seedY, rot, pulse) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(pulse, pulse);
+
     if (b.kind === 'wild') {
-      // 万能色：白底圆块 + 星标 + 彩色环，明显区别于普通色块
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.scale(pulse, pulse);
-      drawCrayonBlock(ctx, -size / 2, -size / 2, size, '#FFFDF5', seedX, seedY, { rot: rot, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      // 万能色：白底块 + 角上四色点 + 中心星标 + 粗黑描边
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, '#FFFDF5', seedX, seedY, { rot: rot, wobble: 1.0 });
       var cols = ['#E8552F', '#4A7FD4', '#6FBF4A', '#F5A623'];
       for (var c = 0; c < 4; c++) {
         ctx.beginPath();
         ctx.arc(Math.cos(c * Math.PI / 2) * size * 0.34, Math.sin(c * Math.PI / 2) * size * 0.34, size * 0.10, 0, Math.PI * 2);
-        ctx.fillStyle = cols[c];
-        ctx.fill();
+        ctx.fillStyle = cols[c]; ctx.fill();
         ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1; ctx.stroke();
       }
-      starPath(ctx, 0, 0, size * 0.26, 0.3);
+      starPath(ctx, 0, 0, size * 0.24, 0.3);
       ctx.fillStyle = '#FFD94A'; ctx.fill();
-      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.3; ctx.stroke();
-      // 白底在浅色/白色场景易隐形 → 加一圈粗深色描边，保证可见
-      ctx.beginPath();
-      ctx.arc(0, 0, size * 0.52, 0, Math.PI * 2);
-      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 3.6; ctx.stroke();
-      ctx.restore();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.2; ctx.stroke();
+      // 白底在浅色/白色场景易隐形 → 粗黑灰描边
+      wobblyRoundRect(ctx, -size / 2, -size / 2, size, size, size * 0.28, seedX, seedY, 1.0);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(2.5, size * 0.13); ctx.stroke();
+
     } else if (b.kind === 'bomb') {
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.scale(pulse, pulse);
-      ctx.beginPath();
-      ctx.arc(0, 0, size * 0.42, 0, Math.PI * 2);
-      ctx.fillStyle = '#3A3238';
-      ctx.fill();
+      // 炸弹：深灰圆 + 引线火光
+      ctx.beginPath(); ctx.arc(0, 0, size * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = '#3A3238'; ctx.fill();
       ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2; ctx.stroke();
-      // 引线火光
-      ctx.beginPath();
-      ctx.moveTo(0, -size * 0.42);
+      ctx.beginPath(); ctx.moveTo(0, -size * 0.42);
       ctx.quadraticCurveTo(size * 0.18, -size * 0.62, size * 0.06, -size * 0.72);
       ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.6; ctx.stroke();
       ctx.beginPath(); ctx.arc(size * 0.06, -size * 0.72, size * 0.09, 0, Math.PI * 2);
       ctx.fillStyle = '#F5A623'; ctx.fill();
       ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1; ctx.stroke();
-      ctx.restore();
+
     } else if (b.kind === 'slow') {
       // 减速：蓝绿圆 + 时钟指针
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.scale(pulse, pulse);
       ctx.beginPath(); ctx.arc(0, 0, size * 0.44, 0, Math.PI * 2);
       ctx.fillStyle = '#2EC4B6'; ctx.fill();
       ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2; ctx.stroke();
       ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -size * 0.26);
       ctx.moveTo(0, 0); ctx.lineTo(size * 0.20, size * 0.06);
       ctx.strokeStyle = '#FFFDF5'; ctx.lineWidth = 2; ctx.stroke();
-      ctx.restore();
+
     } else if (b.kind === 'clear') {
-      // 消色（全部）：该色蜡笔块 + 放射状星芒
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.scale(pulse, pulse);
-      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0, stroke: cfg.SEG_STROKE });
-      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.6;
-      for (var a = 0; a < 8; a++) {
-        var an = a * Math.PI / 4;
+      // 消色（全部）：该色块 + 12 道粗放射线 + 外环，表达「整片清掉」
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
+      wobblyRoundRect(ctx, -size / 2, -size / 2, size, size, size * 0.28, seedX, seedY, 1.0);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(1.8, size * 0.07); ctx.stroke();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(2, size * 0.10);
+      for (var a = 0; a < 12; a++) {
+        var an = a * Math.PI / 6;
         ctx.beginPath();
-        ctx.moveTo(Math.cos(an) * size * 0.18, Math.sin(an) * size * 0.18);
-        ctx.lineTo(Math.cos(an) * size * 0.44, Math.sin(an) * size * 0.44);
+        ctx.moveTo(Math.cos(an) * size * 0.16, Math.sin(an) * size * 0.16);
+        ctx.lineTo(Math.cos(an) * size * 0.47, Math.sin(an) * size * 0.47);
         ctx.stroke();
       }
-      ctx.restore();
+      ctx.beginPath(); ctx.arc(0, 0, size * 0.5, 0, Math.PI * 2);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(1.8, size * 0.07); ctx.stroke();
+
     } else if (b.kind === 'clear3') {
-      // 后 3 消色：该色蜡笔块 + ×3 文字
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.scale(pulse, pulse);
-      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0, stroke: cfg.SEG_STROKE });
-      ctx.fillStyle = cfg.INK;
-      ctx.font = 'bold ' + Math.round(size * 0.5) + 'px sans-serif';
+      // 后 3 消色：该色块 + 居中大号「×3」
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
+      wobblyRoundRect(ctx, -size / 2, -size / 2, size, size, size * 0.28, seedX, seedY, 1.0);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(1.8, size * 0.07); ctx.stroke();
+      ctx.font = 'bold ' + Math.round(size * 0.62) + 'px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('×3', 0, 0);
-      ctx.restore();
+      ctx.lineWidth = Math.max(2, size * 0.10); ctx.strokeStyle = '#FFFDF5';
+      ctx.strokeText('×3', 0, 1);
+      ctx.fillStyle = cfg.INK; ctx.fillText('×3', 0, 1);
+
     } else if (b.kind === 'rand1' || b.kind === 'rand2' || b.kind === 'rand3') {
-      // 随机消除：白底 + 三色点 + ? 与数字
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.scale(pulse, pulse);
-      drawCrayonBlock(ctx, -size / 2, -size / 2, size, '#FFFDF5', seedX, seedY, { rot: rot, wobble: 1.0, stroke: cfg.SEG_STROKE });
-      var rc = ['#E8552F', '#4A7FD4', '#6FBF4A'];
-      for (var c = 0; c < 3; c++) {
-        ctx.beginPath(); ctx.arc((c - 1) * size * 0.20, -size * 0.14, size * 0.08, 0, Math.PI * 2);
-        ctx.fillStyle = rc[c]; ctx.fill();
-      }
-      ctx.fillStyle = cfg.INK;
-      ctx.font = 'bold ' + Math.round(size * 0.42) + 'px sans-serif';
+      // 随机消除：白底块 + 粗黑描边 + 居中大号数字 + ? 角标
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, '#FFFDF5', seedX, seedY, { rot: rot, wobble: 1.0 });
+      wobblyRoundRect(ctx, -size / 2, -size / 2, size, size, size * 0.28, seedX, seedY, 1.0);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(2.5, size * 0.13); ctx.stroke();
+      var n = b.kind === 'rand1' ? 1 : (b.kind === 'rand2' ? 2 : 3);
+      ctx.font = 'bold ' + Math.round(size * 0.6) + 'px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('?', 0, size * 0.08);
-      ctx.font = 'bold ' + Math.round(size * 0.26) + 'px sans-serif';
-      ctx.fillText(b.kind === 'rand1' ? '1' : (b.kind === 'rand2' ? '2' : '3'), size * 0.28, size * 0.28);
-      ctx.restore();
+      ctx.lineWidth = Math.max(2, size * 0.10); ctx.strokeStyle = '#FFFDF5';
+      ctx.strokeText(String(n), 0, 1);
+      ctx.fillStyle = cfg.INK; ctx.fillText(String(n), 0, 1);
+      ctx.font = 'bold ' + Math.round(size * 0.28) + 'px sans-serif';
+      ctx.fillStyle = cfg.INK; ctx.fillText('?', size * 0.30, -size * 0.30);
     }
+
+    ctx.restore();
   }
 
   /**
