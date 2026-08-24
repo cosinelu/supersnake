@@ -19,6 +19,7 @@
   var Spawner = CS.Spawner;
   var Particles = CS.Particles;
   var Joystick = CS.Joystick;
+  var Audio = CS.audio;         // 音效系统（Web Audio API 振荡器合成）
 
   // 颜色中文名（道具效果提示用）
   var COLOR_NAMES = { red: '红', blue: '蓝', green: '绿', orange: '橙', purple: '紫', yellow: '黄', teal: '青', pink: '粉' };
@@ -158,6 +159,7 @@
     this.wallSpawnTimer = Math.round(cfg.WALL_SPAWN_INTERVAL_MS * 0.5); // 开局延迟约半周期再生成首段
     this.snapCamera();
     this.syncJoystick();
+    if (Audio) Audio.startBgm();  // 对局开始 → 启动背景音乐
     this.setState('play');
   };
 
@@ -212,6 +214,7 @@
     this.wallSpawnTimer = Math.round(cfg.WALL_SPAWN_INTERVAL_MS * 0.5); // 开局延迟约半周期再生成首段
     this.snapCamera();
     this.syncJoystick();
+    if (Audio) Audio.startBgm();  // 多人对局开始 → 启动背景音乐
     this.setState('play');
   };
 
@@ -238,6 +241,7 @@
   /** 多人结算：排名 / 存活时间 / 总分（时间分+消除分）/ 累计消除方块 / 击杀数 / 最终节数
    *  + 本地最佳（最长节数 / 最高分）；overAt 供结算卡片逐行动画计时 */
   Game.prototype.gameOverMulti = function () {
+    if (Audio) { Audio.stopBgm(); Audio.playWall(); }  // 多人结束音效
     var e = this.mp.playerEntry;
     var rank = this.mp.rankOf(e);
     var bestLen = Math.max(this.mpBest.len, e.maxLen);
@@ -279,6 +283,7 @@
       until: this.timeMs + cfg.UNLOCK_BANNER_MS,
       keys: cfg.COLOR_KEYS.slice(prev, count) // 本次新增的颜色
     };
+    if (Audio) Audio.playUnlock();  // 解锁新颜色音效
   };
 
   /**
@@ -311,6 +316,7 @@
    */
   Game.prototype.applyElim = function (removed, fxBoost, perSegBonus) {
     if (!removed || !removed.length) return;
+    if (Audio) Audio.playElim();  // 消除基础音效
     var waves = {};
     for (var i = 0; i < removed.length; i++) {
       var ch = removed[i].chain || 1;
@@ -333,6 +339,7 @@
       if (chain >= cfg.CHAIN_TEXT_MIN) {
         this.particles.chainText(ccx, ccy - 24, chain + '连锁！', 20 + (chain - 1) * 6);
       }
+      if (Audio && chain >= 2) Audio.playChain(chain);  // 连锁额外音效（越高越响）
     }
   };
 
@@ -414,16 +421,20 @@
       // 特殊道具：弹出效果说明文字（普通色块不弹）
       if (b.kind && b.kind !== 'color') this.setItemToast(b.kind, b.color);
       if (b.kind === 'wild') {
-        this.snake.growWild();                      // 万能色：头部插入通配节
+        this.snake.growWild();
+        if (Audio) Audio.playSpecial();
         this.particles.burst(b.x, b.y, '#FFD94A', 7);
       } else if (b.kind === 'bomb') {
+        if (Audio) Audio.playSpecial();
         this.particles.burst(b.x, b.y, '#E8552F', 12, 1.5);
         var remB = this.snake.eliminate(2, 2);      // 炸弹：清掉所有 ≥2 连同色段
         this.applyElim(remB, 1.4, cfg.BOMB_SCORE);
       } else if (b.kind === 'slow') {
-        this.slowUntil = this.timeMs + cfg.SLOW_MS; // 减速：临时喘息
+        if (Audio) Audio.playSpecial();
+        this.slowUntil = this.timeMs + cfg.SLOW_MS;
         this.particles.burst(b.x, b.y, '#2EC4B6', 9);
       } else if (b.kind === 'clear') {
+        if (Audio) Audio.playSpecial();
         // 消色：消除全体现该颜色节
         var remC = this.snake.removeByColor(b.color);
         this.applyElim(remC, 1.3, cfg.CLEAR_SCORE);
@@ -431,6 +442,7 @@
         this.applyElim(remC2, 1, 0);
         this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 12, 1.5);
       } else if (b.kind === 'clear3') {
+        if (Audio) Audio.playSpecial();
         // 后 3 消色：消除该颜色最靠尾的至多 3 节
         var rem3 = this.snake.removeRearByColor(b.color, 3);
         this.applyElim(rem3, 1.2, cfg.CLEAR3_SCORE);
@@ -438,6 +450,7 @@
         this.applyElim(rem32, 1, 0);
         this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 9, 1.3);
       } else if (b.kind === 'rand1' || b.kind === 'rand2' || b.kind === 'rand3') {
+        if (Audio) Audio.playSpecial();
         // 随机消除 1/2/3 节
         var rn = b.kind === 'rand1' ? 1 : (b.kind === 'rand2' ? 2 : 3);
         var remR = this.snake.removeRandom(rn);
@@ -446,6 +459,7 @@
         this.applyElim(remR2, 1, 0);
         this.particles.burst(b.x, b.y, '#FFD94A', 9, 1.3);
       } else {
+        if (Audio) Audio.playEat();
         this.snake.grow(b.color);
         this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 4);
       }
@@ -474,6 +488,7 @@
   };
 
   Game.prototype.gameOver = function () {
+    if (Audio) { Audio.stopBgm(); Audio.playWall(); }  // 结束音效
     if (this.mode === 'endless' && this.score > this.best) {
       this.best = this.score;
       store.set(cfg.STORAGE_BEST, this.best);
@@ -507,9 +522,12 @@
     var W = this.screenW, H = this.screenH, cx = W / 2;
     var bw = Math.min(220, W * 0.3), bh = 54;
     if (this.state === 'menu') {
-      this.addButton('level', cx, H * 0.52, bw, bh, '闯关模式');
-      this.addButton('endless', cx, H * 0.52 + bh + 20, bw, bh, '无尽模式');
-      this.addButton('multi', cx, H * 0.52 + 2 * (bh + 20), bw, bh, '多人对战');
+      this.addButton('level', cx, H * 0.48, bw, bh, '闯关模式');
+      this.addButton('endless', cx, H * 0.48 + bh + 20, bw, bh, '无尽模式');
+      this.addButton('multi', cx, H * 0.48 + 2 * (bh + 20), bw, bh, '多人对战');
+      this.addButton('guide', cx, H * 0.48 + 3 * (bh + 20), Math.round(bw * 0.75), bh - 6, '图鉴');
+    } else if (this.state === 'guide') {
+      this.addButton('back', cx, H * 0.92, 160, 48, '返回');
     } else if (this.state === 'levels') {
       var cols = 5, lw = Math.min(64, (W - 80) / cols - 10), lh = 50;
       var gridW = cols * (lw + 12) - 12;
@@ -539,9 +557,11 @@
   };
 
   Game.prototype.onButton = function (id) {
+    if (Audio) Audio.playClick();  // 按钮点击音效
     if (id === 'level') this.setState('levels');
     else if (id === 'endless') this.startEndless();
     else if (id === 'multi') this.startMulti();
+    else if (id === 'guide') this.setState('guide');
     else if (id === 'back') this.setState('menu');
     else if (id === 'menu') this.setState('menu');
     else if (id === 'retry') {

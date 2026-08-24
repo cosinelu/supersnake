@@ -60,7 +60,10 @@
     for (var tries = 0; tries < cfg.SPAWN_TRIES; tries++) {
       var x = m + Math.random() * (w.W - 2 * m);
       var y = m + Math.random() * (w.H - 2 * m);
-      if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 6)) continue;        // 不压墙
+      // 不压边界墙带（相机已放开余量可见，道具不能叠在上面）
+      var edgePad = cfg.WALL_THICK + cfg.BLOCK_RADIUS + 10;
+      if (x < edgePad || x > w.W - edgePad || y < edgePad || y > w.H - edgePad) continue;
+      if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 22)) continue;       // 不压内部墙（加大余量）
       if (s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;            // 离蛇 ≥80px
       var nearOther = false;
       for (var oi = 0; oi < this.others.length; oi++) {               // 多人：其他活蛇同样避让
@@ -117,15 +120,16 @@
     var dirs = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
     var d = dirs[Math.floor(Math.random() * 4)];
     var band = 420; // 在蛇附近 ±band 进入，保证流星经过玩家区域
+    var spd = cfg.METEOR_SPEED * (0.5 + Math.random() * 0.8); // 每颗流星速度随机（有的快有的慢）
     var mx, my, vx, vy;
     if (d.x !== 0) { // 水平：从左/右边缘进入，朝对侧飞，y 取蛇附近
       mx = d.x > 0 ? -40 : W + 40;
       my = u.clamp(snake.y + (Math.random() * 2 - 1) * band, 40, H - 40);
-      vx = d.x * cfg.METEOR_SPEED; vy = 0;
+      vx = d.x * spd; vy = 0;
     } else { // 垂直：从上/下边缘进入，朝对侧飞，x 取蛇附近
       mx = u.clamp(snake.x + (Math.random() * 2 - 1) * band, 40, W - 40);
       my = d.y > 0 ? -40 : H + 40;
-      vx = 0; vy = d.y * cfg.METEOR_SPEED;
+      vx = 0; vy = d.y * spd;
     }
     this.meteors.push({
       x: mx, y: my, vx: vx, vy: vy,
