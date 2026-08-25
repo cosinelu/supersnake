@@ -1143,20 +1143,103 @@
   Renderer.prototype.drawMenu = function (game) {
     var ctx = this.ctx;
     this.drawOverlay(0.0); // 主菜单直接用纸面
+    var cx = this.W / 2;
+    var ty = this.H * 0.22; // 标题基线 Y
+
+    // ---- 标题「消食蛇」美术设计 ----
+    // 设计意图：每个字用不同颜色（红=消除、绿=吃、蓝=蛇身），
+    //   字间穿插小蜡笔色块（体现"蛇由色块组成"），
+    //   底部蜡笔波浪下划线 + 散落小碎块装饰（手绘感）
+    ctx.save();
+    var titleChars = ['消', '食', '蛇'];
+    var titleColors = [cfg.COLORS.red, cfg.COLORS.green, cfg.COLORS.blue]; // 红(消) 绿(食) 蓝(蛇)
+    var fontSize = 52;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold ' + fontSize + 'px sans-serif';
+
+    // 测量总宽以便居中
+    var totalW = 0;
+    for (var tc = 0; tc < titleChars.length; tc++) totalW += ctx.measureText(titleChars[tc]).width;
+    var charGap = 8; // 字间距
+    totalW += charGap * (titleChars.length - 1);
+    var startX = cx - totalW / 2;
+
+    // 逐字绘制（每字独立颜色 + 轻微蜡笔描边）
+    var curX = startX;
+    for (var ci = 0; ci < titleChars.length; ci++) {
+      var ch = titleChars[ci];
+      var chW = ctx.measureText(ch).width;
+      var chCx = curX + chW / 2;
+
+      // 字体颜色（深色描边 + 彩色填充，保证在浅色背景可读）
+      ctx.font = 'bold ' + fontSize + 'px sans-serif';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = cfg.INK;
+      ctx.strokeText(ch, chCx, ty);
+      ctx.fillStyle = titleColors[ci];
+      ctx.fillText(ch, chCx, ty);
+
+      // 每个字右下方散落 1~2 个小蜡笔碎块（表达"蛇身由色块组成"）
+      var debrisCount = (ci === 2) ? 2 : 1; // 「蛇」字多一个
+      for (var db = 0; db < debrisCount; db++) {
+        var dx = chCx + (Math.random() * 2 - 1) * (chW * 0.5) + 12 + db * 16;
+        var dy = ty + 22 + db * 10 + Math.random() * 8;
+        var dc = cfg.COLORS[cfg.COLOR_KEYS[(ci + db) % 4]];
+        var ds = 7 + Math.random() * 4;
+        ctx.save();
+        ctx.translate(dx, dy);
+        ctx.rotate((Math.random() - 0.5) * 0.6);
+        drawCrayonBlock(ctx, -ds / 2, -ds / 2, ds, dc, ci * 37 + db * 19, ci * 23 + db * 31,
+          { rot: (u.hash2(ci, db, 11) - 0.5) * 0.55, wobble: 1.0 });
+        ctx.restore();
+      }
+
+      curX += chW + charGap;
+    }
+
+    // 蜡笔波浪下划线（手绘感，贯穿标题下方）
+    ctx.beginPath();
+    var ulY = ty + fontSize * 0.48;
+    var ulW = totalW + 40;
+    var ulX0 = cx - ulW / 2;
+    ctx.moveTo(ulX0, ulY);
+    for (var wx = 1; wx <= 12; wx++) {
+      var px = ulX0 + (wx / 12) * ulW;
+      var py = ulY + Math.sin(wx * 1.3 + 0.7) * 3.5;
+      ctx.lineTo(px, py);
+    }
+    ctx.strokeStyle = cfg.COLORS.orange; // 橙色下划线（第 4 色，点缀用）
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // 标题两侧各飘 1 个稍大的装饰色块（四色各一，表达"四色消除"核心机制）
+    var decorBlocks = [
+      { x: cx - totalW / 2 - 28, y: ty - 6, color: cfg.COLORS.orange, size: 14, rot: -0.25 },
+      { x: cx + totalW / 2 + 26, y: ty + 10, color: cfg.COLORS.purple, size: 12, rot: 0.35 }
+    ];
+    for (var di = 0; di < decorBlocks.length; di++) {
+      var db = decorBlocks[di];
+      ctx.save();
+      ctx.translate(db.x, db.y);
+      ctx.rotate(db.rot);
+      drawCrayonBlock(ctx, -db.size / 2, -db.size / 2, db.size, db.color,
+        di * 77, di * 43, { rot: db.rot * 0.8, wobble: 1.0 });
+      ctx.restore();
+    }
+
+    ctx.restore();
+    // ---- 标题结束 ----
+
+    // 副标题：四个起始色块做装饰（保留原有设计，位置随标题下移）
     ctx.save();
     ctx.fillStyle = cfg.INK;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = 'bold 44px sans-serif';
-    ctx.fillText('消食蛇', this.W / 2, this.H * 0.24);
-    // 标题下画四个小色块做装饰
-    var s = 18, total = s * 4 + 12 * 3;
-    for (var i = 0; i < 4; i++) {
-      drawCrayonBlock(ctx, this.W / 2 - total / 2 + i * (s + 12), this.H * 0.24 + 38, s,
-        cfg.COLORS[cfg.COLOR_KEYS[i]], 100 + i, 7, { rot: (u.hash2(i, 3, 5) - 0.5) * 0.5 });
-    }
     ctx.font = '15px sans-serif';
-    ctx.fillText('自由游动 · 吃色补头 · 四连消除 · 别撞墙', this.W / 2, this.H * 0.35);
+    ctx.fillText('自由游动 · 吃色补头 · 四连消除 · 别撞墙', cx, this.H * 0.35);
     ctx.font = '13px sans-serif';
     ctx.globalAlpha = 0.7;
     ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.89);
@@ -1528,25 +1611,21 @@
     var pageItems = [];
     for (var k = startIdx; k < endIdx; k++) pageItems.push(items[k]);
 
-    // 标题
+    // 标题（干净字体，无描边；与下方图例拉开间距）
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = 'bold 26px sans-serif';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = cfg.INK;
-    ctx.strokeText('道具图鉴', W / 2, 44);
+    ctx.font = 'bold 28px sans-serif';
     ctx.fillStyle = cfg.INK;
-    ctx.fillText('道具图鉴', W / 2, 44);
+    ctx.fillText('道具图鉴', W / 2, 40);
     ctx.restore();
 
-    // 稀有度图例：蓝(强) ▸ 紫(中) ▸ 橙(弱)，与边框配色一致
+    // 稀有度图例：蓝(强) ▸ 紫(中) ▸ 橙(弱)，与边框配色一致（标题下方留足间距）
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = '12.5px sans-serif';
-    var legY = 66;
+    var legY = 68;
     var chipW = 30, chipH = 15, gapX = 8, labelGap = 4;
     var labels = [['blue', '强'], ['purple', '中'], ['orange', '弱']];
     var totalW = labels.length * (chipW + labelGap + ctx.measureText('强').width + gapX) - gapX;
@@ -1571,7 +1650,7 @@
     // 卡片区域参数
     var cardW = Math.min(540, W - 48);
     var cardX = (W - cardW) / 2;
-    var startY = 90;
+    var startY = 94;
     var cardH = 80;       // 每张卡片高度（加高以容纳更大的图标）
     var gap = 8;          // 卡片间距
     var iconSize = 48;    // 左侧图标尺寸（加大以便看清细节）
