@@ -76,7 +76,7 @@ ok(s2.length() >= cfg.MIN_LENGTH, '连锁后保底长度 ≥ ' + cfg.MIN_LENGTH,
 // 保底：整条 4 节同色，消除后不能低于 3 节
 var s3 = makeSnake(['red', 'red', 'red', 'red']);
 var r3 = s3.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
-ok(s3.length() === cfg.MIN_LENGTH && r3.length === 1, '保底：4 节全连只删 1 节，剩 3 节', 'removed=' + r3.length + ' len=' + s3.length());
+ok(s3.length() === cfg.REFILL_ON_FLOOR && r3.length === 4, '保底触发（标准4连）：整段消除后随机补满 ' + cfg.REFILL_ON_FLOOR + ' 节继续', 'removed=' + r3.length + ' len=' + s3.length());
 
 // ---------------- 4b. 节可读性几何约束（需求 1） ----------------
 section('节可读性几何');
@@ -93,12 +93,12 @@ var sc = makeSnake(['pink', 'pink', 'red', 'red', 'blue', 'blue', 'blue', 'blue'
 var rc = sc.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
 var byChain = { 1: 0, 2: 0, 3: 0 };
 rc.forEach(function (s) { byChain[s.chain] = (byChain[s.chain] || 0) + 1; });
-ok(byChain[1] === 4 && byChain[2] === 4 && byChain[3] === 1,
-  '连锁等级标记：chain1 消 4 节 / chain2 消 4 节 / chain3 保底消 1 节',
+ok(byChain[1] === 4 && byChain[2] === 4 && byChain[3] === 4,
+  '连锁等级标记：chain1 消 4 节 / chain2 消 4 节 / chain3 保底触发整段消除消 4 节',
   JSON.stringify(byChain));
 var chainTotal = rc.reduce(function (sum, s) { return sum + cfg.ELIM_SCORE * s.chain; }, 0);
-ok(chainTotal === 4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 1 * cfg.ELIM_SCORE * 3,
-  '连锁计分 = Σ ELIM_SCORE×chain = 4×' + cfg.ELIM_SCORE + ' + 4×' + (cfg.ELIM_SCORE * 2) + ' + 1×' + (cfg.ELIM_SCORE * 3) + ' = ' + chainTotal, 'total=' + chainTotal);
+ok(chainTotal === 4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 4 * cfg.ELIM_SCORE * 3,
+  '连锁计分 = Σ ELIM_SCORE×chain = 4×' + cfg.ELIM_SCORE + ' + 4×' + (cfg.ELIM_SCORE * 2) + ' + 4×' + (cfg.ELIM_SCORE * 3) + ' = ' + chainTotal, 'total=' + chainTotal);
 ok(cfg.ELIM_SCORE * 2 === 2 * cfg.ELIM_SCORE && cfg.ELIM_SCORE * 3 === 3 * cfg.ELIM_SCORE && cfg.ELIM_SCORE * 2 > cfg.ELIM_SCORE,
   '倍率核对：chain 每节 = ELIM_SCORE×chain（chain2=' + (cfg.ELIM_SCORE * 2) + '、chain3=' + (cfg.ELIM_SCORE * 3) + ' = 2×/3× 基础）');
 ok(cfg.CHAIN_FX_STEP > 0 && 1 + cfg.CHAIN_FX_STEP === 1.6 && 1 + 2 * cfg.CHAIN_FX_STEP > 2,
@@ -683,11 +683,11 @@ var atk2 = b2.mp.bots[0];
 var pseg3 = b2.snake.segPos[3];
 atk2.snake.x = pseg3.x; atk2.snake.y = pseg3.y;
 b2.mp.collide();
-ok(b2.mp.playerEntry.alive && b2.snake.length() === cfg.MIN_LENGTH,
-  '咬断后 5 连红触发消除（保底剩 3 节）', 'len=' + b2.snake.length());
-ok(b2.mp.playerEntry.elimScore === 2 * cfg.ELIM_SCORE,
-  '咬断触发的消除分记给 B（移除 2 节 ×5 分，chain1）', 'elimScore=' + b2.mp.playerEntry.elimScore);
-ok(b2.mp.playerEntry.elimTotal === 2, '累计消除方块 = 2（被咬触发的消除计入）',
+ok(b2.mp.playerEntry.alive && b2.snake.length() === cfg.REFILL_ON_FLOOR,
+  '咬断后 5 连红触发消除（保底触发：整段消除后随机补满 ' + cfg.REFILL_ON_FLOOR + ' 节）', 'len=' + b2.snake.length());
+ok(b2.mp.playerEntry.elimScore === 5 * cfg.ELIM_SCORE,
+  '咬断触发的消除分记给 B（移除 5 节 ×' + cfg.ELIM_SCORE + ' 分，chain1）', 'elimScore=' + b2.mp.playerEntry.elimScore);
+ok(b2.mp.playerEntry.elimTotal === 5, '累计消除方块 = 5（被咬触发的消除全额计入）',
   'elimTotal=' + b2.mp.playerEntry.elimTotal);
 
 // ③ 咬到保底节数以下 → B 直接淘汰（尸体掉落 + 计入 A 击杀）
@@ -713,8 +713,8 @@ var bot4 = b4.mp.bots[0];
 bot4.snake.colors = ['pink', 'pink', 'red', 'red', 'blue', 'blue', 'blue', 'blue', 'red', 'red', 'pink', 'pink'];
 bot4.snake.computeBody();
 b4.mp.resolveElim(bot4);
-ok(bot4.elimTotal === 9 && bot4.elimScore === 4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 1 * cfg.ELIM_SCORE * 3,
-  '连锁消除计入累计消除方块（9 节 / ' + (4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 1 * cfg.ELIM_SCORE * 3) + ' 分，与单人连锁倍率一致）',
+ok(bot4.elimTotal === 12 && bot4.elimScore === 4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 4 * cfg.ELIM_SCORE * 3,
+  '连锁消除计入累计消除方块（12 节 / ' + (4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 4 * cfg.ELIM_SCORE * 3) + ' 分，与单人连锁倍率一致）',
   'elimTotal=' + bot4.elimTotal + ' score=' + bot4.elimScore);
 
 // ---------------- 21. 尾巴节（v2.3：恒在的不可消除末节） ----------------
@@ -737,10 +737,10 @@ ok(Math.abs(tailGap - cfg.SEG_SPACING) <= 1.5, '尾巴节沿轨迹跟随：与�
 // ② 极端消除：整条颜色节都能凑连，消除后颜色节保底 3 且尾巴节仍在（总长 ≥ 4）
 var te = makeSnake(['red', 'red', 'red', 'red', 'blue', 'blue', 'blue', 'blue']);
 var re = te.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
-ok(re.length === 5 && te.length() === cfg.MIN_LENGTH,
-  '极端消除（8 节全凑连）：保底剩 3 颜色节', 'removed=' + re.length + ' len=' + te.length());
-ok(te.totalLength() === 4 && te.segPos.length === 4,
-  '尾巴节恒在：全消除极限下蛇至少剩 尾巴+3 颜色节 = 4 节总长', 'segPos=' + te.segPos.length);
+ok(re.length === 8 && te.length() === cfg.REFILL_ON_FLOOR,
+  '极端消除（8 节全凑连）：保底触发→整段消除后随机补满 ' + cfg.REFILL_ON_FLOOR + ' 节', 'removed=' + re.length + ' len=' + te.length());
+ok(te.totalLength() === cfg.REFILL_ON_FLOOR + 1 && te.segPos.length === cfg.REFILL_ON_FLOOR + 1,
+  '尾巴节恒在：全消除后随机补满 ' + cfg.REFILL_ON_FLOOR + ' 颜色节 + 1 尾巴节 = ' + (cfg.REFILL_ON_FLOOR + 1) + ' 节总长', 'segPos=' + te.segPos.length);
 
 // ③ 咬断不会选中尾巴节：removeSegAt 下标越界（= 尾巴节下标）返回 null
 var tb3 = makeSnake(['red', 'green', 'blue', 'orange', 'purple']);

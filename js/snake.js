@@ -37,6 +37,7 @@
     this.trail = [{ x: x, y: y }];    // 头部轨迹，trail[0] 最新
     this.selfPullCd = 0;             // 自碰重组冷却（ms），>0 时不可触发（防刷屏）
     this.segPos = [];                 // 每节中心（含头），computeBody 派生
+    this.colorKeys = colorKeys;       // 保存可用颜色池（已解锁色），供保底补砖时随机取色
     // 出生时颜色随机但避免直接凑成 4 连（tries 防御：可选颜色不足时接受现状，不死循环）
     for (var i = 0; i < len; i++) {
       var color = colorKeys[0], tries = 0;
@@ -327,18 +328,25 @@
     var removed = [];
     var guard = 0;
     var chain = 0; // 当前连锁等级（每进入一轮消除 +1）
+    var floorHit = false; // 是否触发过「保底」（消除会清空到不足 minLen）
     while (guard++ < 32) { // 防御性上限，正常连锁远小于此
       var runs = this.findRuns(runLen);
       if (!runs.length) break;
       chain++;
       var mark = {};
       runs.forEach(function (r) { r.forEach(function (idx) { mark[idx] = true; }); });
-      // 保底：若删完长度不足 minLen，从尾部（下标大的一端）开始取消标记
       var idxs = Object.keys(mark).map(Number).sort(function (a, b) { return b - a; });
       var removeCount = idxs.length;
-      while (this.colors.length - removeCount < minLen && removeCount > 0) {
-        delete mark[idxs[idxs.length - removeCount]];
-        removeCount--;
+      var floorCandidate = (this.colors.length - removeCount < minLen && removeCount > 0);
+      if (floorCandidate && runLen === cfg.ELIM_RUN) {
+        // 标准 4 连消除触发保底：不再保留旧块，整段消除后随机补砖让游戏继续（新行为）
+        floorHit = true;
+      } else if (floorCandidate) {
+        // 其它情形（如炸弹 2 连消除）保持原保底：从尾部取消标记、保留 minLen 节旧块
+        while (this.colors.length - removeCount < minLen && removeCount > 0) {
+          delete mark[idxs[idxs.length - removeCount]];
+          removeCount--;
+        }
       }
       if (!removeCount) break;
       var next = [];
@@ -351,8 +359,25 @@
         }
       }
       this.colors = next;
+      if (floorHit) break; // 已决定重置，无需继续连锁
     }
     if (removed.length) this.computeBody(); // 身体由轨迹派生，消除后自然收缩
+    // 保底触发：整段消除后，随机补满 REFILL_ON_FLOOR 块「已解锁颜色」砖（保留残余的非消除节），让游戏继续
+    if (floorHit) {
+      var pool = (this.colorKeys && this.colorKeys.length) ? this.colorKeys : cfg.COLOR_KEYS;
+      var target = cfg.REFILL_ON_FLOOR;
+      while (this.colors.length < target) {
+        var rc = pool[Math.floor(Math.random() * pool.length)];
+        // 避免补出的块直接与前 3 块凑成 4 连同色（否则下一帧立即再消除，视觉反复清空）
+        var nn = this.colors.length;
+        if (nn >= 3 && this.colors[nn - 1] === rc && this.colors[nn - 2] === rc && this.colors[nn - 3] === rc) {
+          var alt = pool[(pool.indexOf(rc) + 1) % pool.length];
+          if (alt !== rc) rc = alt;
+        }
+        this.colors.push(rc);
+      }
+      this.computeBody();
+    }
     return removed;
   };
 
