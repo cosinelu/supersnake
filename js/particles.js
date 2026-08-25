@@ -95,6 +95,20 @@
     });
   };
 
+  /**
+   * 牵引线：从身体接触点 (x1,y1) 拉到蛇头 (x2,y2)，表达「砖块被吃到头部」的咬合力道。
+   * 仅短暂存在（0.32s），由 renderer 画成一条带箭头的粗线。
+   */
+  Particles.prototype.streak = function (x1, y1, x2, y2, colorHex) {
+    this.list.push({
+      type: 'streak',
+      x1: x1, y1: y1, x2: x2, y2: y2,
+      color: colorHex,
+      life: 0.32,
+      maxLife: 0.32
+    });
+  };
+
   Particles.prototype.update = function (dtMs) {
     var dt = dtMs / 1000;
     var next = [];

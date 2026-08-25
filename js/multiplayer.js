@@ -41,6 +41,7 @@
     this.elimScore = 0;    // 消除分（连锁倍率，规则同单人）
     this.elimTotal = 0;    // 累计消除方块：本局通过消除移除的总节数（含连锁、含被咬触发）
     this.bittenUntil = 0;  // 被咬闪白/抖动截止时刻（mp.timeMs，0 = 无反馈）
+    this.slowUntil = 0;    // 减速道具到期时刻（mp.timeMs，0 = 未生效）
     this.maxLen = snake.length(); // 历史最长节数（结算最佳成绩用）
     this.base = cfg.SNAKE_SPEED;  // 基础速度档位（AI 在 spawnBot 随机覆盖）
     this.greed = 1;        // 性格：贪食权重（AI 决策用）
@@ -225,6 +226,7 @@
     e.alive = false;
     e.diedAt = this.timeMs;
     this.dropCorpse(e);
+    this.dropDeathItems(e); // 必然掉 1 个随机道具 + 每 10 节额外掉 1 个
     this.particles.flash(e.snake.x, e.snake.y, '#FFD94A', 1.4, 3);
     if (!e.isPlayer) {
       delete this.usedNames[e.name];
@@ -340,7 +342,19 @@
    *  同时累计「累计消除方块」elimTotal（含连锁与被咬触发的消除） */
   Multiplayer.prototype.resolveElim = function (e) {
     var removed = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
-    if (!removed.length) return;
+    this.scoreChain(e, removed, 1, 0);
+  };
+
+  /**
+   * 统一计分 + 特效（供 resolveElim 与 applyItem 共用）。
+   * @param {Entry} e 被消除的蛇档案
+   * @param {Array} removed 被移除节 [{color,x,y,chain}]
+   * @param {number} fxBoost 特效放大（炸弹更强）
+   * @param {number} perSegBonus 每节额外得分（炸弹/消色/随机消除等道具）
+   */
+  Multiplayer.prototype.scoreChain = function (e, removed, fxBoost, perSegBonus) {
+    if (!removed || !removed.length) return;
+    if (CS.audio) CS.audio.playElim();
     e.elimTotal += removed.length;
     // 连击（仅玩家计入，AI 的 elimScore 仅供调试）：窗口内连续消除 → combo 递增 → 分数成倍
     var combo = 1;
@@ -357,8 +371,8 @@
     var chainLv = Object.keys(waves).map(Number).sort(function (a, b) { return a - b; });
     for (var w = 0; w < chainLv.length; w++) {
       var chain = chainLv[w], segs = waves[chain];
-      var fxScale = 1 + (chain - 1) * cfg.CHAIN_FX_STEP;
-      e.elimScore += segs.length * cfg.ELIM_SCORE * chain * combo;
+      var fxScale = (1 + (chain - 1) * cfg.CHAIN_FX_STEP) * (fxBoost || 1);
+      e.elimScore += segs.length * cfg.ELIM_SCORE * chain * combo + (perSegBonus || 0);
       var sx = 0, sy = 0;
       for (i = 0; i < segs.length; i++) {
         this.particles.burst(segs[i].x, segs[i].y, cfg.COLORS[segs[i].color],
@@ -373,6 +387,79 @@
       if (e.isPlayer && combo >= 2) {
         this.particles.chainText(ccx, ccy - 46, combo + '连击 ×' + combo, 18 + combo);
       }
+    }
+  };
+
+  /**
+   * 拾取道具的统一处理（玩家与 AI 共用）：按 kind 触发对应效果 + 计分 + 特效。
+   * 特殊道具（wild/bomb/slow/clear/clear3/rand1-3）都会真正生效；
+   * 仅当 e 是玩家时弹出效果飘字（setItemToast），避免 AI 拾取刷屏。
+   * @param {Entry} e 拾取者
+   * @param {object} b 色块 {kind,color,x,y,rarity}
+   */
+  Multiplayer.prototype.applyItem = function (e, b) {
+    var px = b.x, py = b.y;
+    var isPlayer = e.isPlayer;
+    if (b.kind && b.kind !== 'color' && isPlayer) this.game.setItemToast(b.kind, b.color);
+    if (b.kind === 'wild') {
+      e.snake.growWild();
+      if (CS.audio) CS.audio.playSpecial();
+      this.particles.burst(px, py, '#FFD94A', 7);
+      this.resolveElim(e);
+    } else if (b.kind === 'bomb') {
+      if (CS.audio) CS.audio.playSpecial();
+      this.particles.burst(px, py, '#E8552F', 12, 1.5);
+      var rem = e.snake.eliminate(2, 2);
+      this.scoreChain(e, rem, 1.4, cfg.BOMB_SCORE);
+    } else if (b.kind === 'slow') {
+      if (CS.audio) CS.audio.playSpecial();
+      e.slowUntil = this.timeMs + cfg.SLOW_MS;
+      this.particles.burst(px, py, '#2EC4B6', 9);
+      this.resolveElim(e);
+    } else if (b.kind === 'clear') {
+      if (CS.audio) CS.audio.playSpecial();
+      var rem = e.snake.removeByColor(b.color);
+      this.scoreChain(e, rem, 1.3, cfg.CLEAR_SCORE);
+      var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.scoreChain(e, rem2, 1, 0);
+      this.particles.burst(px, py, cfg.COLORS[b.color], 12, 1.5);
+    } else if (b.kind === 'clear3') {
+      if (CS.audio) CS.audio.playSpecial();
+      var rem = e.snake.removeRearByColor(b.color, 3);
+      this.scoreChain(e, rem, 1.2, cfg.CLEAR3_SCORE);
+      var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.scoreChain(e, rem2, 1, 0);
+      this.particles.burst(px, py, cfg.COLORS[b.color], 9, 1.3);
+    } else if (b.kind === 'rand1' || b.kind === 'rand2' || b.kind === 'rand3') {
+      if (CS.audio) CS.audio.playSpecial();
+      var rn = b.kind === 'rand1' ? 1 : (b.kind === 'rand2' ? 2 : 3);
+      var rem = e.snake.removeRandom(rn);
+      this.scoreChain(e, rem, 1.2, cfg.RAND_SCORE);
+      var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.scoreChain(e, rem2, 1, 0);
+      this.particles.burst(px, py, '#FFD94A', 9, 1.3);
+    } else {
+      if (CS.audio) CS.audio.playEat();
+      e.snake.grow(b.color);
+      this.particles.burst(px, py, cfg.COLORS[b.color], 4);
+      this.resolveElim(e);
+    }
+  };
+
+  /**
+   * 阵亡掉落道具：除身体散落色块（dropCorpse）外，必然额外掉落一个随机道具，
+   * 且玩家/任意蛇每有 10 个颜色节（不含尾巴节）再额外掉一个随机道具（长度越长奖励越多）。
+   * @param {Entry} e 被淘汰的蛇
+   */
+  Multiplayer.prototype.dropDeathItems = function (e) {
+    var s = e.snake;
+    var colorLen = s.colors.length; // 颜色节数（尾巴节不在 colors[] 内，天然排除）
+    var count = 1 + Math.floor(colorLen / 10);
+    for (var i = 0; i < count; i++) {
+      var kind = this.spawner.randomSpecialKind();
+      var p = s.segPos[Math.floor(Math.random() * s.segPos.length)] || { x: s.x, y: s.y };
+      var jx = (Math.random() * 2 - 1) * 26, jy = (Math.random() * 2 - 1) * 26;
+      this.spawner.addDroppedItem(p.x + jx, p.y + jy, kind);
     }
   };
 
@@ -427,6 +514,9 @@
     var sec = this.timeMs / 1000;
     var i, e;
 
+    // 随时间提升特殊道具刷新概率（越后期道具越密集）
+    this.spawner.specialChance = cfg.specialChanceForElapsed(this.game.elapsed);
+
     // AI 决策（与玩家同规则：只设目标角，转向速率由 Snake.update 钳制）
     for (i = 0; i < this.bots.length; i++) {
       e = this.bots[i];
@@ -434,12 +524,13 @@
       e.snake.setTargetAngle(CS.AI.decide(e.snake, env, e));
     }
 
-    // 动态速度（长度/时间加成，封顶 SPEED_MAX）+ 推进
+    // 动态速度（长度/时间加成，封顶 SPEED_MAX；减速道具期间 ×SLOW_FACTOR）+ 推进
     for (i = 0; i < entries.length; i++) {
       e = entries[i];
       if (!e.alive) continue;
-      e.snake.speed = Math.min(cfg.SPEED_MAX,
-        e.base + e.snake.length() * cfg.SPEED_LEN_COEF + sec * cfg.ENDLESS_SPEEDUP_PER_SEC);
+      var sp = e.base + e.snake.length() * cfg.SPEED_LEN_COEF + sec * cfg.ENDLESS_SPEEDUP_PER_SEC;
+      if (e.slowUntil && this.timeMs < e.slowUntil) sp *= cfg.SLOW_FACTOR;
+      e.snake.speed = Math.min(cfg.SPEED_MAX, sp);
       e.snake.update(dt);
       if (e.snake.length() > e.maxLen) e.maxLen = e.snake.length();
     }
@@ -447,16 +538,24 @@
     // 碰撞淘汰（墙 / 头头 / 头身）
     this.collide();
 
-    // 吃色块 + 消除（玩家优先，其后 AI；共用同一套 grow/eliminate 逻辑）
+    // 吃色块 + 消除（玩家优先，其后 AI；特殊道具走 applyItem 真正生效 + 玩家飘字）
     for (i = 0; i < entries.length; i++) {
       e = entries[i];
       if (!e.alive) continue;
       var got = this.spawner.collectAt(e.snake);
-      for (var g = 0; g < got.length; g++) {
-        e.snake.grow(got[g].color);
-        this.particles.burst(got[g].x, got[g].y, cfg.COLORS[got[g].color], 4);
-      }
-      this.resolveElim(e);
+      for (var g = 0; g < got.length; g++) this.applyItem(e, got[g]);
+    }
+
+    // 流星砖块：直线飞行 + 命中玩家蛇身注入中段（与单人同规则；玩家专属，AI 不受影响）
+    var mev = this.spawner.updateMeteors(dt, this.game.snake);
+    for (var mi = 0; mi < mev.length; mi++) {
+      var ev = mev[mi];
+      this.game.snake.insertAt(ev.idx, ev.color);
+      this.particles.burst(ev.x, ev.y, cfg.COLORS[ev.color], 7, 1.3);
+      if (CS.audio) CS.audio.playSpecial();
+      this.playerEntry.elimScore += cfg.METEOR_SCORE; // 记到玩家 Entry（多人对局分以 Entry 为准）
+      this.game.setItemToast('meteor', ev.color); // 流星注入飘字（仅玩家可见）
+      this.resolveElim(this.playerEntry);
     }
 
     // AI 补充 + 稀疏刷新

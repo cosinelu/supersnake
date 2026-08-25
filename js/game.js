@@ -241,8 +241,14 @@
       var pulledM = this.snake.trySelfPull();
       if (pulledM) {
         this.snake.selfPullCd = cfg.SELF_PULL_CD;
-        this.particles.burst(pulledM.x, pulledM.y, cfg.COLORS[pulledM.color] || '#FFD94A', 6, 1.2);
-        this.particles.ring(this.snake.x, this.snake.y, '#FFD94A', 1.1);
+        var scolM = cfg.COLORS[pulledM.color] || '#FFD94A';
+        // 明显动效：身体接触点咬合环 + 牵引线拉到头部 + 头部迸裂 + 「自吃 +1」飘字
+        this.particles.ring(pulledM.x, pulledM.y, scolM, 1.4);
+        this.particles.burst(pulledM.x, pulledM.y, scolM, 8, 1.4);
+        this.particles.streak(pulledM.x, pulledM.y, this.snake.x, this.snake.y, scolM);
+        this.particles.burst(this.snake.x, this.snake.y, '#FFD94A', 6, 1.1);
+        this.particles.chainText(this.snake.x, this.snake.y - 26, '自吃 +1', 16);
+        if (CS.audio) CS.audio.playEat();
         this.mp.resolveElim(this.mp.playerEntry);
       }
     }
@@ -512,6 +518,7 @@
       this.snake.insertAt(ev.idx, ev.color);
       this.particles.burst(ev.x, ev.y, cfg.COLORS[ev.color], 7, 1.3);
       this.elimScore += cfg.METEOR_SCORE;
+      this.setItemToast('meteor', ev.color); // 流星注入飘字
       var remM = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
       this.applyElim(remM, 1, 0);
     }
@@ -525,13 +532,20 @@
       var pulled = this.snake.trySelfPull();
       if (pulled) {
         this.snake.selfPullCd = cfg.SELF_PULL_CD;
-        this.particles.burst(pulled.x, pulled.y, cfg.COLORS[pulled.color] || '#FFD94A', 6, 1.2);
-        this.particles.ring(this.snake.x, this.snake.y, '#FFD94A', 1.1);
+        var scol = cfg.COLORS[pulled.color] || '#FFD94A';
+        // 明显动效：身体接触点咬合环 + 牵引线拉到头部 + 头部迸裂 + 「自吃 +1」飘字，一眼看出触发了"吃"
+        this.particles.ring(pulled.x, pulled.y, scol, 1.4);
+        this.particles.burst(pulled.x, pulled.y, scol, 8, 1.4);
+        this.particles.streak(pulled.x, pulled.y, this.snake.x, this.snake.y, scol);
+        this.particles.burst(this.snake.x, this.snake.y, '#FFD94A', 6, 1.1);
+        this.particles.chainText(this.snake.x, this.snake.y - 26, '自吃 +1', 16);
+        if (CS.audio) CS.audio.playEat();
         var remSP = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
         this.applyElim(remSP, 1.1, 0);
       }
     }
 
+    this.spawner.specialChance = cfg.specialChanceForElapsed(this.elapsed); // 越后期特殊道具越多
     this.spawner.update(dt);
 
     if (this.state === 'play' && this.mode === 'level' && this.score >= this.levelCfg.targetScore) {
@@ -681,6 +695,7 @@
     else if (kind === 'rand1') txt = '随机消除 1 节！';
     else if (kind === 'rand2') txt = '随机消除 2 节！';
     else if (kind === 'rand3') txt = '随机消除 3 节！';
+    else if (kind === 'meteor') txt = '流星注入！对应颜色已注入身体';
     else return;
     this.itemToast = { text: txt, until: this.timeMs + cfg.ITEM_TOAST_MS };
   };

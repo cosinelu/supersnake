@@ -90,7 +90,11 @@
     SPAWN_TRIES: 50,          // 拒绝采样最大尝试次数
 
     // ---------- 特殊道具（消除游戏常见：万能色 / 炸弹 / 减速 / 消色 / 随机 / 流星）----------
-    ITEM_SPECIAL_CHANCE: 0.18,  // 每次生成色块时改为特殊道具的概率（降低，道具不那么频繁）
+    ITEM_SPECIAL_CHANCE: 0.18,  // 每次生成色块时改为特殊道具的概率（仅作为 spawner.specialChance 的初始值）
+    // 道具概率随时间爬升：越到后期世界上的道具越多（单人多人都生效）
+    ITEM_SPECIAL_CHANCE_MIN: 0.12,  // 开局特殊道具概率（低）
+    ITEM_SPECIAL_CHANCE_MAX: 0.42,  // 后期特殊道具概率（高）：后期道具明显更密集
+    ITEM_RAMP_SEC: 180,             // 多少秒线性爬到 MAX（约 3 分钟到顶）
     ITEM_TOAST_MS: 2800,       // 吃到特殊道具时效果提示文字停留时长（ms，加慢以便看清）
     SLOW_MS: 4000,              // 减速道具生效时长（ms）
     SLOW_FACTOR: 0.6,           // 减速道具期间速度倍率（缓解加速压力，临时喘息）
@@ -173,18 +177,28 @@
       '墨墨', '皮皮', '大白', '颜料罐', '小画伯', '条条', '点点', '麻花'
     ],
 
-    // ---------- 道具图鉴（主菜单「图鉴」页面展示）----------
+    // ---------- 道具稀有度（按强度分 3 档，强→弱：蓝 / 紫 / 橙）----------
+    ITEM_RARITY: {            // 每个道具类型的稀有度；普通色块(kind='color')不在其中 → 无边框（基础食物）
+      wild: 'blue',  bomb: 'blue',  clear: 'blue',       // 强：万能色(桥接凑连)、炸弹(清≥2连段)、消色(清全部同色)
+      meteor: 'purple', clear3: 'purple', rand3: 'purple', // 中：流星注入、后三消色、随机消3
+      slow: 'orange', rand1: 'orange', rand2: 'orange'      // 弱：减速(防御)、随机消1/2
+    },
+    RARITY_COLORS: { blue: '#4A7FD4', purple: '#9B5DE5', orange: '#F5A623' }, // 边框色：强→弱 蓝/紫/橙
+    RARITY_NAME:   { blue: '稀有·强', purple: '稀有·中', orange: '稀有·弱' },
+    RARITY_ORDER:  ['blue', 'purple', 'orange'],
+
+    // ---------- 道具图鉴（主菜单「图鉴」页面展示，按稀有度由强到弱排序）----------
     ITEM_GUIDE: [
-      { kind: 'color',   name: '普通色块',        desc: '吃到后蛇身头部插入一节该颜色。凑齐 4 个相邻同色节即可触发消除得分。',       colorKey: 'red' },
-      { kind: 'wild',    name: '万能色',           desc: '通配任意颜色，可桥接不同颜色的同色段来触发消除。',                       colorKey: null },
-      { kind: 'bomb',    name: '炸弹',             desc: '瞬间清除蛇身上所有 ≥2 节的连续同色段。',                                 colorKey: null },
-      { kind: 'slow',    name: '减速',             desc: '4 秒内移动速度降至 60%。',                                               colorKey: null },
-      { kind: 'clear',   name: '消色',             desc: '一次性消除蛇身上全部指定颜色的节（不管在哪、连不连续都清）。',           colorKey: 'red' },
-      { kind: 'clear3',  name: '后三消色',         desc: '只消除指定颜色最靠尾巴的 3 节。',                                       colorKey: 'blue' },
-      { kind: 'rand1',   name: '随机消 1',         desc: '随机移除蛇身上 1 节。',                                                 colorKey: null },
-      { kind: 'rand2',   name: '随机消 2',         desc: '随机移除蛇身上 2 节。',                                                 colorKey: null },
-      { kind: 'rand3',   name: '随机消 3',         desc: '随机移除蛇身上 3 节。',                                                 colorKey: null },
-      { kind: 'meteor',  name: '流星砖块',         desc: '从地图边缘直线飞入，命中蛇身即注入对应颜色到中段。',                     colorKey: 'green' }
+      { kind: 'bomb',    name: '炸弹',     rarity: 'blue',   desc: '瞬间清除蛇身上所有 ≥2 节的连续同色段。',                       colorKey: null },
+      { kind: 'clear',   name: '消色',     rarity: 'blue',   desc: '一次性消除蛇身上全部指定颜色的节（不管在哪、连不连续都清）。', colorKey: 'red' },
+      { kind: 'wild',    name: '万能色',   rarity: 'blue',   desc: '通配任意颜色，可桥接不同颜色的同色段来触发消除。',             colorKey: null },
+      { kind: 'meteor',  name: '流星砖块', rarity: 'purple', desc: '从地图边缘直线飞入，命中蛇身即注入对应颜色到中段。',           colorKey: 'green' },
+      { kind: 'clear3',  name: '后三消色', rarity: 'purple', desc: '只消除指定颜色最靠尾巴的 3 节。',                             colorKey: 'blue' },
+      { kind: 'rand3',   name: '随机消 3', rarity: 'purple', desc: '随机移除蛇身上 3 节。',                                       colorKey: null },
+      { kind: 'slow',    name: '减速',     rarity: 'orange', desc: '4 秒内移动速度降至 60%。',                                   colorKey: null },
+      { kind: 'rand2',   name: '随机消 2', rarity: 'orange', desc: '随机移除蛇身上 2 节。',                                       colorKey: null },
+      { kind: 'rand1',   name: '随机消 1', rarity: 'orange', desc: '随机移除蛇身上 1 节。',                                       colorKey: null },
+      { kind: 'color',   name: '普通色块', rarity: null,     desc: '吃到后蛇身头部插入一节该颜色。凑齐 4 个相邻同色节即可触发消除得分。', colorKey: 'red' }
     ],
 
     // ---------- 存储 key ----------
@@ -220,6 +234,18 @@
    */
   cfg.unlockedColorKeys = function (count) {
     return cfg.COLOR_KEYS.slice(0, Math.min(cfg.MAX_COLORS, Math.max(0, count | 0)));
+  };
+
+  /**
+   * 随时间爬升的特殊道具概率：开局 ITEM_SPECIAL_CHANCE_MIN，约 ITEM_RAMP_SEC 秒后线性到 MAX。
+   * 越到后期，世界上刷新出的特殊道具越多（单人多人都走这里，spawner.specialChance 每帧由 game/mp 更新）。
+   * @param {number} ms 已存活毫秒
+   * @returns {number} 当前特殊道具概率
+   */
+  cfg.specialChanceForElapsed = function (ms) {
+    var sec = Math.max(0, ms / 1000);
+    var k = Math.min(1, sec / cfg.ITEM_RAMP_SEC);
+    return cfg.ITEM_SPECIAL_CHANCE_MIN + (cfg.ITEM_SPECIAL_CHANCE_MAX - cfg.ITEM_SPECIAL_CHANCE_MIN) * k;
   };
 
   CS.config = cfg;

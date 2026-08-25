@@ -311,6 +311,15 @@
       drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
     }
 
+    // 稀有度边框：在方块外侧加一道明显加粗的彩色描边（强→弱：蓝/紫/橙），一眼可辨道具强度
+    var rar = b.rarity || (b.kind && cfg.ITEM_RARITY ? cfg.ITEM_RARITY[b.kind] : null);
+    if (rar && cfg.RARITY_COLORS && cfg.RARITY_COLORS[rar]) {
+      wobblyRoundRect(ctx, -size / 2 - 3, -size / 2 - 3, size + 6, size + 6, size * 0.34, seedX, seedY, 1.1);
+      ctx.strokeStyle = cfg.RARITY_COLORS[rar];
+      ctx.lineWidth = Math.max(3, size * 0.17);
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 
@@ -775,6 +784,28 @@
         ctx.moveTo(p.x - s, p.y - s); ctx.lineTo(p.x + s, p.y + s);
         ctx.moveTo(p.x + s, p.y - s); ctx.lineTo(p.x - s, p.y + s);
         ctx.stroke();
+        ctx.restore();
+      } else if (p.type === 'streak') {
+        // 自吃牵引线：从身体接触点拉向蛇头，表达「砖块被吸到头部」
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, t * 1.8);
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = Math.max(2.5, 4 * t + 1);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p.x1, p.y1);
+        ctx.lineTo(p.x2, p.y2);
+        ctx.stroke();
+        // 头部端的箭头小三角（指示被拉过去的方向）
+        var ang = Math.atan2(p.y2 - p.y1, p.x2 - p.x1);
+        var ah = 7;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.moveTo(p.x2, p.y2);
+        ctx.lineTo(p.x2 - Math.cos(ang - 0.4) * ah, p.y2 - Math.sin(ang - 0.4) * ah);
+        ctx.lineTo(p.x2 - Math.cos(ang + 0.4) * ah, p.y2 - Math.sin(ang + 0.4) * ah);
+        ctx.closePath();
+        ctx.fill();
         ctx.restore();
       }
     }
@@ -1477,7 +1508,12 @@
    */
   Renderer.prototype.drawGuide = function (game) {
     var ctx = this.ctx, W = game.screenW, H = game.screenH;
-    var items = cfg.ITEM_GUIDE;
+    // 按稀有度由强到弱排序（蓝→紫→橙，普通色块放最后）；图鉴展示顺序即稀有度顺序
+    var items = cfg.ITEM_GUIDE.slice().sort(function (a, b) {
+      var oa = a.rarity ? cfg.RARITY_ORDER.indexOf(a.rarity) : 99;
+      var ob = b.rarity ? cfg.RARITY_ORDER.indexOf(b.rarity) : 99;
+      return oa - ob;
+    });
     if (!items || !items.length) return;
 
     var PER_PAGE = 5;                    // 每页显示数量
@@ -1505,10 +1541,37 @@
     ctx.fillText('道具图鉴', W / 2, 44);
     ctx.restore();
 
+    // 稀有度图例：蓝(强) ▸ 紫(中) ▸ 橙(弱)，与边框配色一致
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '12.5px sans-serif';
+    var legY = 66;
+    var chipW = 30, chipH = 15, gapX = 8, labelGap = 4;
+    var labels = [['blue', '强'], ['purple', '中'], ['orange', '弱']];
+    var totalW = labels.length * (chipW + labelGap + ctx.measureText('强').width + gapX) - gapX;
+    var lx = W / 2 - totalW / 2;
+    for (var li = 0; li < labels.length; li++) {
+      var rc = cfg.RARITY_COLORS[labels[li][0]];
+      ctx.fillStyle = rc;
+      ctx.fillRect(lx, legY - chipH / 2, chipW, chipH);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.2;
+      ctx.strokeRect(lx, legY - chipH / 2, chipW, chipH);
+      ctx.fillStyle = '#FFFDF5';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText(labels[li][1], lx + chipW / 2, legY);
+      ctx.fillStyle = '#555';
+      ctx.font = '12.5px sans-serif';
+      var tx = lx + chipW + labelGap;
+      ctx.fillText(li < labels.length - 1 ? '▸' : '', tx + 4, legY);
+      lx = tx + ctx.measureText('▸').width + gapX;
+    }
+    ctx.restore();
+
     // 卡片区域参数
     var cardW = Math.min(540, W - 48);
     var cardX = (W - cardW) / 2;
-    var startY = 78;
+    var startY = 90;
     var cardH = 80;       // 每张卡片高度（加高以容纳更大的图标）
     var gap = 8;          // 卡片间距
     var iconSize = 48;    // 左侧图标尺寸（加大以便看清细节）
@@ -1546,6 +1609,21 @@
       ctx.textBaseline = 'top';
       ctx.fillStyle = cfg.INK;
       ctx.fillText(it.name, cardX + iconSize + 36, cy + 12);
+
+      // 稀有度徽标（右上角彩色胶囊）
+      if (it.rarity && cfg.RARITY_COLORS[it.rarity]) {
+        var bw = 70, bh = 18, bx = cardX + cardW - bw - 10, by = cy + 10;
+        ctx.fillStyle = cfg.RARITY_COLORS[it.rarity];
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.4;
+        ctx.strokeRect(bx, by, bw, bh);
+        ctx.fillStyle = '#FFFDF5';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(cfg.RARITY_NAME[it.rarity], bx + bw / 2, by + bh / 2 + 0.5);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.font = 'bold 15px sans-serif';
+      }
 
       // 描述文字（自动换行）
       ctx.font = '12.5px sans-serif';

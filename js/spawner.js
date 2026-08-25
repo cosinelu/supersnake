@@ -13,15 +13,6 @@
   var cfg = CS.config;
   var u = CS.utils;
 
-  /** 按权重抽取一个特殊道具 kind（wild/bomb/slow/clear/clear3/rand1-3） */
-  function pickSpecialKind() {
-    var w = cfg.ITEM_WEIGHTS, total = 0, k;
-    for (k in w) total += w[k];
-    var r = Math.random() * total;
-    for (k in w) { r -= w[k]; if (r <= 0) return k; }
-    return 'wild';
-  }
-
   function Spawner(walls, snake) {
     this.walls = walls;
     this.snake = snake;
@@ -31,9 +22,19 @@
     this.meteorTimer = 0;
     this.others = []; // 其他活蛇数组（多人模式由 multiplayer 挂活引用，刷新时同样避让）
     this.unlockedKeys = cfg.COLOR_KEYS.slice(); // 默认全部；game 会按本局解锁数覆盖
+    this.specialChance = cfg.ITEM_SPECIAL_CHANCE; // 每帧由 game/mp 按存活时间更新（越后期越高）
     var area = walls.W * walls.H;
     this.target = u.clamp(Math.round(area / cfg.BLOCK_AREA_DIV), cfg.BLOCKS_MIN, cfg.BLOCKS_MAX);
   }
+
+  /** 按权重抽取一个特殊道具 kind（wild/bomb/slow/clear/clear3/rand1-3）；供刷新与阵亡掉落共用 */
+  Spawner.prototype.randomSpecialKind = function () {
+    var w = cfg.ITEM_WEIGHTS, total = 0, k;
+    for (k in w) total += w[k];
+    var r = Math.random() * total;
+    for (k in w) { r -= w[k]; if (r <= 0) return k; }
+    return 'wild';
+  };
 
   /** 每帧调用；到达刷新间隔时补足色块 */
   Spawner.prototype.update = function (dt) {
@@ -75,9 +76,9 @@
         if (u.dist(x, y, this.blocks[i].x, this.blocks[i].y) < cfg.BLOCK_MIN_DIST) { ok = false; break; }
       }
       if (!ok) continue;                                              // 与已有色块 ≥140px
-      // 决定类型：默认普通色块；按概率改为特殊道具（按权重抽取）
+      // 决定类型：默认普通色块；按当前 specialChance 改为特殊道具（按权重抽取，越后期概率越高）
       var kind = 'color';
-      if (Math.random() < cfg.ITEM_SPECIAL_CHANCE) kind = pickSpecialKind();
+      if (Math.random() < this.specialChance) kind = this.randomSpecialKind();
       // clear / clear3 携带目标颜色（消除该色）；其余特殊道具 color=null
       var color = null;
       if (kind === 'color' || kind === 'clear' || kind === 'clear3') {
@@ -87,6 +88,7 @@
         x: x, y: y,
         kind: kind,
         color: color,
+        rarity: cfg.ITEM_RARITY[kind] || null, // 稀有度边框用（普通色块为 null）
         phase: Math.random() * Math.PI * 2 // 脉动相位
       });
       return true;
@@ -108,6 +110,26 @@
     }
     this.blocks = rest;
     return got;
+  };
+
+  /**
+   * 阵亡掉落：在 (x,y) 处直接放入一个随机特殊道具（带稀有度边框）。
+   * clear / clear3 随机一个已解锁颜色作为目标色。
+   * @param {number} x,y 世界坐标
+   * @param {string} kind 道具类型（来自 randomSpecialKind）
+   */
+  Spawner.prototype.addDroppedItem = function (x, y, kind) {
+    var color = null;
+    if (kind === 'clear' || kind === 'clear3') {
+      color = this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)];
+    }
+    this.blocks.push({
+      x: x, y: y,
+      kind: kind,
+      color: color,
+      rarity: cfg.ITEM_RARITY[kind] || null,
+      phase: Math.random() * Math.PI * 2
+    });
   };
 
   /**
