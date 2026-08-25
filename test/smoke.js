@@ -33,6 +33,24 @@ var endlessOk = endlessCases.every(function (c) { return cfg.unlockedCountForEnd
 ok(endlessOk, '无尽 0s=4 / 45s=5 / 90s=6 / 135s=7 / 180s+=8');
 ok(cfg.unlockedColorKeys(4).join(',') === 'red,blue,green,orange', 'unlockedColorKeys(4) 取前 4 色');
 
+// ---------------- 1b. 颜色解锁顺序规划（图鉴页签） ----------------
+section('颜色解锁顺序规划');
+var plan = cfg.colorUnlockPlan();
+ok(plan.length === cfg.COLOR_KEYS.length, 'plan 长度 = 颜色总数 ' + cfg.COLOR_KEYS.length);
+ok(plan.map(function (p) { return p.key; }).join(',') === cfg.COLOR_KEYS.join(','), 'plan 顺序 == COLOR_KEYS（=解锁先后顺序）');
+ok(plan[0].key === 'red' && plan[0].name === '红' && plan[0].order === 1, '第 1 色：红/序号1');
+ok(plan[0].initial === true && plan[0].levelText === '开局解锁' && plan[0].endlessText === '开局解锁', '前 4 色开局解锁');
+ok(plan[3].key === 'orange' && plan[3].initial === true, '第 4 色 橙 仍开局解锁');
+ok(plan[4].key === 'purple' && plan[4].order === 5 && plan[4].initial === false, '第 5 色 紫 非开局');
+ok(plan[4].level === 3 && plan[4].levelText === '第 3 关解锁', '紫：闯关第 3 关解锁');
+ok(plan[4].sec === 45 && plan[4].endlessText === '存活 45 秒解锁', '紫：无尽存活 45 秒解锁');
+ok(plan[5].key === 'yellow' && plan[5].level === 5 && plan[5].sec === 90, '黄：第 5 关 / 存活 90 秒');
+ok(plan[6].key === 'teal' && plan[6].level === 7 && plan[6].sec === 135, '青：第 7 关 / 存活 135 秒');
+ok(plan[7].key === 'pink' && plan[7].order === 8 && plan[7].level === 9 && plan[7].sec === 180, '粉：第 8 色 / 第 9 关 / 存活 180 秒');
+var tr = cfg.guideTabRects({ screenW: 400 });
+ok(tr.items && tr.colors && tr.items.w > 0 && tr.colors.h > 0, 'guideTabRects 返回 道具/颜色 两个有效热区');
+ok(typeof tr.items.x === 'number' && tr.colors.x > tr.items.x, 'guideTabRects 两页签横向排列');
+
 // ---------------- 2. 关卡曲线（世界大地图） ----------------
 section('关卡曲线');
 var l1 = lv.levelConfig(1), l10 = lv.levelConfig(10);

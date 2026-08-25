@@ -1687,6 +1687,11 @@
    */
   Renderer.prototype.drawGuide = function (game) {
     var ctx = this.ctx, W = game.screenW, H = game.screenH;
+    // 页签条（道具 / 颜色）
+    this.drawGuideTabs(game);
+    // 颜色解锁顺序页：独立渲染，结束即画返回按钮
+    if (game.guideTab === 'colors') { this.drawGuideColors(game); this.drawButtons(game); return; }
+
     // 按稀有度由强到弱排序（蓝→紫→橙，普通色块放最后）；图鉴展示顺序即稀有度顺序
     var items = cfg.ITEM_GUIDE.slice().sort(function (a, b) {
       var oa = a.rarity ? cfg.RARITY_ORDER.indexOf(a.rarity) : 99;
@@ -1713,7 +1718,7 @@
     ctx.textBaseline = 'middle';
     ctx.font = 'bold 28px sans-serif';
     ctx.fillStyle = cfg.INK;
-    ctx.fillText('道具图鉴', W / 2, 40);
+    ctx.fillText('道具图鉴', W / 2, 56);
     ctx.restore();
 
     // 稀有度图例：蓝(强) ▸ 紫(中) ▸ 橙(弱)，与边框配色一致（标题下方留足间距）
@@ -1721,7 +1726,7 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = '12.5px sans-serif';
-    var legY = 68;
+    var legY = 78;
     var chipW = 30, chipH = 15, gapX = 8, labelGap = 4;
     var labels = [['orange', '强'], ['purple', '中'], ['blue', '弱']];
     var totalW = labels.length * (chipW + labelGap + ctx.measureText('强').width + gapX) - gapX;
@@ -1746,7 +1751,7 @@
     // 卡片区域参数
     var cardW = Math.min(540, W - 48);
     var cardX = (W - cardW) / 2;
-    var startY = 94;
+    var startY = 100;
     var cardH = 80;       // 每张卡片高度（加高以容纳更大的图标）
     var gap = 8;          // 卡片间距
     var iconSize = 48;    // 左侧图标尺寸（加大以便看清细节）
@@ -1844,7 +1849,125 @@
       ctx.restore();
     }
 
-    // 返回按钮由 buildButtons 提供（state==='guide' 时有 back 按钮），drawButtons 会画
+    // 返回按钮由 buildButtons 提供（state==='guide' 时有 back 按钮）
+    this.drawButtons(game);
+  };
+
+  // ---------------- 图鉴页签条 ----------------
+
+  /**
+   * 图鉴顶部页签：道具 / 颜色。当前页签填充深色（cfg.INK）并反白文字，非当前页签为描边空心。
+   * 几何与 cfg.guideTabRects 完全一致（点击命中由 game.onTouchStart 处理）。
+   */
+  Renderer.prototype.drawGuideTabs = function (game) {
+    var ctx = this.ctx;
+    var r = cfg.guideTabRects(game);
+    var self = this;
+    [['items', '道具'], ['colors', '颜色']].forEach(function (pair) {
+      var key = pair[0], label = pair[1];
+      var rc = r[key];
+      var active = game.guideTab === key;
+      ctx.save();
+      wobblyRoundRect(ctx, rc.x, rc.y, rc.w, rc.h, 10, Math.round(rc.x), Math.round(rc.y), 1.4);
+      ctx.fillStyle = active ? cfg.INK : cfg.PANEL;
+      ctx.fill();
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = active ? 2.6 : 1.6;
+      ctx.stroke();
+      ctx.fillStyle = active ? '#FFFDF5' : cfg.INK;
+      ctx.font = 'bold 16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, rc.x + rc.w / 2, rc.y + rc.h / 2 + 1);
+      ctx.restore();
+    });
+  };
+
+  // ---------------- 图鉴·颜色解锁顺序页 ----------------
+
+  /**
+   * 图鉴「颜色解锁顺序」页：按 COLOR_KEYS 顺序（=解锁先后顺序）展示全部 8 色，
+   * 每色一块蜡笔色块 + 序号 + 中文名 + 闯关/无尽两种模式下的解锁条件。
+   * 数据全部来自纯函数 cfg.colorUnlockPlan()，与游戏内解锁逻辑严格一致。
+   */
+  Renderer.prototype.drawGuideColors = function (game) {
+    var ctx = this.ctx, W = game.screenW, H = game.screenH;
+    var plan = cfg.colorUnlockPlan();
+
+    var TOP = 56;  // 标题基线（页签之下）
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    ctx.fillText('颜色解锁顺序', W / 2, TOP);
+    ctx.font = '12.5px sans-serif';
+    ctx.fillStyle = '#888';
+    ctx.fillText('顺序 = 解锁先后 · 闯关按关卡 / 无尽按存活时间', W / 2, TOP + 22);
+    ctx.restore();
+
+    var top = TOP + 38;            // 网格起点
+    var bottomLimit = H - 64;      // 给底部「返回」按钮留白
+    var rows = 4, gap = 12;
+    var cellH = Math.floor((bottomLimit - top - (rows - 1) * gap) / rows);
+    if (cellH < 70) cellH = 70;
+    var cellW = Math.min(300, (W - 56 - gap) / 2);
+    var gridW = cellW * 2 + gap;
+    var gx0 = (W - gridW) / 2;
+
+    for (var i = 0; i < plan.length; i++) {
+      var p = plan[i];
+      var col = i % 2, row = Math.floor(i / 2);
+      var cx = gx0 + col * (cellW + gap);
+      var cy = top + row * (cellH + gap);
+
+      // 卡片底板（手绘圆角矩形）
+      ctx.save();
+      ctx.fillStyle = '#FFFDF5';
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 2.2;
+      wobblyRoundRect(ctx, cx, cy, cellW, cellH, 8, i * 7, i * 11, 1.4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+
+      // 顺序角标（左上小圆，深底白字）
+      var badgeR = 12;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx + badgeR + 6, cy + badgeR + 6, badgeR, 0, Math.PI * 2);
+      ctx.fillStyle = cfg.INK;
+      ctx.fill();
+      ctx.fillStyle = '#FFFDF5';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(p.order), cx + badgeR + 6, cy + badgeR + 6 + 0.5);
+      ctx.restore();
+
+      // 蜡笔色块（与游戏内同款绘制）
+      var bs = Math.min(46, cellH - 30);
+      var bx = cx + 18 + bs / 2;
+      var by = cy + cellH / 2;
+      ctx.save();
+      ctx.translate(bx, by);
+      drawCrayonBlock(ctx, -bs / 2, -bs / 2, bs, p.hex, 30 + i, 9, { rot: (i % 2 ? 0.12 : -0.12), wobble: 1.0 });
+      ctx.restore();
+
+      // 文本列：中文名 + 闯关解锁 + 无尽解锁
+      var tx = cx + 18 + bs + 14;
+      ctx.save();
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = cfg.INK;
+      ctx.font = 'bold 20px sans-serif';
+      ctx.fillText(p.name, tx, cy + cellH * 0.32);
+      ctx.font = '12.5px sans-serif';
+      ctx.fillStyle = p.initial ? '#C2185B' : '#555';
+      ctx.fillText('闯关：' + p.levelText, tx, cy + cellH * 0.60);
+      ctx.fillText('无尽：' + p.endlessText, tx, cy + cellH * 0.80);
+      ctx.restore();
+    }
   };
 
   // ---------------- 总入口 ----------------

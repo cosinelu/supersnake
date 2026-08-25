@@ -26,6 +26,8 @@
       pink:   '#F15BB5'   // 蜡笔粉
     },
     COLOR_KEYS: ['red', 'blue', 'green', 'orange', 'purple', 'yellow', 'teal', 'pink'],
+    // 颜色中文名（图鉴「颜色解锁顺序」页签展示用）
+    COLOR_NAMES: { red: '红', blue: '蓝', green: '绿', orange: '橙', purple: '紫', yellow: '黄', teal: '青', pink: '粉' },
 
     // ---------- 颜色解锁系统参数（调优只改这里）----------
     MAX_COLORS: 8,                    // 颜色池总数（默认与 COLOR_KEYS 长度一致）
@@ -235,6 +237,59 @@
    */
   cfg.unlockedColorKeys = function (count) {
     return cfg.COLOR_KEYS.slice(0, Math.min(cfg.MAX_COLORS, Math.max(0, count | 0)));
+  };
+
+  /**
+   * 颜色解锁顺序规划：按 COLOR_KEYS（=解锁先后顺序）返回每个颜色的解锁信息。
+   * 用于图鉴「颜色解锁顺序」页签展示。纯函数，可在 smoke 测试中校验。
+   * 公式与 unlockedCountForLevel / unlockedCountForEndless 完全一致：
+   *   闯关：第 n 关解锁数 = BASE + floor((n-1)/STEP)
+   *   无尽：存活 s 秒解锁数 = BASE + floor(s/INTERVAL)
+   * 反解「第 i 个颜色（i 从 0）出现所需已解锁总数 c=i+1」：
+   *   闯关 n = 1 + STEP*(c-BASE)；无尽 s = (c-BASE)*INTERVAL（c<=BASE 即开局解锁）。
+   * @returns {Array<{order:number,key:string,name:string,hex:string,initial:boolean,level:number,sec:number,levelText:string,endlessText:string}>}
+   */
+  cfg.colorUnlockPlan = function () {
+    var plan = [];
+    var lvlBase = cfg.LEVEL_UNLOCK_BASE, step = cfg.LEVEL_UNLOCK_STEP_LEVELS;
+    var enBase = cfg.ENDLESS_UNLOCK_BASE, interval = cfg.ENDLESS_UNLOCK_INTERVAL_SEC;
+    for (var i = 0; i < cfg.COLOR_KEYS.length; i++) {
+      var key = cfg.COLOR_KEYS[i];
+      var c = i + 1;                                   // 该颜色出现所需的已解锁颜色总数
+      var initial = i < cfg.INITIAL_UNLOCKED;          // 前 INITIAL_UNLOCKED 个为开局解锁
+      var lvl = initial ? 1 : 1 + step * (c - lvlBase); // 闯关解锁到该色所需关卡
+      var sec = initial ? 0 : (c - enBase) * interval;  // 无尽解锁到该色所需存活秒数
+      plan.push({
+        order: c,
+        key: key,
+        name: cfg.COLOR_NAMES[key],
+        hex: cfg.COLORS[key],
+        initial: initial,
+        level: lvl,
+        sec: sec,
+        levelText: initial ? '开局解锁' : ('第 ' + lvl + ' 关解锁'),
+        endlessText: initial ? '开局解锁' : ('存活 ' + sec + ' 秒解锁')
+      });
+    }
+    return plan;
+  };
+
+  /**
+   * 图鉴页签（道具 / 颜色）在屏幕上的点击热区与绘制区域（屏幕像素，左上原点）。
+   * 渲染（drawGuideTabs）与点击（onTouchStart）共用同一套几何，保证对齐。
+   * @param {object} game 含 screenW 的游戏对象
+   * @returns {{items:{x:number,y:number,w:number,h:number}, colors:{x:number,y:number,w:number,h:number}}}
+   */
+  cfg.guideTabRects = function (game) {
+    var W = game.screenW;
+    var tbW = Math.min(150, W * 0.34), tbH = 34, gap = 12;
+    var totalW = tbW * 2 + gap;
+    var x0 = W / 2 - totalW / 2;
+    var y = 8;
+    return {
+      items:  { x: x0,             y: y, w: tbW, h: tbH },
+      colors: { x: x0 + tbW + gap, y: y, w: tbW, h: tbH }
+    };
   };
 
   /**

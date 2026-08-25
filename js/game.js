@@ -64,6 +64,7 @@
     this.unlockBanner = null;   // 解锁提示横幅 {text, until, keys}
     this.itemToast = null;      // 特殊道具效果提示 {text, until}（屏幕空间，HUD 层）
     this.guidePage = 0;         // 图鉴当前页码（0-based）
+    this.guideTab = 'items';    // 图鉴页签：'items'=道具 / 'colors'=颜色解锁顺序
 
     this.uiButtons = [];
     this.buildButtons();
@@ -627,7 +628,7 @@
     if (id === 'level') this.setState('levels');
     else if (id === 'endless') this.startEndless();
     else if (id === 'multi') this.startMulti();
-    else if (id === 'guide') { this.guidePage = 0; this.setState('guide'); }
+    else if (id === 'guide') { this.guidePage = 0; this.guideTab = 'items'; this.setState('guide'); }
     else if (id === 'back') this.setState('menu');
     else if (id === 'menu') this.setState('menu');
     else if (id === 'retry') {
@@ -646,20 +647,32 @@
 
   Game.prototype.onTouchStart = function (x, y, id) {
     if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); return; }
-    // 图鉴页：点击左/右半屏翻页（按钮优先）
+    // 图鉴页：页签切换 / 翻页（按钮优先）
     if (this.state === 'guide') {
-      var hitBtn = false;
+      // 1) 按钮（返回）优先
       for (var bi = 0; bi < this.uiButtons.length; bi++) {
         var b = this.uiButtons[bi];
         if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { this.onButton(b.id); return; }
       }
-      // 非按钮区域 → 翻页
-      var totalPg = Math.ceil(cfg.ITEM_GUIDE.length / 5);
-      if (totalPg > 1) {
-        if (x < this.screenW / 2) { if (this.guidePage > 0) this.guidePage--; }
-        else { if (this.guidePage < totalPg - 1) this.guidePage++; }
+      // 2) 页签切换（道具 / 颜色）
+      var tr = cfg.guideTabRects(this);
+      var tk = null;
+      if (x >= tr.items.x && x <= tr.items.x + tr.items.w && y >= tr.items.y && y <= tr.items.y + tr.items.h) tk = 'items';
+      else if (x >= tr.colors.x && x <= tr.colors.x + tr.colors.w && y >= tr.colors.y && y <= tr.colors.y + tr.colors.h) tk = 'colors';
+      if (tk) {
+        if (this.guideTab !== tk) { this.guideTab = tk; this.guidePage = 0; }
         return;
       }
+      // 3) 道具页：点击左/右半屏翻页（颜色页无分页）
+      if (this.guideTab === 'items') {
+        var totalPg = Math.ceil(cfg.ITEM_GUIDE.length / 5);
+        if (totalPg > 1) {
+          if (x < this.screenW / 2) { if (this.guidePage > 0) this.guidePage--; }
+          else { if (this.guidePage < totalPg - 1) this.guidePage++; }
+          return;
+        }
+      }
+      return;
     }
     for (var i = 0; i < this.uiButtons.length; i++) {
       var b = this.uiButtons[i];
