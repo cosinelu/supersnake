@@ -1149,7 +1149,7 @@
     // ---- 标题「消食蛇」美术设计 ----
     // 设计意图：每个字用不同颜色（红=消除、绿=吃、蓝=蛇身），
     //   字间穿插小蜡笔色块（体现"蛇由色块组成"），
-    //   底部蜡笔波浪下划线 + 散落小碎块装饰（手绘感）
+    //   底部蜡笔波浪下划线 + 少量砖块沿线缓慢往返滑动（手绘感，平滑不跳动）
     ctx.save();
     var titleChars = ['消', '食', '蛇'];
     var titleColors = [cfg.COLORS.red, cfg.COLORS.green, cfg.COLORS.blue]; // 红(消) 绿(食) 蓝(蛇)
@@ -1180,21 +1180,6 @@
       ctx.strokeText(ch, chCx, ty);
       ctx.fillStyle = titleColors[ci];
       ctx.fillText(ch, chCx, ty);
-
-      // 每个字右下方散落 1~2 个小蜡笔碎块（表达"蛇身由色块组成"）
-      var debrisCount = (ci === 2) ? 2 : 1; // 「蛇」字多一个
-      for (var db = 0; db < debrisCount; db++) {
-        var dx = chCx + (Math.random() * 2 - 1) * (chW * 0.5) + 12 + db * 16;
-        var dy = ty + 22 + db * 10 + Math.random() * 8;
-        var dc = cfg.COLORS[cfg.COLOR_KEYS[(ci + db) % 4]];
-        var ds = 7 + Math.random() * 4;
-        ctx.save();
-        ctx.translate(dx, dy);
-        ctx.rotate((Math.random() - 0.5) * 0.6);
-        drawCrayonBlock(ctx, -ds / 2, -ds / 2, ds, dc, ci * 37 + db * 19, ci * 23 + db * 31,
-          { rot: (u.hash2(ci, db, 11) - 0.5) * 0.55, wobble: 1.0 });
-        ctx.restore();
-      }
 
       curX += chW + charGap;
     }
@@ -1227,6 +1212,25 @@
       ctx.rotate(db.rot);
       drawCrayonBlock(ctx, -db.size / 2, -db.size / 2, db.size, db.color,
         di * 77, di * 43, { rot: db.rot * 0.8, wobble: 1.0 });
+      ctx.restore();
+    }
+
+    // 少量砖块沿线缓慢来回滑动（平滑 sin 振荡，不随机跳动，避免像 bug）
+    var tSlide = (game.timeMs || 0) / 1000;
+    var slideBlocks = [
+      { bx: cx - totalW * 0.30, color: cfg.COLORS.red,    amp: 16, spd: 1.0, ph: 0.0, size: 10 },
+      { bx: cx + totalW * 0.04, color: cfg.COLORS.green,  amp: 14, spd: 0.8, ph: 1.8, size: 9  },
+      { bx: cx + totalW * 0.32, color: cfg.COLORS.orange, amp: 18, spd: 1.2, ph: 3.2, size: 11 }
+    ];
+    var slideY = ty + fontSize * 0.66; // 标题下方一条水平线
+    for (var si = 0; si < slideBlocks.length; si++) {
+      var s = slideBlocks[si];
+      var off = Math.sin(tSlide * s.spd + s.ph) * s.amp; // -amp..+amp 平滑往返
+      ctx.save();
+      ctx.translate(s.bx + off, slideY);
+      ctx.rotate(Math.sin(tSlide * s.spd + s.ph) * 0.2); // 随滑动轻微摇摆
+      drawCrayonBlock(ctx, -s.size / 2, -s.size / 2, s.size, s.color, si * 53, si * 29,
+        { rot: 0.12, wobble: 1.0 });
       ctx.restore();
     }
 
