@@ -177,15 +177,15 @@
       '墨墨', '皮皮', '大白', '颜料罐', '小画伯', '条条', '点点', '麻花'
     ],
 
-    // ---------- 道具稀有度（按强度分 3 档，强→弱：蓝 / 紫 / 橙）----------
+    // ---------- 道具稀有度（按强度分 3 档，强→弱：橙 / 紫 / 蓝）----------
     ITEM_RARITY: {            // 每个道具类型的稀有度；普通色块(kind='color')不在其中 → 无边框（基础食物）
-      wild: 'blue',  bomb: 'blue',  clear: 'blue',       // 强：万能色(桥接凑连)、炸弹(清≥2连段)、消色(清全部同色)
+      wild: 'orange',  bomb: 'orange',  clear: 'orange',       // 强：万能色(桥接凑连)、炸弹(清≥2连段)、消色(清全部同色)
       meteor: 'purple', clear3: 'purple', rand3: 'purple', // 中：流星注入、后三消色、随机消3
-      slow: 'orange', rand1: 'orange', rand2: 'orange'      // 弱：减速(防御)、随机消1/2
+      slow: 'blue', rand1: 'blue', rand2: 'blue'               // 弱：减速(防御)、随机消1/2
     },
-    RARITY_COLORS: { blue: '#4A7FD4', purple: '#9B5DE5', orange: '#F5A623' }, // 边框色：强→弱 蓝/紫/橙
-    RARITY_NAME:   { blue: '稀有·强', purple: '稀有·中', orange: '稀有·弱' },
-    RARITY_ORDER:  ['blue', 'purple', 'orange'],
+    RARITY_COLORS: { blue: '#4A7FD4', purple: '#9B5DE5', orange: '#F5A623' }, // 边框色：强→弱 橙/紫/蓝
+    RARITY_NAME:   { blue: '稀有·弱', purple: '稀有·中', orange: '稀有·强' },
+    RARITY_ORDER:  ['orange', 'purple', 'blue'],
 
     // ---------- 道具图鉴（主菜单「图鉴」页面展示，按稀有度由强到弱排序）----------
     ITEM_GUIDE: [

@@ -1627,7 +1627,7 @@
     ctx.font = '12.5px sans-serif';
     var legY = 68;
     var chipW = 30, chipH = 15, gapX = 8, labelGap = 4;
-    var labels = [['blue', '强'], ['purple', '中'], ['orange', '弱']];
+    var labels = [['orange', '强'], ['purple', '中'], ['blue', '弱']];
     var totalW = labels.length * (chipW + labelGap + ctx.measureText('强').width + gapX) - gapX;
     var lx = W / 2 - totalW / 2;
     for (var li = 0; li < labels.length; li++) {
