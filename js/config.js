@@ -281,14 +281,28 @@
    * @returns {{items:{x:number,y:number,w:number,h:number}, colors:{x:number,y:number,w:number,h:number}}}
    */
   cfg.guideTabRects = function (game) {
-    var W = game.screenW;
-    var tbW = Math.min(150, W * 0.34), tbH = 34, gap = 12;
-    var totalW = tbW * 2 + gap;
-    var x0 = W / 2 - totalW / 2;
-    var y = 8;
+    var W = game.screenW, H = game.screenH;
+    // 顶栏页签（右上角，与 drawGuideHeader 对齐）
+    var hdrH = 52;
+    var tw = 72, th = 30, tg = 6;
+    var hdrTabX = W - 16 - tw * 2 - tg;   // 右对齐
+    var hdrTabY = (hdrH - th) / 2;
+
+    // 左侧导航栏（主体区域，与 drawGuideSidebar 对齐）
+    var sbW = Math.min(130, W * 0.22);
+    var sbX = 16, sbPad = 10;
+    var bodyTop = hdrH;
+    var tabW = sbW - sbPad * 2, tabH = 38, tabGap = 8;
+    var sideTabY = bodyTop + 24;
+
     return {
-      items:  { x: x0,             y: y, w: tbW, h: tbH },
-      colors: { x: x0 + tbW + gap, y: y, w: tbW, h: tbH }
+      // 顶栏页签
+      hdrItems:  { x: hdrTabX,                y: hdrTabY, w: tw, h: th },
+      hdrColors: { x: hdrTabX + tw + tg,       y: hdrTabY, w: tw, h: th },
+      // 侧边栏导航
+      sideItems:  { x: sbX + sbPad,            y: sideTabY,           w: tabW, h: tabH },
+      sideColors: { x: sbX + sbPad,            y: sideTabY + tabH + tabGap, w: tabW, h: tabH },
+      contentX: sbX + sbW + 16              // 内容区左边界
     };
   };
 

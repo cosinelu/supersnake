@@ -47,9 +47,11 @@ ok(plan[4].sec === 45 && plan[4].endlessText === '存活 45 秒解锁', '紫：�
 ok(plan[5].key === 'yellow' && plan[5].level === 5 && plan[5].sec === 90, '黄：第 5 关 / 存活 90 秒');
 ok(plan[6].key === 'teal' && plan[6].level === 7 && plan[6].sec === 135, '青：第 7 关 / 存活 135 秒');
 ok(plan[7].key === 'pink' && plan[7].order === 8 && plan[7].level === 9 && plan[7].sec === 180, '粉：第 8 色 / 第 9 关 / 存活 180 秒');
-var tr = cfg.guideTabRects({ screenW: 400 });
-ok(tr.items && tr.colors && tr.items.w > 0 && tr.colors.h > 0, 'guideTabRects 返回 道具/颜色 两个有效热区');
-ok(typeof tr.items.x === 'number' && tr.colors.x > tr.items.x, 'guideTabRects 两页签横向排列');
+var tr = cfg.guideTabRects({ screenW: 400, screenH: 640 });
+ok(tr.hdrItems && tr.hdrColors && tr.sideItems && tr.sideColors, 'guideTabRects 返回 顶栏+侧栏 共 4 个有效热区');
+ok(tr.sideColors.y > tr.sideItems.y, 'guideTabRects 侧栏：颜色页签在道具页签下方');
+ok(tr.contentX > tr.sideItems.x + tr.sideItems.w, 'guideTabRects contentX 在侧栏右侧（不压导航）');
+ok(tr.hdrColors.x > tr.hdrItems.x, 'guideTabRects 顶栏：颜色胶囊在道具胶囊右侧');
 
 // ---------------- 2. 关卡曲线（世界大地图） ----------------
 section('关卡曲线');

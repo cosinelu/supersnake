@@ -1,0 +1,5331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- 本文件为自包含单文件版：所有 JS 已内联，双击即可离线游玩，无需联网或服务器。 -->
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>消食蛇 · 网页版（分享版 v2.12.0）</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #FBF6E9; /* 浅奶油纸底 */
+  }
+  #game {
+    display: block;
+    touch-action: none;          /* 禁止浏览器默认触摸滚动/缩放 */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    cursor: crosshair;
+  }
+  /* 竖屏时的小提示（游戏本身仍可玩） */
+  #rotateTip {
+    display: none;
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 14px;
+    border: 2px solid #3A3238;
+    border-radius: 14px;
+    background: #FFFDF5;
+    color: #3A3238;
+    font: 13px sans-serif;
+    pointer-events: none;
+    z-index: 10;
+  }
+  @media (orientation: portrait) {
+    #rotateTip { display: block; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="rotateTip">横屏体验更佳</div>
+<script>
+/* ===== inlined: js/config.js ===== */
+'use strict';
+/**
+ * config.js — 全局可调参数表（浏览器版 v2：自由方向 + 大地图 + 跟随镜头）
+ * 玩法手感、数值平衡、美术配色都集中在这里，调参只改这个文件。
+ *
+ * 颜色解锁规则（调优只改下方带「解锁」注释的常量即可）：
+ *   颜色池共 MAX_COLORS=8 色；开局解锁 INITIAL_UNLOCKED=4 色（红蓝绿橙）；
+ *   闯关模式每 LEVEL_UNLOCK_STEP_LEVELS=2 关 +1 色；无尽模式每 ENDLESS_UNLOCK_INTERVAL_SEC=45 秒 +1 色；上限 8 色。
+ *
+ * v2 与 v1 差异：废弃网格/四方向，蛇头连续坐标 (x,y) + 朝向角 θ，
+ * 世界为像素坐标大地图（尺寸见 levels.js），相机平滑跟随蛇头。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+
+  var cfg = {
+    // ---------- 美术配色（蜡笔 8 色，数组顺序即解锁顺序）----------
+    COLORS: {
+      red:    '#E8552F',  // 蜡笔红
+      blue:   '#4A7FD4',  // 蜡笔蓝
+      green:  '#6FBF4A',  // 蜡笔绿
+      orange: '#F5A623',  // 蜡笔橙
+      purple: '#9B5DE5',  // 蜡笔紫（中后期解锁）
+      yellow: '#F4D35E',  // 蜡笔黄
+      teal:   '#2EC4B6',  // 蜡笔青
+      pink:   '#F15BB5'   // 蜡笔粉
+    },
+    COLOR_KEYS: ['red', 'blue', 'green', 'orange', 'purple', 'yellow', 'teal', 'pink'],
+    // 颜色中文名（图鉴「颜色解锁顺序」页签展示用）
+    COLOR_NAMES: { red: '红', blue: '蓝', green: '绿', orange: '橙', purple: '紫', yellow: '黄', teal: '青', pink: '粉' },
+
+    // ---------- 颜色解锁系统参数（调优只改这里）----------
+    MAX_COLORS: 8,                    // 颜色池总数（默认与 COLOR_KEYS 长度一致）
+    INITIAL_UNLOCKED: 4,              // 对局开局已解锁颜色数（红蓝绿橙）
+    LEVEL_UNLOCK_BASE: 4,             // 闯关解锁基数（第 1 关起点）
+    LEVEL_UNLOCK_STEP_LEVELS: 2,      // 闯关：每多少关 +1 色（每 2 关解锁 1 色）
+    ENDLESS_UNLOCK_BASE: 4,           // 无尽解锁基数
+    ENDLESS_UNLOCK_INTERVAL_SEC: 45,  // 无尽：每存活多少秒 +1 色（每 45 秒解锁 1 色）
+    UNLOCK_BANNER_MS: 1500,           // 「新颜色解锁！」横幅停留时长（毫秒）
+
+    INK: '#3A3238',        // 统一描边色（深灰近黑）
+    TAIL_COLOR: '#3A3238', // 尾巴节颜色（深色蜡笔小尾鳍：不参与消除/咬断，一眼可辨）
+    PAPER: '#FBF6E9',      // 浅奶油纸色背景
+    WALL_FILL: '#B7B0A6',  // 墙壁灰色蜡笔底
+    PANEL: '#FFFDF5',      // 面板/按钮底色
+
+    // ---------- 蛇与连续移动（贪食蛇大作战式）----------
+    SNAKE_SPEED: 150,            // 初始前进速度（px/s），闯关由 levels.js 覆盖
+    SPEED_MAX: 380,              // 无尽模式提速上限（px/s）
+    ENDLESS_SPEEDUP_PER_SEC: 2.5,// 无尽：每秒速度提升（px/s）
+    // ---- 局内动态加速（只改速度，不改节间距/判定等几何参数）----
+    SPEED_LEN_COEF: 2.5,         // 长度加成：每节 +2.5 px/s（闯关/无尽通用，加速更明显）
+    LEVEL_SPEED_TIME_COEF: 1.2,  // 闯关时间加成：每存活 1 秒 +1.2 px/s
+    LEVEL_SPEED_CAP_ADD: 170,    // 闯关封顶 = 关卡基础速度 + 170 px/s
+    TURN_RATE: 9.0,              // 最大转向速率（rad/s）≈ 515°/s；调高后快速变向能拐进相邻行/列的砖块（原 4.5 太钝，来不及拦截）
+    SEG_RADIUS: 13,              // 节半径（px）
+    SEG_SPACING: 30,             // 节间弧长间距（px）= 直径 26 + 4px 纸色间隙，保证节可逐个数清
+    SEG_STROKE: 3.0,             // 节描边粗细（px，深色 INK，相邻节边界一眼可辨）
+    HEAD_HIT_RADIUS: 10,         // 撞墙判定半径（略小于节半径，手感宽容）
+    START_LENGTH: 5,             // 出生颜色节数（另有恒在的 +1 尾巴节，出生总长 = 6 节）
+    SELF_PULL_CD: 380,          // 自碰重组冷却（ms）：触发一次后需间隔这么久才能再触发，避免刷屏
+    MIN_LENGTH: 3,               // 消除保底长度（从末尾保留；只计颜色节，尾巴节恒在、不占保底计数）
+    REFILL_ON_FLOOR: 4,          // 保底触发（消除会清空到不足 MIN_LENGTH）后：整段消除并随机补满这么多块已解锁颜色砖，让游戏继续
+    TRAIL_STEP: 3,               // 轨迹记录最小间距（px，≪ SEG_SPACING，弧长插值精度足够）
+    // 收集判定半径 = SEG_RADIUS + BLOCK_RADIUS = 25px（以节中心圆形重叠为准，不随间距变化）
+
+    // ---------- 相机 ----------
+    CAMERA_LERP: 5.0,            // 跟随平滑系数（/s，帧率无关指数趋近）
+
+    // ---------- 色块 ----------
+    BLOCK_RADIUS: 12,            // 色块半径（px）
+
+    // ---------- 消除 ----------
+    ELIM_RUN: 4,           // 相邻同色 ≥4 节触发消除
+    ELIM_SCORE: 10,        // 每消除 1 节基础得分（v2.9 起调高，使消除分在结算中占比更高）；
+                           // 实际得分 = ELIM_SCORE × chain(连锁) × combo(连击)，叠乘成倍
+    CHAIN_FX_STEP: 0.6,    // 连锁特效逐级放大：倍率 = 1 + (chain-1)×0.6（chain2=1.6, chain3=2.2…）
+    CHAIN_TEXT_MIN: 2,     // chain ≥ 2 才弹「N连锁！」手绘文字
+    ELIM_COMBO_WINDOW: 2400, // 连击窗口（ms）：窗口内连续触发多次消除，combo 逐次 +1，分数 ×combo
+    ELIM_COMBO_MAX: 5,       // 连击倍率上限（防止分数爆炸，最多 ×5）
+
+    // ---------- 计分 ----------
+    SURVIVE_SCORE_PER_SEC: 1, // 存活得分：1 秒 = 1 分
+
+    // ---------- 色块刷新 ----------
+    SPAWN_INTERVAL_MS: 5500,  // 刷新检查间隔（降低刷新频率，道具不那么密集）
+    BLOCK_AREA_DIV: 90000,    // 目标密度：世界面积 / 90000 ≈ 每 300x300 区域 1 个
+    BLOCKS_MIN: 8,            // 目标数量下限
+    BLOCKS_MAX: 40,           // 目标数量上限
+    BLOCK_MIN_DIST: 140,      // 新色块与已有色块最小距离（px）
+    BLOCK_SNAKE_DIST: 80,     // 新色块与蛇身最小距离（px）
+    BLOCK_EDGE_MARGIN: 60,    // 色块距世界边界最小距离（px）
+    SPAWN_TRIES: 50,          // 拒绝采样最大尝试次数
+
+    // ---------- 特殊道具（消除游戏常见：万能色 / 炸弹 / 减速 / 消色 / 随机 / 流星）----------
+    ITEM_SPECIAL_CHANCE: 0.18,  // 每次生成色块时改为特殊道具的概率（仅作为 spawner.specialChance 的初始值）
+    // 道具概率随时间爬升：越到后期世界上的道具越多（单人多人都生效）
+    ITEM_SPECIAL_CHANCE_MIN: 0.12,  // 开局特殊道具概率（低）
+    ITEM_SPECIAL_CHANCE_MAX: 0.42,  // 后期特殊道具概率（高）：后期道具明显更密集
+    ITEM_RAMP_SEC: 180,             // 多少秒线性爬到 MAX（约 3 分钟到顶）
+    ITEM_TOAST_MS: 2800,       // 吃到特殊道具时效果提示文字停留时长（ms，加慢以便看清）
+    SLOW_MS: 4000,              // 减速道具生效时长（ms）
+    SLOW_FACTOR: 0.6,           // 减速道具期间速度倍率（缓解加速压力，临时喘息）
+    BOMB_SCORE: 8,              // 炸弹消除每节额外得分
+    // 特殊道具按权重抽取（覆盖 wild/bomb/slow + 新增 clear/clear3/rand1-3）；绝对值仅相对意义
+    ITEM_WEIGHTS: {
+      wild: 0.08, bomb: 0.05, slow: 0.03,  // 旧三类下调，给新道具让路
+      clear: 0.30, clear3: 0.30,           // 消色 / 后3消色：最易遇到（用户点的新道具）
+      rand1: 0.13, rand2: 0.13, rand3: 0.15 // 随机消除 1/2/3 节
+    },
+    CLEAR_SCORE: 6,             // 消色道具每节额外得分
+    CLEAR3_SCORE: 5,            // 后 3 消色每节额外得分
+    RAND_SCORE: 5,              // 随机消除每节额外得分
+    // 流星砖块（移动砖块）：只从上下左右四个正方向、平行于地图边、从一侧直飞到对侧；
+    // 命中身体即把该色注入中段（可靠的中段注入方案）。无归向、直线匀速、慢速可见。
+    METEOR_INTERVAL_MS: 6500,   // 每隔多久生成一颗（调高 → 流星更少，让位其他新道具）
+    METEOR_MAX: 3,              // 同屏上限（下调）
+    METEOR_SPEED: 140,          // 飞行速度（px/s，调慢，看得清来向）
+    METEOR_TTL_MS: 30000,       // 存活上限（足够飞越整张地图到对侧后由出界回收）
+    METEOR_HIT_R: 16,           // 命中判定半径（px）
+    METEOR_RADIUS: 14,          // 移动砖块视觉半径（px）
+    METEOR_SCORE: 3,            // 流星注入每节得分
+
+    // ---------- 墙壁（世界像素坐标，矩形组合）----------
+    WALL_MAX_RATIO: 0.08,     // 内部墙壁总面积 ≤ 世界面积 8%
+    WALL_UNIT: 48,            // 墙段基本单元边长（px），一字/L/2x2 均由整数个单元矩形组合
+    WALL_EDGE_MARGIN: 70,     // 内部墙距世界边界最小距离（px）
+    WALL_GAP: 60,             // 墙段之间最小间隙（px，保证通道）
+    WALL_THICK: 44,           // 边界墙视觉厚度（px），排线墙带，纯视觉；撞界判定不变
+    SPAWN_SAFE_RADIUS: 180,   // 出生点保护半径（px，内无墙）
+    // 动态墙体生成：随时间在地图上新增障碍段，地图越来越复杂（避开蛇身）
+    WALL_SPAWN_INTERVAL_MS: 9000,  // 每隔多久新增一段障碍墙（ms）
+    WALL_SPAWN_MAX: 28,            // 内部墙矩形总数上限（含初始段），防止堵死
+    WALL_SPAWN_SNAKE_PAD: 22,     // 生成时避开蛇身的外扩余量（px ≈ 节半径 + 间隙）
+
+    // ---------- 无尽模式世界（像素）----------
+    ENDLESS: { W: 3600, H: 2400, wallSegments: 8 },
+
+    // ---------- 多人对战模式（玩家 1 名 + AI 蛇同场竞技）----------
+    MULTI: { W: 4200, H: 2800, wallSegments: 6 }, // 共享大地图；内部墙比无尽(8)略少，给追逐留空间
+    MP_AI_COUNT: 6,             // 场上恒定维持的 AI 蛇数量（旧：固定值；v2.8.7 起改为初始值，后续动态增长）
+    MP_AI_START_COUNT: 3,       // 开局初始 AI 数量（随时间增长到 MP_AI_MAX）
+    MP_AI_MAX_COUNT: 14,        // AI 数量上限（后期越来越热闹，但不会无限膨胀卡顿）
+    MP_AI_GROW_INTERVAL_SEC: 25,// 每隔多少秒新增一条 AI（存活时间驱动，越后期 AI 越多）
+    MP_START_LENGTH: 5,         // AI 出生 / 重生初始颜色节数（+1 尾巴节，总长 6 节）
+    MP_RESPAWN_MIN_MS: 3000,    // AI 淘汰后重生延迟下限（毫秒）
+    MP_RESPAWN_MAX_MS: 5000,    // 重生延迟上限（毫秒）
+    MP_AI_SPEED_MIN: 130,       // AI 基础速度档位下限（px/s，随机）
+    MP_AI_SPEED_MAX: 170,       // AI 基础速度档位上限（px/s，随机）
+    MP_CORPSE_STRIDE: 2,        // 尸体每隔 2 节掉 1 个色块（起点随机 0/1，≈50% 的节）
+    MP_BLOCK_AREA_DIV: 70000,   // 多人色块目标密度：世界面积 / 70000（7 条蛇在吃，比单人略高）
+    MP_BLOCKS_MIN: 10,          // 多人色块目标数量下限
+    MP_BLOCKS_MAX: 50,          // 多人色块目标数量上限
+    MP_SPAWN_EDGE_MIN: 90,      // AI 出生带：距世界边界 90~260px
+    MP_SPAWN_EDGE_MAX: 260,
+    MP_SPAWN_CLEAR: 320,        // AI 出生点与其他蛇的期望最小距离（px，拒绝采样尽量满足）
+    // ---- 咬断机制（头撞身附加：被撞者短一节）----
+    MP_BITE_MIN_LENGTH: 3,      // 咬断保底：被咬后节数低于此值 → 被撞者直接淘汰（计入撞者击杀）
+    MP_BITE_FLASH_MS: 300,      // 被咬视觉反馈时长：闪白 + 抖动（毫秒）
+
+    // ---------- AI 决策参数（加权转向，见 ai.js）----------
+    AI_DIRS: 24,                // 每帧评估的候选方向数（v2.9 起 24：转向更精细、更聪明）
+    AI_FOOD_RANGE: 900,         // 寻食感知范围（px，再按贪食性格伸缩）
+    AI_FOOD_WEIGHT: 1.0,        // 寻食基础权重
+    AI_SAME_COLOR_BONUS: 1.6,   // 偏好与头部同色的色块（凑 4 连）
+    AI_RUN_BONUS: 3.0,         // 凑「4 连消除」动机加成：若该色块能让头部凑成 ≥3 连同色（差 1 节即消除），额外按接近度大幅加权
+    AI_PROBE_NEAR: 70,          // 避障近前景点距离（px，≈1 个身位，按谨慎性格伸缩）
+    AI_PROBE_FAR: 190,          // 避障远前景点距离（px，≈2.7 个身位：看得更远、提前避让，v2.9 起加大）
+    AI_WALL_PENALTY: 160,       // 近点撞墙罚分（几乎否决该方向，v2.9 起加重）
+    AI_WALL_PENALTY_FAR: 50,    // 远点撞墙罚分（提前避让）
+    AI_SNAKE_AVOID: 150,        // 避蛇感知半径（px，按谨慎性格伸缩，v2.9 起加大）
+    AI_SNAKE_PENALTY: 110,      // 避蛇罚分系数（v2.9 起加重）
+    AI_SELF_AVOID: 95,          // 自身蛇身规避半径（px）：避免高速自卷卡死自己
+    AI_SELF_PENALTY: 70,        // 自身蛇身规避罚分系数
+    AI_HEADON_PENALTY: 140,     // 头对头规避：避免冲向其他蛇头部前方（会双双淘汰）的罚分
+    AI_INERTIA: 0.30,           // 惯性分：偏好保持当前朝向（防抖动，v2.9 略降以更灵活）
+    AI_WANDER: 0.25,            // 随机游走噪声幅度（无威胁时小幅漂移）
+    AI_NICKNAMES: [             // AI 昵称池（随机取用，场上不重复）
+      '蜡笔小新', '橡皮擦', '卷卷', '小粉笔', '涂鸦侠', '彩虹糖',
+      '墨墨', '皮皮', '大白', '颜料罐', '小画伯', '条条', '点点', '麻花'
+    ],
+
+    // ---------- 道具稀有度（按强度分 3 档，强→弱：橙 / 紫 / 蓝）----------
+    ITEM_RARITY: {            // 每个道具类型的稀有度；普通色块(kind='color')不在其中 → 无边框（基础食物）
+      wild: 'orange',  bomb: 'orange',  clear: 'orange',       // 强：万能色(桥接凑连)、炸弹(清≥2连段)、消色(清全部同色)
+      meteor: 'purple', clear3: 'purple', rand3: 'purple', // 中：流星注入、后三消色、随机消3
+      slow: 'blue', rand1: 'blue', rand2: 'blue'               // 弱：减速(防御)、随机消1/2
+    },
+    RARITY_COLORS: { blue: '#4A7FD4', purple: '#9B5DE5', orange: '#F5A623' }, // 边框色：强→弱 橙/紫/蓝
+    RARITY_NAME:   { blue: '稀有·弱', purple: '稀有·中', orange: '稀有·强' },
+    RARITY_ORDER:  ['orange', 'purple', 'blue'],
+
+    // ---------- 道具图鉴（主菜单「图鉴」页面展示，按稀有度由强到弱排序）----------
+    ITEM_GUIDE: [
+      { kind: 'bomb',    name: '炸弹',     rarity: 'blue',   desc: '瞬间清除蛇身上所有 ≥2 节的连续同色段。',                       colorKey: null },
+      { kind: 'clear',   name: '消色',     rarity: 'blue',   desc: '一次性消除蛇身上全部指定颜色的节（不管在哪、连不连续都清）。', colorKey: 'red' },
+      { kind: 'wild',    name: '万能色',   rarity: 'blue',   desc: '通配任意颜色，可桥接不同颜色的同色段来触发消除。',             colorKey: null },
+      { kind: 'meteor',  name: '流星砖块', rarity: 'purple', desc: '从地图边缘直线飞入，命中蛇身即注入对应颜色到中段。',           colorKey: 'green' },
+      { kind: 'clear3',  name: '后三消色', rarity: 'purple', desc: '只消除指定颜色最靠尾巴的 3 节。',                             colorKey: 'blue' },
+      { kind: 'rand3',   name: '随机消 3', rarity: 'purple', desc: '随机移除蛇身上 3 节。',                                       colorKey: null },
+      { kind: 'slow',    name: '减速',     rarity: 'orange', desc: '4 秒内移动速度降至 60%。',                                   colorKey: null },
+      { kind: 'rand2',   name: '随机消 2', rarity: 'orange', desc: '随机移除蛇身上 2 节。',                                       colorKey: null },
+      { kind: 'rand1',   name: '随机消 1', rarity: 'orange', desc: '随机移除蛇身上 1 节。',                                       colorKey: null },
+      { kind: 'color',   name: '普通色块', rarity: null,     desc: '吃到后蛇身头部插入一节该颜色。凑齐 4 个相邻同色节即可触发消除得分。', colorKey: 'red' }
+    ],
+
+    // ---------- 存储 key ----------
+    STORAGE_UNLOCKED: 'crayon_snake_web_unlocked', // 闯关已解锁关卡数
+    STORAGE_BEST: 'crayon_snake_web_best',         // 无尽最高分
+    STORAGE_MP_BEST: 'crayon_snake_web_mp_best'    // 多人对战最佳 {len:最长节数, score:最高分}
+  };
+
+  /**
+   * 闯关模式：第 n 关解锁颜色数 = min(MAX_COLORS, BASE + floor((n-1)/STEP))
+   * 档位：L1/L2=4，L3/L4=5，L5/L6=6，L7/L8=7，L9/L10=8。
+   */
+  cfg.unlockedCountForLevel = function (n) {
+    var lvl = Math.max(1, n | 0);
+    var c = cfg.LEVEL_UNLOCK_BASE + Math.floor((lvl - 1) / cfg.LEVEL_UNLOCK_STEP_LEVELS);
+    return Math.min(cfg.MAX_COLORS, c);
+  };
+
+  /**
+   * 无尽模式：存活 surviveSec 秒后解锁颜色数 = min(MAX_COLORS, BASE + floor(sec/INTERVAL))
+   * 档位：每 45 秒 +1，0~44s=4，45~89s=5，90~134s=6，135~179s=7，180s 及以上=8。
+   */
+  cfg.unlockedCountForEndless = function (surviveSec) {
+    var sec = Math.max(0, surviveSec | 0);
+    var c = cfg.ENDLESS_UNLOCK_BASE + Math.floor(sec / cfg.ENDLESS_UNLOCK_INTERVAL_SEC);
+    return Math.min(cfg.MAX_COLORS, c);
+  };
+
+  /**
+   * 取前 count 个已解锁颜色的 key 数组（用于刷新色块 / 蛇身颜色）。
+   * @param {number} count 已解锁颜色数
+   * @returns {string[]} 颜色 key 数组
+   */
+  cfg.unlockedColorKeys = function (count) {
+    return cfg.COLOR_KEYS.slice(0, Math.min(cfg.MAX_COLORS, Math.max(0, count | 0)));
+  };
+
+  /**
+   * 颜色解锁顺序规划：按 COLOR_KEYS（=解锁先后顺序）返回每个颜色的解锁信息。
+   * 用于图鉴「颜色解锁顺序」页签展示。纯函数，可在 smoke 测试中校验。
+   * 公式与 unlockedCountForLevel / unlockedCountForEndless 完全一致：
+   *   闯关：第 n 关解锁数 = BASE + floor((n-1)/STEP)
+   *   无尽：存活 s 秒解锁数 = BASE + floor(s/INTERVAL)
+   * 反解「第 i 个颜色（i 从 0）出现所需已解锁总数 c=i+1」：
+   *   闯关 n = 1 + STEP*(c-BASE)；无尽 s = (c-BASE)*INTERVAL（c<=BASE 即开局解锁）。
+   * @returns {Array<{order:number,key:string,name:string,hex:string,initial:boolean,level:number,sec:number,levelText:string,endlessText:string}>}
+   */
+  cfg.colorUnlockPlan = function () {
+    var plan = [];
+    var lvlBase = cfg.LEVEL_UNLOCK_BASE, step = cfg.LEVEL_UNLOCK_STEP_LEVELS;
+    var enBase = cfg.ENDLESS_UNLOCK_BASE, interval = cfg.ENDLESS_UNLOCK_INTERVAL_SEC;
+    for (var i = 0; i < cfg.COLOR_KEYS.length; i++) {
+      var key = cfg.COLOR_KEYS[i];
+      var c = i + 1;                                   // 该颜色出现所需的已解锁颜色总数
+      var initial = i < cfg.INITIAL_UNLOCKED;          // 前 INITIAL_UNLOCKED 个为开局解锁
+      var lvl = initial ? 1 : 1 + step * (c - lvlBase); // 闯关解锁到该色所需关卡
+      var sec = initial ? 0 : (c - enBase) * interval;  // 无尽解锁到该色所需存活秒数
+      plan.push({
+        order: c,
+        key: key,
+        name: cfg.COLOR_NAMES[key],
+        hex: cfg.COLORS[key],
+        initial: initial,
+        level: lvl,
+        sec: sec,
+        levelText: initial ? '开局解锁' : ('第 ' + lvl + ' 关解锁'),
+        endlessText: initial ? '开局解锁' : ('存活 ' + sec + ' 秒解锁')
+      });
+    }
+    return plan;
+  };
+
+  /**
+   * 图鉴页签（道具 / 颜色）在屏幕上的点击热区与绘制区域（屏幕像素，左上原点）。
+   * 渲染（drawGuideTabs）与点击（onTouchStart）共用同一套几何，保证对齐。
+   * @param {object} game 含 screenW 的游戏对象
+   * @returns {{items:{x:number,y:number,w:number,h:number}, colors:{x:number,y:number,w:number,h:number}}}
+   */
+  cfg.guideTabRects = function (game) {
+    var W = game.screenW, H = game.screenH;
+    // 顶栏页签（右上角，与 drawGuideHeader 对齐）
+    var hdrH = 52;
+    var tw = 72, th = 30, tg = 6;
+    var hdrTabX = W - 16 - tw * 2 - tg;   // 右对齐
+    var hdrTabY = (hdrH - th) / 2;
+
+    // 左侧导航栏（主体区域，与 drawGuideSidebar 对齐）
+    var sbW = Math.min(130, W * 0.22);
+    var sbX = 16, sbPad = 10;
+    var bodyTop = hdrH;
+    var tabW = sbW - sbPad * 2, tabH = 38, tabGap = 8;
+    var sideTabY = bodyTop + 24;
+
+    return {
+      // 顶栏页签
+      hdrItems:  { x: hdrTabX,                y: hdrTabY, w: tw, h: th },
+      hdrColors: { x: hdrTabX + tw + tg,       y: hdrTabY, w: tw, h: th },
+      // 侧边栏导航
+      sideItems:  { x: sbX + sbPad,            y: sideTabY,           w: tabW, h: tabH },
+      sideColors: { x: sbX + sbPad,            y: sideTabY + tabH + tabGap, w: tabW, h: tabH },
+      contentX: sbX + sbW + 16              // 内容区左边界
+    };
+  };
+
+  /**
+   * 随时间爬升的特殊道具概率：开局 ITEM_SPECIAL_CHANCE_MIN，约 ITEM_RAMP_SEC 秒后线性到 MAX。
+   * 越到后期，世界上刷新出的特殊道具越多（单人多人都走这里，spawner.specialChance 每帧由 game/mp 更新）。
+   * @param {number} ms 已存活毫秒
+   * @returns {number} 当前特殊道具概率
+   */
+  cfg.specialChanceForElapsed = function (ms) {
+    var sec = Math.max(0, ms / 1000);
+    var k = Math.min(1, sec / cfg.ITEM_RAMP_SEC);
+    return cfg.ITEM_SPECIAL_CHANCE_MIN + (cfg.ITEM_SPECIAL_CHANCE_MAX - cfg.ITEM_SPECIAL_CHANCE_MIN) * k;
+  };
+
+  CS.config = cfg;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/utils.js ===== */
+'use strict';
+/**
+ * utils.js — 工具函数：确定性伪随机、数学助手、角度助手（DOM 无关）
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+
+  /**
+   * 确定性二维哈希 → [0,1)
+   * 用于手绘抖动的"固定伪随机"：同一种子每帧结果一致，避免闪烁。
+   */
+  function hash2(x, y, k) {
+    var h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul((k | 0) + 1, 974634211)) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177) | 0;
+    h = h ^ (h >>> 16);
+    return (h >>> 0) / 4294967296;
+  }
+
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+  function manhattan(ax, ay, bx, by) { return Math.abs(ax - bx) + Math.abs(ay - by); }
+
+  function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+
+  /** 角度归一化到 (-PI, PI]（用于取最短转向方向） */
+  function normAngle(a) {
+    while (a <= -Math.PI) a += Math.PI * 2;
+    while (a > Math.PI) a -= Math.PI * 2;
+    return a;
+  }
+
+  /**
+   * 当前角向目标角逼近，单步最大变化 maxDelta（弧度）。
+   * 返回新角度；|差值| ≤ maxDelta 时直接到达目标角。
+   */
+  function turnToward(angle, target, maxDelta) {
+    var diff = normAngle(target - angle);
+    if (Math.abs(diff) <= maxDelta) return target;
+    return angle + (diff > 0 ? maxDelta : -maxDelta);
+  }
+
+  CS.utils = {
+    hash2: hash2, clamp: clamp, manhattan: manhattan,
+    dist: dist, normAngle: normAngle, turnToward: turnToward
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/storage.js ===== */
+'use strict';
+/**
+ * storage.js — localStorage 封装（替代 wx.setStorageSync / wx.getStorageSync）
+ *  - 值以 JSON 序列化存储；读取时 JSON 解析失败 / 键不存在 → 返回默认值；
+ *  - localStorage 不可用（隐私模式 / node 环境）→ 降级到内存对象。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var mem = {};
+
+  function hasLocalStorage() {
+    try {
+      return typeof root.localStorage !== 'undefined' && root.localStorage !== null;
+    } catch (e) {
+      return false; // 隐私模式等场景访问 localStorage 会抛异常
+    }
+  }
+
+  /**
+   * 读取持久化值。
+   * @param {string} key
+   * @param {*} def 读不到 / 解析失败时返回的默认值
+   */
+  function get(key, def) {
+    try {
+      if (hasLocalStorage()) {
+        var raw = root.localStorage.getItem(key);
+        if (raw === null || raw === undefined || raw === '') return def;
+        try {
+          var v = JSON.parse(raw);
+          return (v === null || v === undefined) ? def : v;
+        } catch (e) {
+          return def; // 容错：脏数据不炸游戏
+        }
+      }
+    } catch (e) { /* 忽略，走降级 */ }
+    return mem[key] !== undefined ? mem[key] : def;
+  }
+
+  /** 写入持久化值（JSON 序列化） */
+  function set(key, val) {
+    try {
+      if (hasLocalStorage()) {
+        root.localStorage.setItem(key, JSON.stringify(val));
+        return;
+      }
+    } catch (e) { /* 忽略，走降级 */ }
+    mem[key] = val;
+  }
+
+  /** 清除某个 key（调试用） */
+  function remove(key) {
+    try {
+      if (hasLocalStorage()) { root.localStorage.removeItem(key); return; }
+    } catch (e) { /* 忽略 */ }
+    delete mem[key];
+  }
+
+  CS.storage = { get: get, set: set, remove: remove };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/levels.js ===== */
+'use strict';
+/**
+ * levels.js — 闯关模式 10 关参数（v2：世界为像素坐标大地图，宽 > 高）
+ * 第 n 关：世界 2400x1600 → 5200x3600 递增，墙壁段数递增，蛇速微增，目标分 = 40 + n*20。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+
+  var LEVEL_COUNT = 10;
+
+  /**
+   * @param {number} n 关卡号 1..10
+   * @returns {{level:number,W:number,H:number,wallSegments:number,targetScore:number,speed:number}}
+   *   W/H 为世界尺寸（像素）
+   */
+  function levelConfig(n) {
+    var t = (n - 1) / (LEVEL_COUNT - 1); // 0..1
+    return {
+      level: n,
+      W: Math.round(1500 + (4800 - 1500) * t),      // 1500 → 4800 世界宽（px），L1 约 1.5 屏、随关卡递增
+      H: Math.round(1000 + (3200 - 1000) * t),      // 1000 → 3200 世界高（px）
+      wallSegments: 3 + Math.round(t * 7),          // 3 → 10 段内部墙壁
+      targetScore: 40 + n * 20,                     // 第1关60分 … 第10关240分
+      speed: 150 + (n - 1) * 9                      // 150 → 231 px/s 微加速
+    };
+  }
+
+  CS.levels = { LEVEL_COUNT: LEVEL_COUNT, levelConfig: levelConfig };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/walls.js ===== */
+'use strict';
+/**
+ * walls.js — 世界墙壁模型（v2：世界像素坐标，DOM 无关）
+ * 规则：
+ *  - 世界边界即墙（[0,W]x[0,H] 之外），蛇头碰到立即游戏结束；
+ *  - 内部墙壁为矩形组合（一字形 / L 形 / 2x2 方块，由 WALL_UNIT 单元矩形拼成）；
+ *  - 避开出生点周围 SPAWN_SAFE_RADIUS 圆形安全区；
+ *  - 墙壁总面积 ≤ 世界面积 WALL_MAX_RATIO；段与段之间保留 ≥ WALL_GAP 间隙（留通道、不封死）；
+ *  - 内部墙距世界边界 ≥ WALL_EDGE_MARGIN。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+
+  function Walls(W, H, spawn) {
+    this.W = W;             // 世界宽（px）
+    this.H = H;             // 世界高（px）
+    this.spawn = spawn;     // {x,y} 蛇出生点（世界坐标）
+    this.rects = [];        // 内部墙矩形 [{x,y,w,h}]
+    this.area = 0;          // 内部墙总面积（px²）
+  }
+
+  // ---------------- 几何判定 ----------------
+
+  /** 圆 (cx,cy,r) 是否与矩形相交 */
+  function circleRect(cx, cy, r, rect) {
+    var nx = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
+    var ny = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
+    var dx = cx - nx, dy = cy - ny;
+    return dx * dx + dy * dy < r * r;
+  }
+
+  /** 两矩形（各自可外扩 pad）是否相交 */
+  function rectsOverlap(a, b, pad) {
+    return a.x - pad < b.x + b.w && a.x + a.w + pad > b.x &&
+           a.y - pad < b.y + b.h && a.y + a.h + pad > b.y;
+  }
+
+  /**
+   * 撞墙判定：蛇头圆与世界边界 / 内部墙相交。
+   * @returns {boolean}
+   */
+  Walls.prototype.hitsCircle = function (cx, cy, r) {
+    if (cx - r < 0 || cy - r < 0 || cx + r > this.W || cy + r > this.H) return true; // 边界
+    for (var i = 0; i < this.rects.length; i++) {
+      if (circleRect(cx, cy, r, this.rects[i])) return true;
+    }
+    return false;
+  };
+
+  /** 点 (x,y) 是否落在任一内部墙内（可外扩 pad，用于色块生成避让） */
+  Walls.prototype.pointInWall = function (x, y, pad) {
+    pad = pad || 0;
+    for (var i = 0; i < this.rects.length; i++) {
+      var r = this.rects[i];
+      if (x > r.x - pad && x < r.x + r.w + pad && y > r.y - pad && y < r.y + r.h + pad) return true;
+    }
+    return false;
+  };
+
+  /** 矩形是否侵犯出生点安全区（安全圆外扩蛇节半径） */
+  Walls.prototype.rectHitsSafeZone = function (rect) {
+    return circleRect(this.spawn.x, this.spawn.y, cfg.SPAWN_SAFE_RADIUS + cfg.SEG_RADIUS, rect);
+  };
+
+  // ---------------- 墙段生成 ----------------
+
+  /**
+   * 生成候选墙段（返回矩形数组）。三种形状：
+   *   一字形：len(3~6) 个单元横/竖排 → 1 个矩形；
+   *   L 形：两臂各 2~4 个单元 → 2 个矩形；
+   *   2x2 方块 → 1 个矩形。
+   */
+  function makeSegment(W, H) {
+    var U = cfg.WALL_UNIT, m = cfg.WALL_EDGE_MARGIN;
+    var shape = Math.floor(Math.random() * 3);
+    var rects = [];
+    var ax, ay, i;
+    if (shape === 0) {          // 一字形
+      var len = 3 + Math.floor(Math.random() * 4);
+      var horiz = Math.random() < 0.5;
+      ax = m + Math.random() * Math.max(1, W - 2 * m - (horiz ? len * U : U));
+      ay = m + Math.random() * Math.max(1, H - 2 * m - (horiz ? U : len * U));
+      rects.push(horiz ? { x: ax, y: ay, w: len * U, h: U } : { x: ax, y: ay, w: U, h: len * U });
+    } else if (shape === 1) {   // L 形
+      var a1 = 2 + Math.floor(Math.random() * 3);
+      var a2 = 2 + Math.floor(Math.random() * 3);
+      var dx = Math.random() < 0.5 ? 1 : -1;
+      var dy = Math.random() < 0.5 ? 1 : -1;
+      ax = m + Math.random() * Math.max(1, W - 2 * m - a1 * U);
+      ay = m + Math.random() * Math.max(1, H - 2 * m - a2 * U);
+      if (dx < 0) ax += (a1 - 1) * U; // 方向归一：矩形坐标始终为包围盒左上
+      if (dy < 0) ay += (a2 - 1) * U;
+      rects.push({ x: ax, y: ay, w: a1 * U, h: U });  // 横臂
+      rects.push({ x: ax, y: ay, w: U, h: a2 * U });  // 竖臂（与横臂共拐角）
+    } else {                    // 2x2 方块
+      ax = m + Math.random() * Math.max(1, W - 2 * m - 2 * U);
+      ay = m + Math.random() * Math.max(1, H - 2 * m - 2 * U);
+      rects.push({ x: ax, y: ay, w: 2 * U, h: 2 * U });
+    }
+    return rects;
+  }
+
+  /** 矩形是否越出"边界内缩 WALL_EDGE_MARGIN"的可放置区 */
+  Walls.prototype.rectInBounds = function (r) {
+    var m = cfg.WALL_EDGE_MARGIN;
+    return r.x >= m && r.y >= m && r.x + r.w <= this.W - m && r.y + r.h <= this.H - m;
+  };
+
+  /**
+   * 生成内部墙壁。
+   * @param {number} segmentCount 目标墙段数
+   * @returns {number} 实际放置的段数
+   */
+  Walls.prototype.generateWalls = function (segmentCount) {
+    var maxArea = this.W * this.H * cfg.WALL_MAX_RATIO;
+    var placed = 0;
+    for (var s = 0; s < segmentCount; s++) {
+      var done = false;
+      for (var tries = 0; tries < 40 && !done; tries++) {
+        var rects = makeSegment(this.W, this.H);
+        if (!rects.length) continue;
+        var area = 0, ok = true, i, j;
+        for (i = 0; i < rects.length; i++) area += rects[i].w * rects[i].h;
+        if (this.area + area > maxArea) break; // 预算耗尽
+        for (i = 0; i < rects.length && ok; i++) {
+          var r = rects[i];
+          if (!this.rectInBounds(r) || this.rectHitsSafeZone(r)) { ok = false; break; }
+          for (j = 0; j < this.rects.length; j++) {
+            if (rectsOverlap(r, this.rects[j], cfg.WALL_GAP)) { ok = false; break; }
+          }
+        }
+        if (!ok) continue;
+        for (i = 0; i < rects.length; i++) this.rects.push(rects[i]);
+        this.area += area;
+        placed++;
+        done = true;
+      }
+    }
+    return placed;
+  };
+
+  /**
+   * 动态新增一段障碍墙（随时间生成，让地图越来越复杂）。
+   * 复用 makeSegment 生成候选，并避开：边界内缩区、出生安全区、已有墙（保留 WALL_GAP）、
+   * 总面积预算（WALL_MAX_RATIO）、所有蛇身节点（snakePoints）。
+   * 与 generateWalls 不同：只尝试放 1 段，且必须避开当前蛇身（避免凭空生成在蛇身上致死）。
+   * @param {Array<{x:number,y:number}>} snakePoints 需避让的蛇身节点（玩家 + AI），可为空
+   * @param {number} [maxRects] 矩形总数上限（含初始段），超出则跳过
+   * @returns {boolean} 是否成功放置
+   */
+  Walls.prototype.addRandomWall = function (snakePoints, maxRects) {
+    if (maxRects != null && this.rects.length >= maxRects) return false;
+    var maxArea = this.W * this.H * cfg.WALL_MAX_RATIO;
+    for (var tries = 0; tries < 40; tries++) {
+      var rects = makeSegment(this.W, this.H);
+      var area = 0, ok = true, i, j, r;
+      for (i = 0; i < rects.length; i++) area += rects[i].w * rects[i].h;
+      if (this.area + area > maxArea) return false; // 面积预算耗尽
+      for (i = 0; i < rects.length && ok; i++) {
+        r = rects[i];
+        if (!this.rectInBounds(r) || this.rectHitsSafeZone(r)) { ok = false; break; }
+        for (j = 0; j < this.rects.length; j++) {
+          if (rectsOverlap(r, this.rects[j], cfg.WALL_GAP)) { ok = false; break; }
+        }
+        if (ok && snakePoints) {
+          for (var p = 0; p < snakePoints.length; p++) {
+            if (circleRect(snakePoints[p].x, snakePoints[p].y, cfg.SEG_RADIUS + cfg.WALL_SPAWN_SNAKE_PAD, r)) { ok = false; break; }
+          }
+        }
+      }
+      if (!ok) continue;
+      for (i = 0; i < rects.length; i++) this.rects.push(rects[i]);
+      this.area += area;
+      return true;
+    }
+    return false;
+  };
+
+  CS.Walls = Walls;
+  CS.walls = { circleRect: circleRect, rectsOverlap: rectsOverlap }; // 测试可用
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/snake.js ===== */
+'use strict';
+/**
+ * snake.js — 蛇模型（v2：自由方向连续移动，DOM 无关）
+ *  - 蛇头有连续位置 (x,y) 与朝向角 angle；输入给出目标角 targetAngle，
+ *    蛇头以最大转向速率 TURN_RATE 平滑逼近目标角，前进速度 speed 恒定（px/s）；
+ *  - 身体跟随：维护蛇头轨迹 trail（trail[0] 最新），各节沿轨迹按固定弧长
+ *    SEG_SPACING 排布（经典 trail-following）；
+ *  - 尾巴节（v2.3）：colors 保持纯颜色节，身体几何总长 = colors.length + 1，
+ *    segPos 末尾恒多 1 节「尾巴节」（下标 = colors.length）。它不参与消除判定、
+ *    不会被消除/咬断移除、不占 MIN_LENGTH 保底计数；但它是身体的一部分——
+ *    收集/碰撞/撞身判定对它正常生效。渲染为深色蜡笔小尾鳍（renderer.drawTail）。
+ *  - 颜色序列 colors[0] = 头；吃到色块 colors.unshift(新色)：头立即变为新颜色、
+ *    原头变第 1 节身体、总长 +1（祖玛式从一端推入）；
+ *  - 消除：颜色序列中相邻连续 ≥ELIM_RUN 同色立即移除，支持连锁，长度保底
+ *    MIN_LENGTH（从末尾保留）。身体位置由轨迹派生，消除后自然伸缩。
+ *  - 不做蛇身自碰（沿用原设计）。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+  var u = CS.utils;
+
+  /**
+   * @param {number} x 出生点世界坐标
+   * @param {number} y
+   * @param {number} len 初始节数
+   * @param {number} angle 初始朝向（弧度，0 = 向右）
+   * @param {string[]} colorKeys 可用颜色池（已解锁色）
+   */
+  function Snake(x, y, len, angle, colorKeys) {
+    this.x = x;
+    this.y = y;
+    this.angle = angle;
+    this.targetAngle = angle;
+    this.speed = cfg.SNAKE_SPEED;
+    this.colors = [];                 // colors[0] = 头
+    this.trail = [{ x: x, y: y }];    // 头部轨迹，trail[0] 最新
+    this.selfPullCd = 0;             // 自碰重组冷却（ms），>0 时不可触发（防刷屏）
+    this.segPos = [];                 // 每节中心（含头），computeBody 派生
+    this.colorKeys = colorKeys;       // 保存可用颜色池（已解锁色），供保底补砖时随机取色
+    // 出生时颜色随机但避免直接凑成 4 连（tries 防御：可选颜色不足时接受现状，不死循环）
+    for (var i = 0; i < len; i++) {
+      var color = colorKeys[0], tries = 0;
+      do {
+        color = colorKeys[Math.floor(Math.random() * colorKeys.length)];
+      } while (++tries < 16 && i >= 3 &&
+               this.colors[i - 1] === color &&
+               this.colors[i - 2] === color &&
+               this.colors[i - 3] === color);
+      this.colors.push(color);
+    }
+    this.computeBody();
+  }
+
+  /** 颜色节数（消除/咬断/保底/计分/速度加成都按此计数，不含尾巴节） */
+  Snake.prototype.length = function () { return this.colors.length; };
+
+  /** 身体总节数（含恒在的尾巴节）= 颜色节数 + 1 */
+  Snake.prototype.totalLength = function () { return this.colors.length + 1; };
+
+  Snake.prototype.headColor = function () { return this.colors[0]; };
+
+  /** 头部朝向单位向量（渲染眼睛 / 粒子方向用） */
+  Snake.prototype.headDir = function () {
+    return { x: Math.cos(this.angle), y: Math.sin(this.angle) };
+  };
+
+  /** 设置目标朝向角（弧度）；蛇头按 TURN_RATE 平滑逼近 */
+  Snake.prototype.setTargetAngle = function (a) {
+    this.targetAngle = u.normAngle(a);
+  };
+
+  /**
+   * 每帧推进：转向（速率钳制）→ 前进 → 记录轨迹 → 重算身体 → 裁剪轨迹。
+   * @param {number} dtMs 帧间隔（毫秒）
+   */
+  Snake.prototype.update = function (dtMs) {
+    var dt = dtMs / 1000;
+    // 转向：目标角突变时按 maxTurn 逐步逼近（走最短弧）
+    this.angle = u.turnToward(this.angle, this.targetAngle, cfg.TURN_RATE * dt);
+    // 前进（恒定速度）
+    this.x += Math.cos(this.angle) * this.speed * dt;
+    this.y += Math.sin(this.angle) * this.speed * dt;
+    // 轨迹：头距最近记录点 ≥ TRAIL_STEP 才新增记录点（trail[0] 不随身移动，
+    // 否则单帧位移 < TRAIL_STEP 时永远不累积，轨迹会塌缩成 1 个点）
+    var t0 = this.trail[0];
+    var dx = this.x - t0.x, dy = this.y - t0.y;
+    if (dx * dx + dy * dy >= cfg.TRAIL_STEP * cfg.TRAIL_STEP) {
+      this.trail.unshift({ x: this.x, y: this.y });
+    }
+    this.computeBody();
+    this.trimTrail();
+    if (this.selfPullCd > 0) this.selfPullCd = Math.max(0, this.selfPullCd - dtMs); // 自碰重组冷却衰减
+  };
+
+  /**
+   * 自碰重组（v2.9 新机制）：当蛇头重叠到自身某一节身体（k≥1，不含恒在的尾巴节）时，
+   * 把该节颜色移出并 unshift 到头部——总长度不变，但头部颜色改变、身体沿轨迹自然收拢，
+   * 可能凑出新的同色段触发消除，增加消除的变化性（且不吃不长，节奏不膨胀）。
+   * 仅当 selfPullCd<=0 时调用方才应触发；触发后由调用方重新设置冷却。
+   * @returns {{color:string,x:number,y:number,idx:number}|null} 被拉到头部的节信息；无重叠返回 null
+   */
+  Snake.prototype.trySelfPull = function () {
+    if (this.colors.length < cfg.MIN_LENGTH + 1) return null; // 至少 4 节才值得重组
+    var tol = cfg.HEAD_HIT_RADIUS + cfg.SEG_RADIUS;
+    var tol2 = tol * tol;
+    // 从离头最近的一节开始找（k=1 是脖子，越往后越深）；命中第一个重叠的身体节
+    for (var k = 1; k < this.segPos.length - 1; k++) {
+      var sp = this.segPos[k];
+      var dx = sp.x - this.x, dy = sp.y - this.y;
+      if (dx * dx + dy * dy < tol2) {
+        var color = this.colors[k];
+        // 移出第 k 节、unshift 到头部（总长不变）；身体由轨迹重新派生自然收拢
+        this.colors.splice(k, 1);
+        this.colors.unshift(color);
+        this.computeBody();
+        return { color: color, x: sp.x, y: sp.y, idx: k };
+      }
+    }
+    return null;
+  };
+
+  /**
+   * 沿轨迹按弧长间距排布身体各节（segPos[0] = 头）。
+   * 从头的实时位置出发，依次走向 trail[0]、trail[1]…，相邻节间距 = SEG_SPACING。
+   * 节数 = colors.length + 1：末尾恒追加 1 节尾巴节（segPos[colors.length]）。
+   * 轨迹不足时（开局）节堆叠在轨迹尾点，随移动自然拉开。
+   */
+  Snake.prototype.computeBody = function () {
+    var n = this.colors.length + 1; // +1 = 不可消除的尾巴节
+    var sp = cfg.SEG_SPACING;
+    var trail = this.trail;
+    var pos = this.segPos;
+    pos.length = 0;
+    pos.push({ x: this.x, y: this.y });
+    var acc = 0;                 // 已沿轨迹走的弧长
+    var px = this.x, py = this.y;
+    var ti = 0;                  // 下一个要走向的轨迹点下标
+    for (var i = 1; i < n; i++) {
+      var target = i * sp;
+      while (acc < target && ti < trail.length) {
+        var nx = trail[ti].x, ny = trail[ti].y;
+        var d = u.dist(px, py, nx, ny);
+        if (acc + d >= target) { // 在本段轨迹内插值
+          var k = (target - acc) / (d || 1e-6);
+          px = px + (nx - px) * k;
+          py = py + (ny - py) * k;
+          acc = target;
+          break;
+        }
+        acc += d;
+        px = nx; py = ny;
+        ti++;
+      }
+      pos.push({ x: px, y: py }); // 轨迹耗尽时 px,py 即轨迹尾点
+    }
+  };
+
+  /** 裁剪轨迹：只保留身体所需弧长 + 余量，防止无限增长 */
+  Snake.prototype.trimTrail = function () {
+    var maxNeed = (this.colors.length + 1) * cfg.SEG_SPACING + 60; // +1：尾巴节弧长
+    var acc = 0, keep = this.trail.length;
+    var px = this.x, py = this.y;
+    for (var i = 0; i < this.trail.length; i++) {
+      acc += u.dist(px, py, this.trail[i].x, this.trail[i].y);
+      if (acc > maxNeed) { keep = Math.max(1, i + 1); break; }
+      px = this.trail[i].x; py = this.trail[i].y;
+    }
+    if (this.trail.length > keep) this.trail.length = keep;
+  };
+
+  /**
+   * 吃到色块：新颜色进头部（祖玛式从一端推入）。
+   * 头立即变为该颜色，原头变成第 1 节身体，总长 +1。
+   */
+  Snake.prototype.grow = function (color) {
+    this.colors.unshift(color);
+    this.computeBody(); // 立即对齐身体渲染（新节位于头后 SEG_SPACING 处）
+  };
+
+  /** 吃到万能色块：头部插入一个 'wild' 节（消除时可匹配任意相邻同色，见 findRuns） */
+  Snake.prototype.growWild = function () {
+    this.colors.unshift('wild');
+    this.computeBody();
+  };
+
+  /**
+   * 收集判定辅助：蛇头或任一身体节中心距 (x,y) 是否 < r + SEG_RADIUS
+   * （「身体穿过也算」的圆形重叠判定）。
+   */
+  Snake.prototype.overlaps = function (x, y, r) {
+    var rr = r + cfg.SEG_RADIUS;
+    var rr2 = rr * rr;
+    for (var i = 0; i < this.segPos.length; i++) {
+      var dx = this.segPos[i].x - x, dy = this.segPos[i].y - y;
+      if (dx * dx + dy * dy < rr2) return true;
+    }
+    return false;
+  };
+
+  /** 蛇身（含头）到 (x,y) 的最小距离（spawner 避让用） */
+  Snake.prototype.distTo = function (x, y) {
+    var best = Infinity;
+    for (var i = 0; i < this.segPos.length; i++) {
+      var d = u.dist(this.segPos[i].x, this.segPos[i].y, x, y);
+      if (d < best) best = d;
+    }
+    return best;
+  };
+
+  /**
+   * 咬断：移除颜色序列第 idx 节（多人对战「头撞身」附加效果，idx ≥ 1，不咬头）。
+   * 与消除同一处理路径：只改颜色序列，身体几何由轨迹重新派生，缺口自然收拢。
+   * 尾巴节（下标 = colors.length）不在颜色序列内，下标越界天然返回 null，不可被咬。
+   * @param {number} idx 被咬节下标（segPos[1..colors.length-1] 中离撞者头心最近者，由调用方选定）
+   * @returns {{color:string,x:number,y:number}|null} 被移除节信息（粒子/判定用）；下标非法返回 null
+   */
+  Snake.prototype.removeSegAt = function (idx) {
+    if (idx < 1 || idx >= this.colors.length) return null;
+    var p = this.segPos[idx] || { x: this.x, y: this.y };
+    var color = this.colors.splice(idx, 1)[0];
+    this.computeBody(); // 身体从缺口处自然收拢
+    return { color: color, x: p.x, y: p.y };
+  };
+
+  /**
+   * 流星注入：在身体第 idx 节前插入一个颜色节（中段注入，idx 越界自动夹紧）。
+   * 与 grow（头部插入）共用身体几何派生，缺口自然收拢。用于「流星砖块」可靠的中段注入。
+   */
+  Snake.prototype.insertAt = function (idx, color) {
+    idx = Math.max(0, Math.min(this.colors.length, idx | 0));
+    this.colors.splice(idx, 0, color);
+    this.computeBody();
+  };
+
+  /**
+   * 命中检测：返回第一个与 (x,y) 距离 < r + SEG_RADIUS 的身体节下标（含尾巴节 colors.length），无则 -1。
+   * 供流星砖块碰撞用（命中即在该节注入）。
+   */
+  Snake.prototype.segIndexAt = function (x, y, r) {
+    var rr2 = (r + cfg.SEG_RADIUS) * (r + cfg.SEG_RADIUS);
+    for (var i = 0; i < this.segPos.length; i++) {
+      var dx = this.segPos[i].x - x, dy = this.segPos[i].y - y;
+      if (dx * dx + dy * dy < rr2) return i;
+    }
+    return -1;
+  };
+
+  /** 内部：按下标数组批量移除，返回 [{color,x,y,chain:1}]（移除前捕获世界坐标供特效） */
+  Snake.prototype._removeAt = function (idxs) {
+    if (!idxs || !idxs.length) return [];
+    idxs = idxs.slice().sort(function (a, b) { return a - b; });
+    var removed = [];
+    for (var k = idxs.length - 1; k >= 0; k--) { // 降序 splice，避免位移
+      var idx = idxs[k];
+      if (idx < 0 || idx >= this.colors.length) continue;
+      var p = this.segPos[idx] || { x: this.x, y: this.y };
+      removed.push({ color: this.colors[idx], x: p.x, y: p.y, chain: 1 });
+      this.colors.splice(idx, 1);
+    }
+    this.computeBody();
+    return removed;
+  };
+
+  /** 消色道具：移除所有该颜色的节（尾巴节恒在非颜色序列，天然排除） */
+  Snake.prototype.removeByColor = function (color) {
+    var idxs = [];
+    for (var i = 0; i < this.colors.length; i++) if (this.colors[i] === color) idxs.push(i);
+    return this._removeAt(idxs);
+  };
+
+  /** 后 N 消色：移除该颜色中最靠尾（下标最大）的至多 n 节 */
+  Snake.prototype.removeRearByColor = function (color, n) {
+    var idxs = [];
+    for (var i = 0; i < this.colors.length; i++) if (this.colors[i] === color) idxs.push(i);
+    if (idxs.length > n) idxs = idxs.slice(idxs.length - n);
+    return this._removeAt(idxs);
+  };
+
+  /** 随机消：随机移除 n 节（互异下标），不足 n 则移除全部 */
+  Snake.prototype.removeRandom = function (n) {
+    var pool = [];
+    for (var i = 0; i < this.colors.length; i++) pool.push(i);
+    var idxs = [];
+    for (var k = 0; k < n && pool.length; k++) {
+      var j = Math.floor(Math.random() * pool.length);
+      idxs.push(pool[j]); pool.splice(j, 1);
+    }
+    return this._removeAt(idxs);
+  };
+
+  /**
+   * 找出所有长度 ≥ runLen 的同色连续段（返回下标段数组）。
+   * 支持万能色 'wild'：一段连续节中，非 wild 节必须同色、wild 可充当中介/两端；
+   * 该段整体视作该颜色（wild 节也计入长度并参与消除）——「万能色」即由此实现。
+   */
+  Snake.prototype.findRuns = function (runLen) {
+    var runs = [], i = 0, n = this.colors.length;
+    while (i < n) {
+      var j = i;
+      var runColor = this.colors[i] === 'wild' ? null : this.colors[i];
+      while (j + 1 < n) {
+        var c = this.colors[j + 1];
+        if (c === 'wild') { j++; continue; }
+        if (runColor === null) { runColor = c; j++; continue; }
+        if (c === runColor) { j++; continue; }
+        break;
+      }
+      if (runColor !== null && j - i + 1 >= runLen) {
+        var r = [];
+        for (var k = i; k <= j; k++) r.push(k);
+        runs.push(r);
+      }
+      i = j + 1;
+    }
+    return runs;
+  };
+
+  /**
+   * 执行消除（含连锁）。
+   * 连锁等级 chain：一轮消除后颜色序列接拢、又凑成 ≥runLen 连再次消除时 chain+1。
+   * @param {number} minLen 消除后保底长度（不足时从末尾保留）
+   * @param {number} runLen 触发消除的连续同色节数
+   * @returns {Array} 被移除的节 [{color,x,y,chain}]（x,y 为消除瞬间的世界坐标；
+   *   chain 为该节被消除时的连锁等级，从 1 起，用于连锁倍率计分与逐级放大特效）
+   */
+  Snake.prototype.eliminate = function (minLen, runLen) {
+    var removed = [];
+    var guard = 0;
+    var chain = 0; // 当前连锁等级（每进入一轮消除 +1）
+    var floorHit = false; // 是否触发过「保底」（消除会清空到不足 minLen）
+    while (guard++ < 32) { // 防御性上限，正常连锁远小于此
+      var runs = this.findRuns(runLen);
+      if (!runs.length) break;
+      chain++;
+      var mark = {};
+      runs.forEach(function (r) { r.forEach(function (idx) { mark[idx] = true; }); });
+      var idxs = Object.keys(mark).map(Number).sort(function (a, b) { return b - a; });
+      var removeCount = idxs.length;
+      var floorCandidate = (this.colors.length - removeCount < minLen && removeCount > 0);
+      if (floorCandidate && runLen === cfg.ELIM_RUN) {
+        // 标准 4 连消除触发保底：不再保留旧块，整段消除后随机补砖让游戏继续（新行为）
+        floorHit = true;
+      } else if (floorCandidate) {
+        // 其它情形（如炸弹 2 连消除）保持原保底：从尾部取消标记、保留 minLen 节旧块
+        while (this.colors.length - removeCount < minLen && removeCount > 0) {
+          delete mark[idxs[idxs.length - removeCount]];
+          removeCount--;
+        }
+      }
+      if (!removeCount) break;
+      var next = [];
+      for (var i = 0; i < this.colors.length; i++) {
+        if (mark[i]) {
+          var p = this.segPos[i] || { x: this.x, y: this.y };
+          removed.push({ color: this.colors[i], x: p.x, y: p.y, chain: chain });
+        } else {
+          next.push(this.colors[i]);
+        }
+      }
+      this.colors = next;
+      if (floorHit) break; // 已决定重置，无需继续连锁
+    }
+    if (removed.length) this.computeBody(); // 身体由轨迹派生，消除后自然收缩
+    // 保底触发：整段消除后，随机补满 REFILL_ON_FLOOR 块「已解锁颜色」砖（保留残余的非消除节），让游戏继续
+    if (floorHit) {
+      var pool = (this.colorKeys && this.colorKeys.length) ? this.colorKeys : cfg.COLOR_KEYS;
+      var target = cfg.REFILL_ON_FLOOR;
+      while (this.colors.length < target) {
+        var rc = pool[Math.floor(Math.random() * pool.length)];
+        // 避免补出的块直接与前 3 块凑成 4 连同色（否则下一帧立即再消除，视觉反复清空）
+        var nn = this.colors.length;
+        if (nn >= 3 && this.colors[nn - 1] === rc && this.colors[nn - 2] === rc && this.colors[nn - 3] === rc) {
+          var alt = pool[(pool.indexOf(rc) + 1) % pool.length];
+          if (alt !== rc) rc = alt;
+        }
+        this.colors.push(rc);
+      }
+      this.computeBody();
+    }
+    return removed;
+  };
+
+  CS.Snake = Snake;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/spawner.js ===== */
+'use strict';
+/**
+ * spawner.js — 色块刷新器（v2：世界像素坐标，DOM 无关）
+ *  - 每隔 SPAWN_INTERVAL_MS 检查一次：未被吃掉的色块保留，只在空位补足到目标数量；
+ *  - 目标数量 ≈ 世界面积 / BLOCK_AREA_DIV（90000），并夹在 [BLOCKS_MIN, BLOCKS_MAX]；
+ *  - 生成采用拒绝采样 + 最小间距约束（简化版 Poisson disk）：
+ *      与已有色块距离 ≥ BLOCK_MIN_DIST(140px)、与蛇身距离 ≥ BLOCK_SNAKE_DIST(80px)、
+ *      不压墙（含边界内缩 BLOCK_EDGE_MARGIN）；最多尝试 SPAWN_TRIES(50) 次，失败则本轮跳过；
+ *  - 只从已解锁颜色（unlockedKeys）中刷新。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+  var u = CS.utils;
+
+  function Spawner(walls, snake) {
+    this.walls = walls;
+    this.snake = snake;
+    this.blocks = []; // {x, y, color, phase, kind}（世界坐标）
+    this.timer = 0;
+    this.meteors = [];   // 流星砖块：{x,y,vx,vy,color,ttl,trail,phase}（移动实体）
+    this.meteorTimer = 0;
+    this.others = []; // 其他活蛇数组（多人模式由 multiplayer 挂活引用，刷新时同样避让）
+    this.unlockedKeys = cfg.COLOR_KEYS.slice(); // 默认全部；game 会按本局解锁数覆盖
+    this.specialChance = cfg.ITEM_SPECIAL_CHANCE; // 每帧由 game/mp 按存活时间更新（越后期越高）
+    var area = walls.W * walls.H;
+    this.target = u.clamp(Math.round(area / cfg.BLOCK_AREA_DIV), cfg.BLOCKS_MIN, cfg.BLOCKS_MAX);
+  }
+
+  /** 按权重抽取一个特殊道具 kind（wild/bomb/slow/clear/clear3/rand1-3）；供刷新与阵亡掉落共用 */
+  Spawner.prototype.randomSpecialKind = function () {
+    var w = cfg.ITEM_WEIGHTS, total = 0, k;
+    for (k in w) total += w[k];
+    var r = Math.random() * total;
+    for (k in w) { r -= w[k]; if (r <= 0) return k; }
+    return 'wild';
+  };
+
+  /** 每帧调用；到达刷新间隔时补足色块 */
+  Spawner.prototype.update = function (dt) {
+    this.timer += dt;
+    if (this.timer < cfg.SPAWN_INTERVAL_MS) return;
+    this.timer = 0;
+    var guard = 0;
+    while (this.blocks.length < this.target && guard++ < this.target) {
+      if (!this.spawnOne()) break; // 拒绝采样失败，本轮跳过
+    }
+  };
+
+  /** 立即补足（开局调用一次） */
+  Spawner.prototype.fillNow = function () {
+    var guard = 0;
+    while (this.blocks.length < this.target && guard++ < this.target * 2) {
+      if (!this.spawnOne()) break;
+    }
+  };
+
+  /** 尝试生成一个色块，成功返回 true */
+  Spawner.prototype.spawnOne = function () {
+    var w = this.walls, s = this.snake, m = cfg.BLOCK_EDGE_MARGIN;
+    for (var tries = 0; tries < cfg.SPAWN_TRIES; tries++) {
+      var x = m + Math.random() * (w.W - 2 * m);
+      var y = m + Math.random() * (w.H - 2 * m);
+      // 不压边界墙带（相机已放开余量可见，道具不能叠在上面）
+      var edgePad = cfg.WALL_THICK + cfg.BLOCK_RADIUS + 10;
+      if (x < edgePad || x > w.W - edgePad || y < edgePad || y > w.H - edgePad) continue;
+      if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 22)) continue;       // 不压内部墙（加大余量）
+      if (s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;            // 离蛇 ≥80px
+      var nearOther = false;
+      for (var oi = 0; oi < this.others.length; oi++) {               // 多人：其他活蛇同样避让
+        if (this.others[oi].distTo(x, y) < cfg.BLOCK_SNAKE_DIST) { nearOther = true; break; }
+      }
+      if (nearOther) continue;
+      var ok = true;
+      for (var i = 0; i < this.blocks.length; i++) {
+        if (u.dist(x, y, this.blocks[i].x, this.blocks[i].y) < cfg.BLOCK_MIN_DIST) { ok = false; break; }
+      }
+      if (!ok) continue;                                              // 与已有色块 ≥140px
+      // 决定类型：默认普通色块；按当前 specialChance 改为特殊道具（按权重抽取，越后期概率越高）
+      var kind = 'color';
+      if (Math.random() < this.specialChance) kind = this.randomSpecialKind();
+      // clear / clear3 携带目标颜色（消除该色）；其余特殊道具 color=null
+      var color = null;
+      if (kind === 'color' || kind === 'clear' || kind === 'clear3') {
+        color = this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)];
+      }
+      this.blocks.push({
+        x: x, y: y,
+        kind: kind,
+        color: color,
+        rarity: cfg.ITEM_RARITY[kind] || null, // 稀有度边框用（普通色块为 null）
+        phase: Math.random() * Math.PI * 2 // 脉动相位
+      });
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * 收集被蛇压到的色块（蛇头与身体节圆形重叠都算）。
+   * @returns {Array} 被收集的色块
+   */
+  Spawner.prototype.collectAt = function (snake) {
+    var got = [];
+    var rest = [];
+    for (var i = 0; i < this.blocks.length; i++) {
+      var b = this.blocks[i];
+      if (snake.overlaps(b.x, b.y, cfg.BLOCK_RADIUS)) got.push(b);
+      else rest.push(b);
+    }
+    this.blocks = rest;
+    return got;
+  };
+
+  /**
+   * 阵亡掉落：在 (x,y) 处直接放入一个随机特殊道具（带稀有度边框）。
+   * clear / clear3 随机一个已解锁颜色作为目标色。
+   * @param {number} x,y 世界坐标
+   * @param {string} kind 道具类型（来自 randomSpecialKind）
+   */
+  Spawner.prototype.addDroppedItem = function (x, y, kind) {
+    var color = null;
+    if (kind === 'clear' || kind === 'clear3') {
+      color = this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)];
+    }
+    this.blocks.push({
+      x: x, y: y,
+      kind: kind,
+      color: color,
+      rarity: cfg.ITEM_RARITY[kind] || null,
+      phase: Math.random() * Math.PI * 2
+    });
+  };
+
+  /**
+   * 生成一颗流星砖块：只从上下左右四个正方向之一，平行于地图边、从一侧直飞到对侧。
+   * 出生在对应边缘（屏幕外一点），沿该正方向匀速直线飞向对侧边缘；
+   * 出生位置在蛇附近 ±band 的带内，保证流星会经过玩家区域、有机会命中身体注入中段。
+   */
+  Spawner.prototype.spawnMeteor = function (snake) {
+    var W = this.walls.W, H = this.walls.H;
+    var dirs = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
+    var d = dirs[Math.floor(Math.random() * 4)];
+    var band = 420; // 在蛇附近 ±band 进入，保证流星经过玩家区域
+    var spd = cfg.METEOR_SPEED * (0.5 + Math.random() * 0.8); // 每颗流星速度随机（有的快有的慢）
+    var mx, my, vx, vy;
+    if (d.x !== 0) { // 水平：从左/右边缘进入，朝对侧飞，y 取蛇附近
+      mx = d.x > 0 ? -40 : W + 40;
+      my = u.clamp(snake.y + (Math.random() * 2 - 1) * band, 40, H - 40);
+      vx = d.x * spd; vy = 0;
+    } else { // 垂直：从上/下边缘进入，朝对侧飞，x 取蛇附近
+      mx = u.clamp(snake.x + (Math.random() * 2 - 1) * band, 40, W - 40);
+      my = d.y > 0 ? -40 : H + 40;
+      vx = 0; vy = d.y * spd;
+    }
+    this.meteors.push({
+      x: mx, y: my, vx: vx, vy: vy,
+      color: this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)],
+      ttl: cfg.METEOR_TTL_MS,
+      trail: [],
+      phase: Math.random() * Math.PI * 2
+    });
+  };
+
+  /**
+   * 每帧更新流星：直线匀速移动（无归向）+ 碰撞检测。
+   * 命中任意身体节 → 返回注入事件 [{idx, x, y, color}]，由 game 调用 snake.insertAt 注入中段。
+   * 未命中且出界/超时则消失。
+   * @returns {Array} 本帧发生的注入事件
+   */
+  Spawner.prototype.updateMeteors = function (dtMs, snake) {
+    this.meteorTimer -= dtMs;
+    if (this.meteorTimer <= 0 && this.meteors.length < cfg.METEOR_MAX) {
+      this.meteorTimer = cfg.METEOR_INTERVAL_MS;
+      this.spawnMeteor(snake);
+    }
+    var events = [], dt = dtMs / 1000;
+    for (var i = this.meteors.length - 1; i >= 0; i--) {
+      var m = this.meteors[i];
+      m.trail.push({ x: m.x, y: m.y });
+      if (m.trail.length > 6) m.trail.shift();
+      m.x += m.vx * dt; m.y += m.vy * dt;
+      m.ttl -= dtMs;
+      var hit = snake.segIndexAt(m.x, m.y, cfg.METEOR_HIT_R);
+      if (hit >= 0) {
+        events.push({ idx: hit, x: m.x, y: m.y, color: m.color });
+        this.meteors.splice(i, 1);
+        continue;
+      }
+      if (m.ttl <= 0 || m.x < -80 || m.y < -80 || m.x > this.walls.W + 80 || m.y > this.walls.H + 80) {
+        this.meteors.splice(i, 1);
+      }
+    }
+    return events;
+  };
+
+  CS.Spawner = Spawner;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/particles.js ===== */
+'use strict';
+/**
+ * particles.js — 消除特效：蜡笔屑粒子 + 手绘星形闪光 + 连锁文字（DOM 无关）
+ *  - burst/flash 支持 scale 参数：连锁等级越高，碎块/星形越大越多（逐级放大）；
+ *  - chainText：手绘风「N连锁！」文字，上飘、短暂停留后淡出；
+ *  - 粒子存活约 0.4 秒（文字 1.0 秒），由 renderer 负责绘制。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+
+  function Particles() {
+    this.list = [];
+  }
+
+  /**
+   * 蜡笔屑爆发：从 (x,y) 弹射 n 个彩色小碎块。
+   * @param {string} colorHex 碎块颜色（蜡笔色）
+   * @param {number} n 碎块数量（调用方已按连锁倍率放大）
+   * @param {number} scale 尺寸/速度倍率（连锁逐级放大用，默认 1）
+   */
+  Particles.prototype.burst = function (x, y, colorHex, n, scale) {
+    n = n || 6;
+    scale = scale || 1;
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var sp = (60 + Math.random() * 140) * scale; // px/s
+      this.list.push({
+        type: 'crumb',
+        x: x, y: y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp - 60 * scale, // 略向上飘
+        rot: Math.random() * Math.PI,
+        vr: (Math.random() - 0.5) * 12,
+        size: (2.5 + Math.random() * 3.5) * scale,
+        color: colorHex,
+        life: 0.35 + Math.random() * 0.15,
+        maxLife: 0.5
+      });
+    }
+  };
+
+  /**
+   * 星形闪光。
+   * @param {number} scale 星形尺寸倍率（连锁逐级放大用，默认 1）
+   * @param {number} count 星形数量（连锁越高越多，围绕消除点散开）
+   */
+  Particles.prototype.flash = function (x, y, colorHex, scale, count) {
+    scale = scale || 1;
+    count = count || 1;
+    for (var i = 0; i < count; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var d = i === 0 ? 0 : Math.random() * 20 * scale; // 第 1 颗在中心，其余散开
+      var life = 0.4 + i * 0.07; // 多颗时依次晚灭，层次分明
+      this.list.push({
+        type: 'star',
+        x: x + Math.cos(a) * d,
+        y: y + Math.sin(a) * d,
+        color: colorHex,
+        scale: scale * (0.7 + Math.random() * 0.5),
+        life: life,
+        maxLife: life
+      });
+    }
+  };
+
+  /**
+   * 消除高亮环：在被消除节的位置画一个扩张圆环 + 中心 ✕，标出「哪些节被消掉了」。
+   * 尤其针对非连续消除（如消色/随机消除散落各处的节），让玩家一眼看清被消除位置。
+   * @param {number} scale 尺寸倍率（连锁/炸弹逐级放大）
+   */
+  Particles.prototype.ring = function (x, y, colorHex, scale) {
+    this.list.push({
+      type: 'ring',
+      x: x, y: y,
+      color: colorHex,
+      scale: scale || 1,
+      life: 0.55,
+      maxLife: 0.55
+    });
+  };
+
+  /**
+   * 连锁文字：「N连锁！」上飘 + 短暂停留淡出（手绘风，描边由 renderer 画）。
+   * @param {number} size 字号（px，随连锁等级增大）
+   */
+  Particles.prototype.chainText = function (x, y, text, size) {
+    this.list.push({
+      type: 'text',
+      x: x, y: y,
+      vy: -30, // 上飘 px/s
+      text: text,
+      size: size,
+      life: 1.0,
+      maxLife: 1.0
+    });
+  };
+
+  /**
+   * 牵引线：从身体接触点 (x1,y1) 拉到蛇头 (x2,y2)，表达「砖块被吃到头部」的咬合力道。
+   * 仅短暂存在（0.32s），由 renderer 画成一条带箭头的粗线。
+   */
+  Particles.prototype.streak = function (x1, y1, x2, y2, colorHex) {
+    this.list.push({
+      type: 'streak',
+      x1: x1, y1: y1, x2: x2, y2: y2,
+      color: colorHex,
+      life: 0.32,
+      maxLife: 0.32
+    });
+  };
+
+  Particles.prototype.update = function (dtMs) {
+    var dt = dtMs / 1000;
+    var next = [];
+    for (var i = 0; i < this.list.length; i++) {
+      var p = this.list[i];
+      p.life -= dt;
+      if (p.life <= 0) continue;
+      if (p.type === 'crumb') {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 380 * dt; // 轻重力
+        p.rot += p.vr * dt;
+      } else if (p.type === 'text') {
+        p.y += p.vy * dt; // 匀速上飘
+        p.vy *= 0.98;
+      }
+      next.push(p);
+    }
+    this.list = next;
+  };
+
+  Particles.prototype.clear = function () { this.list = []; };
+
+  CS.Particles = Particles;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/joystick.js ===== */
+'use strict';
+/**
+ * joystick.js — 虚拟摇杆 + 键盘输入（浏览器版 v2：输出目标角度）
+ *  - 摇杆：固定底座浮在棋盘区左下角，半透明手绘风；
+ *    触屏 touchstart/touchmove/touchend 与鼠标 mousedown/mousemove/mouseup 均可控制
+ *    （事件转发在 main.js，鼠标 id 固定为 'mouse'）；
+ *    向量方向即目标角（弧度，不再量化 4 向），死区保留。
+ *  - 键盘：方向键 / WASD，按住期间有效；支持组合键（如 W+D = 右上），即 8 方向目标角；
+ *    键盘优先于摇杆。
+ *  - node 环境下构造安全（无 window 时跳过键盘绑定，keysDown/angle 可被测试直接注入）。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+
+  var DEAD_ZONE = 16;   // 死区半径（px）：触点距底座中心小于此不产生目标角
+  var KNOB_MAX = 40;    // 摇杆头最大偏移（px）
+
+  function mapKey(k) {
+    if (!k) return null;
+    k = String(k).toLowerCase();
+    if (k === 'arrowup' || k === 'w') return { x: 0, y: -1 };
+    if (k === 'arrowdown' || k === 's') return { x: 0, y: 1 };
+    if (k === 'arrowleft' || k === 'a') return { x: -1, y: 0 };
+    if (k === 'arrowright' || k === 'd') return { x: 1, y: 0 };
+    return null;
+  }
+
+  function Joystick() {
+    this.active = false;
+    this.touchId = null;
+    this.baseX = 0; this.baseY = 0;
+    this.radius = 52;         // 底座半径（渲染用，由 game.syncJoystick 按布局调整）
+    this.knobX = 0; this.knobY = 0;
+    this.angle = null;        // 摇杆当前目标角（弧度，死区内保持上一值）
+    this.keysDown = {};       // 键盘按住的方向键 key -> 单位向量
+    this.bindKeyboard();
+  }
+
+  Joystick.prototype.bindKeyboard = function () {
+    if (typeof root.addEventListener !== 'function') return; // node 环境跳过
+    var self = this;
+    root.addEventListener('keydown', function (e) {
+      var d = mapKey(e.key);
+      if (d) {
+        self.keysDown[String(e.key).toLowerCase()] = d;
+        if (e.preventDefault) e.preventDefault(); // 阻止方向键滚动页面
+      }
+    });
+    root.addEventListener('keyup', function (e) {
+      delete self.keysDown[String(e.key).toLowerCase()];
+    });
+    root.addEventListener('blur', function () { self.keysDown = {}; });
+  };
+
+  /** 设置固定底座位置（窗口 resize / 开局布局变化时调用；激活中不打断） */
+  Joystick.prototype.setBase = function (x, y, r) {
+    if (typeof r === 'number') this.radius = r;
+    if (this.active) return;
+    this.baseX = x; this.baseY = y;
+    this.knobX = x; this.knobY = y;
+  };
+
+  Joystick.prototype.onTouchStart = function (x, y, id) {
+    if (this.active) return false;
+    this.active = true;
+    this.touchId = id;
+    this.updateKnob(x, y);
+    return true;
+  };
+
+  Joystick.prototype.onTouchMove = function (x, y, id) {
+    if (!this.active || id !== this.touchId) return;
+    this.updateKnob(x, y);
+  };
+
+  /** 触点 → 摇杆头位置 + 自由方向目标角（相对固定底座，保留死区） */
+  Joystick.prototype.updateKnob = function (x, y) {
+    var dx = x - this.baseX, dy = y - this.baseY;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var kx = dx, ky = dy;
+    if (dist > KNOB_MAX) { // 摇杆头限制在最大半径内
+      kx = dx / dist * KNOB_MAX;
+      ky = dy / dist * KNOB_MAX;
+    }
+    this.knobX = this.baseX + kx;
+    this.knobY = this.baseY + ky;
+    if (dist >= DEAD_ZONE) {
+      this.angle = Math.atan2(dy, dx); // 向量方向即目标角，不量化
+    }
+  };
+
+  Joystick.prototype.onTouchEnd = function (id) {
+    if (!this.active || id !== this.touchId) return;
+    this.active = false;
+    this.touchId = null;
+    this.angle = null;
+    this.knobX = this.baseX;
+    this.knobY = this.baseY;
+  };
+
+  /** 键盘组合向量（支持 8 方向）：无按键返回 null */
+  Joystick.prototype.keyVector = function () {
+    var x = 0, y = 0, n = 0;
+    for (var k in this.keysDown) {
+      x += this.keysDown[k].x; y += this.keysDown[k].y; n++;
+    }
+    if (!n || (x === 0 && y === 0)) return null; // 对按抵消视为无输入
+    return { x: x, y: y };
+  };
+
+  /** 当前期望目标角（弧度）：键盘优先（方便调试与桌面端），其次摇杆；无输入返回 null */
+  Joystick.prototype.currentAngle = function () {
+    var kv = this.keyVector();
+    if (kv) return Math.atan2(kv.y, kv.x);
+    return this.angle;
+  };
+
+  CS.Joystick = Joystick;
+  CS.joystick = { DEAD_ZONE: DEAD_ZONE, KNOB_MAX: KNOB_MAX, mapKey: mapKey };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/audio.js ===== */
+'use strict';
+/**
+ * audio.js — 音效与背景音乐（纯 Web Audio API 振荡器合成，零外部文件）
+ *  - 所有声音由 OscillatorNode + GainNode + DynamicsCompressorNode 实时合成；
+ *  - 支持 master 音量、静音开关（保留 UI 入口）；
+ *  - BGM 为低频柔和 drone 循环，不抢戏。
+ *
+ * 使用方式：CS.audio.playEat() / CS.audio.playSpecial() / CS.audio.playElim() /
+ *          CS.audio.playWall() / CS.audio.startBgm() / CS.audio.stopBgm()
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+
+  /** @type {AudioContext|null} 延迟创建（需用户手势触发） */
+  var ctx = null;
+  var masterGain = null;
+  var compressor = null;
+  var bgmOsc = null;       // BGM 主振荡器
+  var bgmGain = null;      // BGM 独立音量
+  var bgmLfo = null;       // BGM 低频调制
+  var bgmRunning = false;
+
+  /**
+   * 确保 AudioContext 已创建（首次调用时惰性初始化）。
+   * 浏览器策略要求 AudioContext 必须在用户手势（click/touch）回调中 resume/创建，
+   * 否则会被挂起。本函数在每次 playXxx 中自动调用。
+   */
+  function ensureCtx() {
+    if (!ctx) {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // 主音量
+      masterGain = ctx.createGain();
+      masterGain.gain.value = 0.6;
+      // 压缩器：防止爆音削波
+      compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -20;
+      compressor.knee.value = 30;
+      compressor.ratio.value = 12;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.25;
+      masterGain.connect(compressor);
+      compressor.connect(ctx.destination);
+    }
+    // 自动恢复（处理浏览器自动挂起）
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }
+
+  /** 创建一个带衰减包络的振荡器（一次性短音） */
+  function playTone(freq, duration, type, vol, detune) {
+    var c = ensureCtx();
+    if (!c) return;
+    var o = c.createOscillator();
+    var g = c.createGain();
+    o.type = type || 'sine';
+    o.frequency.value = freq;
+    if (detune) o.detune.value = detune;
+    g.gain.setValueAtTime(vol, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration);
+    o.connect(g); g.connect(masterGain);
+    o.start(c.currentTime);
+    o.stop(c.currentTime + duration + 0.05);
+  }
+
+  /** 创建噪声爆发（用于消除/爆炸类音效） */
+  function playNoise(duration, vol) {
+    var c = ensureCtx();
+    if (!c) return;
+    var bufferSize = Math.round(c.sampleRate * duration);
+    var buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+    var data = buffer.getChannelData(0);
+    for (var i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.15));
+    }
+    var src = c.createBufferSource();
+    src.buffer = buffer;
+    var g = c.createGain();
+    g.gain.value = vol;
+    src.connect(g); g.connect(masterGain);
+    src.start(c.currentTime);
+  }
+
+  // ---- 公开 API ----
+
+  var Audio = {
+    muted: false,
+
+    /** 吃到普通色块：轻快短促 "叮" */
+    playEat: function () { if (this.muted) return; playTone(880, 0.08, 'sine', 0.22); },
+
+    /** 吃到特殊道具：上扬双音 "叮~叮" */
+    playSpecial: function () { if (this.muted) return; playTone(660, 0.1, 'sine', 0.2); setTimeout(function () { playTone(990, 0.14, 'sine', 0.18); }, 80); },
+
+    /** 消除特效：噪声爆发 + 低频 "噗" */
+    playElim: function () { if (this.muted) return; playNoise(0.18, 0.2); playTone(180, 0.2, 'triangle', 0.18); },
+
+    /** 连锁消除（chain≥2）：更响亮 + 上扬音 */
+    playChain: function (level) { if (this.muted) return; var lv = level || 2; playTone(440 + lv * 120, 0.2, 'sine', 0.15 + lv * 0.04); },
+
+    /** 撞墙 / 游戏结束：低沉 "咚" */
+    playWall: function () { if (this.muted) return; playTone(100, 0.35, 'triangle', 0.3); playTone(70, 0.4, 'sine', 0.2); },
+
+    /** 解锁新颜色：三连上升音阶 */
+    playUnlock: function () { if (this.muted) return; playTone(523, 0.12, 'sine', 0.18); setTimeout(function () { playTone(659, 0.12, 'sine', 0.18); }, 100); setTimeout(function () { playTone(784, 0.18, 'sine', 0.2); }, 200); },
+
+    /** 按钮点击：极轻微 "嗒" */
+    playClick: function () { if (this.muted) return; playTone(1200, 0.04, 'sine', 0.08); },
+
+    /**
+     * 启动背景音乐：柔和低频 drone（两个略有差频的振荡器产生拍音效果）。
+     * 循环播放，可通过 stopBgm() 停止。
+     */
+    startBgm: function () {
+      if (this.muted || bgmRunning) return;
+      var c = ensureCtx(); if (!c) return;
+      bgmRunning = true;
+      // 主音：低频正弦
+      bgmOsc = c.createOscillator();
+      bgmOsc.type = 'sine';
+      bgmOsc.frequency.value = 75; // A2 附近
+      // LFO 轻微调制音高（±3Hz），让 drone 有呼吸感
+      bgmLfo = c.createOscillator();
+      bgmLfo.type = 'sine';
+      bgmLfo.frequency.value = 0.15; // 非常慢的呼吸
+      var lfoGain = c.createGain();
+      lfoGain.gain.value = 3;
+      bgmLfo.connect(lfoGain); lfoGain.connect(bgmOsc.frequency);
+      // 音量（很轻，不抢戏）
+      bgmGain = c.createGain();
+      bgmGain.gain.value = 0.06;
+      bgmOsc.connect(bgmGain); bgmGain.connect(masterGain);
+      bgmOsc.start(); bgmLfo.start();
+    },
+
+    /** 停止背景音乐 */
+    stopBgm: function () {
+      if (!bgmRunning || !bgmOsc) return;
+      try { bgmOsc.stop(); bgmLfo.stop(); } catch (e) { /* 可能已 stop */ }
+      bgmOsc = null; bgmLfo = null; bgmGain = null; bgmRunning = false;
+    },
+
+    /** 设置主音量 (0~1) */
+    setVolume: function (v) {
+      if (masterGain) masterGain.gain.value = Math.max(0, Math.min(1, v));
+    },
+
+    /** 切换静音 */
+    toggleMute: function () {
+      this.muted = !this.muted;
+      if (this.muted) this.stopBgm();
+      else this.startBgm();
+      return this.muted;
+    }
+  };
+
+  CS.audio = Audio;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/ai.js ===== */
+'use strict';
+/**
+ * ai.js — 多人对战 AI 决策（加权转向，DOM 无关）
+ * 每帧为一条 AI 蛇产出目标角（弧度）：
+ *  在 AI_DIRS 个候选方向（绕当前朝向均匀采样一整圈）上打分，取最高分：
+ *   ① 寻食：感知范围内色块按「方向对齐度 × 距离衰减」加分，与头部同色 ×AI_SAME_COLOR_BONUS
+ *      （凑 4 连的动机），整体权重按贪食性格 greed 伸缩；
+ *   ② 避墙：沿候选方向取近（≈1 身位）/ 远（≈2 身位）两个前景点，撞边界/内部墙则罚分
+ *      （近点重罚 ≈ 否决，远点轻罚 = 提前避让），探测距离按谨慎性格 caution 伸缩；
+ *   ③ 避蛇：近前景点附近出现其他蛇（含玩家）身体节则按接近程度罚分；
+ *   ④ 惯性 + 游走：保持当前朝向有小幅加分（防抖动），叠加小随机噪声（无威胁时漂移）。
+ * 公平性：AI 只输出目标角，转向速率与玩家一样由 Snake.update 的 TURN_RATE 钳制。
+ * 输出保证为有限角度（所有打分项有限，候选方向有限），不会出现 NaN。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+  var u = CS.utils;
+
+  /**
+   * @param {Snake} snake 决策对象（本人蛇）
+   * @param {object} env { walls, blocks, snakes } 环境快照引用（snakes 含自己与所有活蛇）
+   * @param {object} persona 性格参数 { greed: 0.6~1.4 贪食, caution: 0.6~1.4 谨慎 }
+   * @returns {number} 目标角（弧度，(-PI, PI] 内的有限值）
+   */
+  function decide(snake, env, persona) {
+    persona = persona || {};
+    var greed = persona.greed || 1;
+    var caution = persona.caution || 1;
+    var walls = env.walls;
+    var blocks = env.blocks || [];
+    var snakes = env.snakes || [];
+    var headColor = snake.headColor();
+    var colors = snake.colors;
+
+    var probeN = cfg.AI_PROBE_NEAR * (0.8 + 0.4 * caution); // 谨慎者近景看得更远
+    var probeF = cfg.AI_PROBE_FAR * caution;                 // 远景观测（提前避让 + 自卷检测）
+    var bodyR = cfg.AI_SNAKE_AVOID * (0.7 + 0.5 * caution);  // 避其他蛇身半径
+    var bodyR2 = bodyR * bodyR;
+    var selfR = cfg.AI_SELF_AVOID * (0.7 + 0.4 * caution);   // 避自身蛇身半径
+    var selfR2 = selfR * selfR;
+    var range = cfg.AI_FOOD_RANGE * (0.7 + 0.5 * greed);     // 贪食者感知更大
+    var foodW = cfg.AI_FOOD_WEIGHT * greed;
+
+    var best = snake.angle, bestScore = -Infinity;
+    for (var k = 0; k < cfg.AI_DIRS; k++) {
+      var cand = snake.angle + (k / cfg.AI_DIRS) * Math.PI * 2;
+      var dx = Math.cos(cand), dy = Math.sin(cand);
+
+      // 惯性（k=0 即当前朝向，得分最高）+ 游走噪声
+      var score = cfg.AI_INERTIA * Math.cos(u.normAngle(cand - snake.angle));
+      score += (Math.random() - 0.5) * cfg.AI_WANDER;
+
+      // ① 寻食：对齐度 × 距离衰减；同色加成；「差 1~2 节即凑成 4 连消除」额外加权（更会规划消除）
+      for (var i = 0; i < blocks.length; i++) {
+        var b = blocks[i];
+        var bx = b.x - snake.x, by = b.y - snake.y;
+        var d = Math.sqrt(bx * bx + by * by);
+        if (d > range || d < 1e-6) continue;
+        var align = (bx / d) * dx + (by / d) * dy; // cos(候选方向, 指向色块方向)
+        if (align <= 0) continue;
+        var fall = 1 - d / range;
+        var w = foodW * align * fall;
+        if (b.color === headColor) w *= cfg.AI_SAME_COLOR_BONUS;
+        // 头段同色连续长度（含 wild）：吃到该色后能凑成 ≥3 连 → 离 4 连消除仅差 1 节，强烈偏好
+        var run = 0;
+        for (var r = 0; r < colors.length; r++) {
+          var c = colors[r];
+          if (c === b.color || c === 'wild') run++; else break;
+        }
+        if (run >= 2) w += foodW * cfg.AI_RUN_BONUS * align * fall * (run >= 3 ? 1.6 : 1);
+        score += w;
+      }
+
+      // ② 避墙：近点重罚（几乎否决），近点安全才看远点（提前避让）
+      var pnx = snake.x + dx * probeN, pny = snake.y + dy * probeN;
+      var pfx = snake.x + dx * probeF, pfy = snake.y + dy * probeF; // 远点（自卷检测用）
+      if (walls.hitsCircle(pnx, pny, cfg.HEAD_HIT_RADIUS + 4)) {
+        score -= cfg.AI_WALL_PENALTY;
+      } else if (walls.hitsCircle(pfx, pfy, cfg.HEAD_HIT_RADIUS + 4)) {
+        score -= cfg.AI_WALL_PENALTY_FAR;
+      }
+
+      // ③ 避蛇身 / ④ 头对头规避 / ⑤ 自卷规避（统一累加惩罚，超阈值提前退出省性能）
+      var pen = 0;
+      for (i = 0; i < snakes.length; i++) {
+        var o = snakes[i];
+        var isSelf = (o === snake);
+        var sp = o.segPos;
+        for (var j = 0; j < sp.length; j++) {
+          var sx = sp[j].x, sy = sp[j].y;
+          if (isSelf) {
+            if (j < 3) continue; // 头/脖子/次节恒在身后，跳过避免误判
+            var ddx2 = sx - pfx, ddy2 = sy - pfy; // 自卷用远点：前方路径撞上自身远处身体才危险
+            var dd2s = ddx2 * ddx2 + ddy2 * ddy2;
+            if (dd2s < selfR2) {
+              pen += cfg.AI_SELF_PENALTY * (1 - Math.sqrt(dd2s) / selfR) * 0.6;
+            }
+          } else {
+            var ddx = sx - pnx, ddy = sy - pny;
+            var dd2 = ddx * ddx + ddy * ddy;
+            if (dd2 < bodyR2) {
+              var nd = Math.sqrt(dd2);
+              pen += cfg.AI_SNAKE_PENALTY * (1 - nd / bodyR);
+              if (j === 0 && nd < bodyR) pen += cfg.AI_HEADON_PENALTY * (1 - nd / bodyR); // 头对头最危险
+            }
+          }
+        }
+        if (pen > 300) break; // 已经足够危险，提前退出省性能
+      }
+      if (pen > 0) score -= Math.min(600, pen);
+
+      if (score > bestScore) { bestScore = score; best = cand; }
+    }
+    return u.normAngle(best);
+  }
+
+  CS.AI = { decide: decide };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/multiplayer.js ===== */
+'use strict';
+/**
+ * multiplayer.js — 多人对战模式编排（玩家 1 名 + AI 蛇，DOM 无关）
+ * 职责：
+ *  - 蛇管理：玩家 1 名 + AI 蛇（v2.8.7 起**动态增长**：开局 MP_AI_START_COUNT 条（默认 3），
+ *    （独立 Snake 实例、昵称、基础速度档位、性格参数 greed/caution、击杀数、消除分、历史最长节数）；
+ *  - 淘汰：头撞墙/边界 → 淘汰；头撞其他蛇身体节 → 淘汰（身体主人记 1 击杀）；
+ *    头对头相撞 → 两条都淘汰（简单公平，不记击杀）；不做蛇身自碰（沿用现有设计）；
+ *  - 咬断（v2.2，头撞身附加效果）：A 头撞 B 身体时，B 被咬中那一节（segPos[1..] 中
+ *    离 A 头心最近的「颜色节」，v2.3 起排除末尾恒在的尾巴节）从颜色序列移除
+ *    （短一节，身体由轨迹自然收拢）；尾巴节仍算身体——头撞上尾巴照样淘汰撞者，
+ *    只是不产生咬断；被咬后 B 节数
+ *    低于 MP_BITE_MIN_LENGTH → B 直接淘汰（尸体掉落、计入 A 的击杀）；被咬移除后
+ *    立即按正常规则检查消除（凑成 ≥4 连同色照常连锁/倍率计分，分数记 B）；
+ *    被咬处迸小粒子 + B 短暂闪白/抖动（MP_BITE_FLASH_MS），AI 与玩家一视同仁；
+ *  - 尸体掉落：被淘汰蛇的颜色序列按节在原地散落成色块（每隔 MP_CORPSE_STRIDE 节掉 1 个，
+ *    起点随机 → ≈50% 的节变成可吃色块），多人模式的主要资源循环；
+ *  - 补充：AI 淘汰后延迟 MP_RESPAWN_MIN_MS~MP_RESPAWN_MAX_MS 在世界边缘、远离其他蛇的
+ *    安全位置重生（初始 MP_START_LENGTH 节），维持编制；玩家不重生（由 game 进结算）；
+ *  - 吃色/消除：所有蛇共用同一套 grow / 4 连消除连锁逻辑（Snake 类原样复用）；
+ *    连锁倍率计分与特效与单人模式一致（消除分只计入玩家成绩，AI 的 elimScore 仅供调试）；
+ *  - 速度：所有蛇按 基础速度 + SPEED_LEN_COEF×节数 + ENDLESS_SPEEDUP_PER_SEC×存活秒 动态加速，
+ *    封顶 SPEED_MAX（AI 基础速度在 MP_AI_SPEED_MIN~MAX 随机，玩家用 SNAKE_SPEED）。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+  var u = CS.utils;
+  var Snake = CS.Snake;
+
+  var nextId = 1;
+
+  /** 一条参赛蛇的档案（玩家或 AI） */
+  function Entry(snake, name, isPlayer) {
+    this.id = nextId++;
+    this.snake = snake;
+    this.name = name;
+    this.isPlayer = !!isPlayer;
+    this.alive = true;
+    this.kills = 0;        // 击杀数：其他蛇撞到我方身体节而死（含咬断保底淘汰）
+    this.elimScore = 0;    // 消除分（连锁倍率，规则同单人）
+    this.elimTotal = 0;    // 累计消除方块：本局通过消除移除的总节数（含连锁、含被咬触发）
+    this.bittenUntil = 0;  // 被咬闪白/抖动截止时刻（mp.timeMs，0 = 无反馈）
+    this.slowUntil = 0;    // 减速道具到期时刻（mp.timeMs，0 = 未生效）
+    this.maxLen = snake.length(); // 历史最长节数（结算最佳成绩用）
+    this.base = cfg.SNAKE_SPEED;  // 基础速度档位（AI 在 spawnBot 随机覆盖）
+    this.greed = 1;        // 性格：贪食权重（AI 决策用）
+    this.caution = 1;      // 性格：谨慎权重（避障/避蛇距离）
+    this.diedAt = 0;
+  }
+
+  /**
+   * @param {Game} game 宿主游戏实例（读 walls/spawner/particles/unlockedKeys/snake）
+   */
+  function Multiplayer(game) {
+    this.game = game;
+    this.walls = game.walls;
+    this.spawner = game.spawner;
+    this.particles = game.particles;
+    this.timeMs = 0;
+    this.playerEntry = null;
+    this.bots = [];          // 全部 AI Entry（含已淘汰的，死亡 FX 引用）
+    this.botSnakes = [];     // 活体 AI 蛇数组（活引用，交给 spawner.others 做刷新避让）
+    this.respawnQueue = [];  // [{at}] 待重生时刻表
+    this.usedNames = {};     // 场上已占用昵称（防重名）
+    this.respawned = 0;      // 累计重生次数（测试/统计）
+  }
+
+  // ---------------- 编制管理 ----------------
+
+  /** 从昵称池取一个场上未占用的名字（池子耗尽则加序号兜底） */
+  Multiplayer.prototype.pickName = function () {
+    var pool = cfg.AI_NICKNAMES;
+    for (var t = 0; t < 40; t++) {
+      var n = pool[Math.floor(Math.random() * pool.length)];
+      if (!this.usedNames[n]) { this.usedNames[n] = true; return n; }
+    }
+    var fallback = '无名氏' + (nextId % 100);
+    this.usedNames[fallback] = true;
+    return fallback;
+  };
+
+  /** 初始化：玩家 Entry（包裹 game.snake）+ 补足 AI 编制 */
+  Multiplayer.prototype.setup = function () {
+    this.playerEntry = new Entry(this.game.snake, '我', true);
+    // 开局只生成初始数量的 AI（后续随时间增长）
+    var startCount = cfg.MP_AI_START_COUNT || cfg.MP_AI_COUNT;
+    for (var i = 0; i < startCount; i++) this.spawnBot(0); // 早期 AI，智力普通
+    this.spawner.others = this.botSnakes; // 活引用：重生/淘汰自动反映到刷新避让
+  };
+
+  /** 全部 Entry（玩家在前，含已淘汰） */
+  Multiplayer.prototype.allEntries = function () {
+    var arr = [];
+    if (this.playerEntry) arr.push(this.playerEntry);
+    return arr.concat(this.bots);
+  };
+
+  /** 全部活蛇的 Snake 实例（AI 决策 / 出生避让用） */
+  Multiplayer.prototype.aliveSnakes = function () {
+    var es = this.allEntries(), arr = [];
+    for (var i = 0; i < es.length; i++) if (es[i].alive) arr.push(es[i].snake);
+    return arr;
+  };
+
+  Multiplayer.prototype.aliveBotCount = function () {
+    var n = 0;
+    for (var i = 0; i < this.bots.length; i++) if (this.bots[i].alive) n++;
+    return n;
+  };
+
+  /**
+   * 根据存活时间计算当前应有的 AI 数量（线性增长：从 MP_AI_START_COUNT 到 MP_AI_MAX_COUNT）。
+   * @param {number} surviveSec 存活秒数
+   * @returns {number} 当前目标 AI 数量
+   */
+  Multiplayer.prototype.targetAiCount = function (surviveSec) {
+    var start = cfg.MP_AI_START_COUNT || 3;
+    var max = cfg.MP_AI_MAX_COUNT || 14;
+    var interval = cfg.MP_AI_GROW_INTERVAL_SEC || 25;
+    // 每过 interval 秒 +1，封顶 max
+    var count = start + Math.floor(surviveSec / interval);
+    return Math.min(max, Math.max(start, count));
+  };
+
+  /** 当前智力等级（0~1，随时间从 0 渐变到 1） */
+  Multiplayer.prototype.currentSmartness = function () {
+    var sec = this.timeMs / 1000;
+    var start = cfg.MP_AI_START_COUNT || 3;
+    var max = cfg.MP_AI_MAX_COUNT || 14;
+    var interval = cfg.MP_AI_GROW_INTERVAL_SEC || 25;
+    // 智力等级 = 已增长的步数 / 总增长步数
+    var totalSteps = max - start;
+    if (totalSteps <= 0) return 1;
+    var grown = Math.min(totalSteps, Math.floor(sec / interval));
+    return grown / totalSteps; // 0 → 1
+  };
+
+  /**
+   * 在世界边缘带（距边界 MP_SPAWN_EDGE_MIN~MAX px）找一个远离其他蛇的出生点。
+   * 拒绝采样最多 60 次，取「与其他蛇最小距离」最大的候选；达到期望净距提前收工。
+   */
+  Multiplayer.prototype.findSpawn = function () {
+    var w = this.walls;
+    var best = null, bestD = -1;
+    var snakes = this.aliveSnakes();
+    for (var t = 0; t < 60; t++) {
+      var inset = cfg.MP_SPAWN_EDGE_MIN + Math.random() * (cfg.MP_SPAWN_EDGE_MAX - cfg.MP_SPAWN_EDGE_MIN);
+      var side = Math.floor(Math.random() * 4);
+      var x, y;
+      if (side === 0) { x = inset; y = inset + Math.random() * Math.max(1, w.H - 2 * inset); }
+      else if (side === 1) { x = w.W - inset; y = inset + Math.random() * Math.max(1, w.H - 2 * inset); }
+      else if (side === 2) { y = inset; x = inset + Math.random() * Math.max(1, w.W - 2 * inset); }
+      else { y = w.H - inset; x = inset + Math.random() * Math.max(1, w.W - 2 * inset); }
+      if (w.pointInWall(x, y, cfg.SEG_RADIUS + 30)) continue; // 不压墙（含安全余量）
+      var dmin = Infinity;
+      for (var i = 0; i < snakes.length; i++) {
+        var d = snakes[i].distTo(x, y);
+        if (d < dmin) dmin = d;
+      }
+      if (snakes.length === 0) dmin = Infinity;
+      if (dmin > bestD) { bestD = dmin; best = { x: x, y: y }; }
+      if (dmin >= cfg.MP_SPAWN_CLEAR + 200) break; // 足够安全，提前收工
+    }
+    // 兜底：世界中心（出生安全区保证无墙）
+    return best || { x: w.W / 2, y: w.H / 2 };
+  };
+
+  /**
+   * 生成一条 AI 蛇（边缘安全位、朝向场心、随机昵称/速度档位/性格）。
+   * @param {number} smartness 智力等级 0~1（0=开局普通AI，1=后期聪明AI；越高越谨慎、速度越快）
+   */
+  Multiplayer.prototype.spawnBot = function (smartness) {
+    var pos = this.findSpawn();
+    var angle = Math.atan2(this.walls.H / 2 - pos.y, this.walls.W / 2 - pos.x);
+    var snake = new Snake(pos.x, pos.y, cfg.MP_START_LENGTH, angle, this.game.unlockedKeys);
+    var e = new Entry(snake, this.pickName(), false);
+
+    // 基础速度：后期 AI 略快（给玩家更大压力）
+    var speedRange = cfg.MP_AI_SPEED_MAX - cfg.MP_AI_SPEED_MIN;
+    e.base = cfg.MP_AI_SPEED_MIN + Math.random() * speedRange * (0.7 + smartness * 0.5);
+
+    // 性格参数：早期 AI 随机性大（可能很贪或很怂），后期 AI 更均衡聪明
+    if (smartness < 0.3) {
+      // 早期：极端随机（有的很莽有的很胆小）
+      e.greed = 0.4 + Math.random() * 1.2;    // 0.4~1.6
+      e.caution = 0.4 + Math.random() * 1.2;   // 0.4~1.6
+    } else {
+      // 后期：更聪明（适中偏高贪食 + 高谨慎 = 会吃但不容易送死）
+      e.greed = 0.8 + Math.random() * 0.5;     // 0.8~1.3
+      e.caution = 0.9 + Math.random() * 0.5;   // 0.9~1.4
+    }
+
+    this.bots.push(e);
+    this.botSnakes.push(snake);
+    return e;
+  };
+
+  // ---------------- 淘汰与尸体 ----------------
+
+  /**
+   * 尸体掉落：颜色序列每隔 MP_CORPSE_STRIDE 节掉 1 个色块（起点随机 0/1 → ≈50% 节）。
+   * 掉落的色块直接进入 spawner.blocks（资源循环），不受稀疏刷新间距约束。
+   * @returns {number} 实际掉落的色块数
+   */
+  Multiplayer.prototype.dropCorpse = function (e) {
+    var s = e.snake;
+    var stride = Math.max(1, cfg.MP_CORPSE_STRIDE);
+    var offset = Math.floor(Math.random() * stride);
+    var added = 0;
+    for (var i = offset; i < s.colors.length; i += stride) {
+      var p = s.segPos[i] || { x: s.x, y: s.y };
+      this.spawner.blocks.push({
+        x: p.x, y: p.y,
+        color: s.colors[i],
+        phase: Math.random() * Math.PI * 2
+      });
+      added++;
+    }
+    return added;
+  };
+
+  /** 淘汰一条蛇：掉落尸体 + 粒子闪光；AI 进入重生队列，玩家由 game 结算 */
+  Multiplayer.prototype.kill = function (e) {
+    if (!e.alive) return;
+    e.alive = false;
+    e.diedAt = this.timeMs;
+    this.dropCorpse(e);
+    this.dropDeathItems(e); // 必然掉 1 个随机道具 + 每 10 节额外掉 1 个
+    this.particles.flash(e.snake.x, e.snake.y, '#FFD94A', 1.4, 3);
+    if (!e.isPlayer) {
+      delete this.usedNames[e.name];
+      var idx = this.botSnakes.indexOf(e.snake);
+      if (idx >= 0) this.botSnakes.splice(idx, 1);
+      var delay = cfg.MP_RESPAWN_MIN_MS + Math.random() * (cfg.MP_RESPAWN_MAX_MS - cfg.MP_RESPAWN_MIN_MS);
+      this.respawnQueue.push({ at: this.timeMs + delay });
+    }
+  };
+
+  /**
+   * 碰撞判定（每帧一次，批量结算）：
+   *  1. 头撞墙/边界 → 淘汰；
+   *  2. 头对头（头心距 < 2×HEAD_HIT_RADIUS）→ 两条都淘汰；
+   *  3. 头撞其他蛇身体节（segPos[1..]，头除外）→ 淘汰，身体主人记 1 击杀；
+   *     同时触发咬断：被撞者 B 被移除「离 A 头心最近」的那一节（见 applyBite）。
+   */
+  Multiplayer.prototype.collide = function () {
+    var es = this.allEntries();
+    var alive = [];
+    var i, j;
+    for (i = 0; i < es.length; i++) if (es[i].alive) alive.push(es[i]);
+    var dead = {}; // entry.id -> {by: Entry|null}
+    var bites = []; // [{A, B, seg}] 本帧发生的咬断（A 撞 B 第 seg 节）
+
+    // 1. 撞墙/边界
+    for (i = 0; i < alive.length; i++) {
+      var s = alive[i].snake;
+      if (this.walls.hitsCircle(s.x, s.y, cfg.HEAD_HIT_RADIUS)) dead[alive[i].id] = { by: null };
+    }
+
+    // 2. 头对头
+    var hh = cfg.HEAD_HIT_RADIUS * 2;
+    for (i = 0; i < alive.length; i++) {
+      for (j = i + 1; j < alive.length; j++) {
+        var a = alive[i], b = alive[j];
+        if (dead[a.id] && dead[b.id]) continue;
+        if (u.dist(a.snake.x, a.snake.y, b.snake.x, b.snake.y) < hh) {
+          if (!dead[a.id]) dead[a.id] = { by: null };
+          if (!dead[b.id]) dead[b.id] = { by: null };
+        }
+      }
+    }
+
+    // 3. 头撞身体（k 从 1 起：跳过对方头部，头对头已在上面判过）
+    //    碰撞：尾巴节也算身体（撞上照样淘汰撞者）；
+    //    咬断：被咬节 = 判定半径内离 A 头心最近的「颜色节」（排除末尾尾巴节，它不可被咬掉）
+    var hb = cfg.HEAD_HIT_RADIUS + cfg.SEG_RADIUS;
+    for (i = 0; i < alive.length; i++) {
+      var A = alive[i];
+      if (dead[A.id]) continue;
+      for (j = 0; j < alive.length; j++) {
+        if (i === j) continue;
+        var B = alive[j];
+        var sp = B.snake.segPos;
+        var colorN = B.snake.colors.length; // segPos[colorN] 即尾巴节
+        var hitK = -1, bestD = hb;          // 碰撞最近节（含尾巴节）
+        var biteK = -1, biteD = hb;         // 咬断最近节（仅颜色节）
+        for (var k = 1; k < sp.length; k++) {
+          var d = u.dist(A.snake.x, A.snake.y, sp[k].x, sp[k].y);
+          if (d < bestD) { bestD = d; hitK = k; }
+          if (k < colorN && d < biteD) { biteD = d; biteK = k; }
+        }
+        if (hitK >= 0) {
+          dead[A.id] = { by: B };
+          if (biteK >= 0) bites.push({ A: A, B: B, seg: biteK }); // 只撞上尾巴：淘汰但不咬断
+          break;
+        }
+      }
+    }
+
+    // 咬断结算（在统一淘汰前处理；同一被撞者按节下标从大到小移除，避免下标位移咬错节）
+    bites.sort(function (p, q) { return q.seg - p.seg; });
+    for (i = 0; i < bites.length; i++) {
+      var bt = bites[i];
+      if (dead[bt.B.id]) continue; // B 已因其他原因淘汰（墙/头对头/此前的咬断保底）：整尸掉落，不再咬断
+      this.applyBite(bt.A, bt.B, bt.seg, dead);
+    }
+
+    // 结算（统一在判定完之后处理，避免遍历中改状态）
+    for (i = 0; i < alive.length; i++) {
+      var E = alive[i];
+      if (dead[E.id]) {
+        if (dead[E.id].by) dead[E.id].by.kills++;
+        this.kill(E);
+      }
+    }
+  };
+
+  /**
+   * 咬断：A 撞 B 身体，B 移除第 segIdx 节（颜色序列去掉该项，身体由轨迹自然收拢）。
+   *  - 尾巴节保护：segIdx 越界（= 尾巴节下标）时 removeSegAt 返回 null，不咬断不保底；
+   *  - 保底：移除后 B 节数 < MP_BITE_MIN_LENGTH → B 直接淘汰（dead[B] = {by: A}，计入 A 击杀）；
+   *  - 消除联动：B 存活则立即检查颜色序列，凑成 ≥ELIM_RUN 连同色正常触发消除
+   *    （连锁/倍率计分照常，分数与累计消除方块都记 B）；
+   *  - 视觉反馈：被咬处迸小粒子 + B 短暂闪白/抖动（bittenUntil，渲染层表现）。
+   */
+  Multiplayer.prototype.applyBite = function (A, B, segIdx, dead) {
+    var removed = B.snake.removeSegAt(segIdx);
+    if (!removed) return;
+    this.particles.burst(removed.x, removed.y, cfg.COLORS[removed.color], 5, 0.8);
+    B.bittenUntil = this.timeMs + cfg.MP_BITE_FLASH_MS;
+    if (B.snake.length() < cfg.MP_BITE_MIN_LENGTH) {
+      dead[B.id] = { by: A }; // 保底淘汰：正常淘汰流程（尸体掉落）+ 计入 A 的击杀
+      return;
+    }
+    this.resolveElim(B); // 被咬后颜色接拢，可能凑成 4 连 → 正常消除（计分给 B）
+  };
+
+  // ---------------- 帧更新 ----------------
+
+  /** 消除结算：4 连消除 + 连锁倍率计分 + 逐级放大特效（与单人模式同一套表现）；
+   *  同时累计「累计消除方块」elimTotal（含连锁与被咬触发的消除） */
+  Multiplayer.prototype.resolveElim = function (e) {
+    var removed = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+    this.scoreChain(e, removed, 1, 0);
+  };
+
+  /**
+   * 统一计分 + 特效（供 resolveElim 与 applyItem 共用）。
+   * @param {Entry} e 被消除的蛇档案
+   * @param {Array} removed 被移除节 [{color,x,y,chain}]
+   * @param {number} fxBoost 特效放大（炸弹更强）
+   * @param {number} perSegBonus 每节额外得分（炸弹/消色/随机消除等道具）
+   */
+  Multiplayer.prototype.scoreChain = function (e, removed, fxBoost, perSegBonus) {
+    if (!removed || !removed.length) return;
+    if (CS.audio) CS.audio.playElim();
+    e.elimTotal += removed.length;
+    // 连击（仅玩家计入，AI 的 elimScore 仅供调试）：窗口内连续消除 → combo 递增 → 分数成倍
+    var combo = 1;
+    if (e.isPlayer) {
+      this.game.bumpCombo();
+      combo = Math.min(cfg.ELIM_COMBO_MAX, this.game.elimCombo);
+    }
+    var waves = {};
+    var i;
+    for (i = 0; i < removed.length; i++) {
+      var ch = removed[i].chain || 1;
+      (waves[ch] = waves[ch] || []).push(removed[i]);
+    }
+    var chainLv = Object.keys(waves).map(Number).sort(function (a, b) { return a - b; });
+    for (var w = 0; w < chainLv.length; w++) {
+      var chain = chainLv[w], segs = waves[chain];
+      var fxScale = (1 + (chain - 1) * cfg.CHAIN_FX_STEP) * (fxBoost || 1);
+      e.elimScore += segs.length * cfg.ELIM_SCORE * chain * combo + (perSegBonus || 0);
+      var sx = 0, sy = 0;
+      for (i = 0; i < segs.length; i++) {
+        this.particles.burst(segs[i].x, segs[i].y, cfg.COLORS[segs[i].color],
+          Math.round(5 * fxScale), fxScale);
+        sx += segs[i].x; sy += segs[i].y;
+      }
+      var ccx = sx / segs.length, ccy = sy / segs.length;
+      this.particles.flash(ccx, ccy, '#FFD94A', fxScale, Math.min(4, chain));
+      if (chain >= cfg.CHAIN_TEXT_MIN) {
+        this.particles.chainText(ccx, ccy - 24, chain + '连锁！', 20 + (chain - 1) * 6);
+      }
+      if (e.isPlayer && combo >= 2) {
+        this.particles.chainText(ccx, ccy - 46, combo + '连击 ×' + combo, 18 + combo);
+      }
+    }
+  };
+
+  /**
+   * 拾取道具的统一处理（玩家与 AI 共用）：按 kind 触发对应效果 + 计分 + 特效。
+   * 特殊道具（wild/bomb/slow/clear/clear3/rand1-3）都会真正生效；
+   * 仅当 e 是玩家时弹出效果飘字（setItemToast），避免 AI 拾取刷屏。
+   * @param {Entry} e 拾取者
+   * @param {object} b 色块 {kind,color,x,y,rarity}
+   */
+  Multiplayer.prototype.applyItem = function (e, b) {
+    var px = b.x, py = b.y;
+    var isPlayer = e.isPlayer;
+    if (b.kind && b.kind !== 'color' && isPlayer) this.game.setItemToast(b.kind, b.color);
+    if (b.kind === 'wild') {
+      e.snake.growWild();
+      if (CS.audio) CS.audio.playSpecial();
+      this.particles.burst(px, py, '#FFD94A', 7);
+      this.resolveElim(e);
+    } else if (b.kind === 'bomb') {
+      if (CS.audio) CS.audio.playSpecial();
+      this.particles.burst(px, py, '#E8552F', 12, 1.5);
+      var rem = e.snake.eliminate(2, 2);
+      this.scoreChain(e, rem, 1.4, cfg.BOMB_SCORE);
+    } else if (b.kind === 'slow') {
+      if (CS.audio) CS.audio.playSpecial();
+      e.slowUntil = this.timeMs + cfg.SLOW_MS;
+      this.particles.burst(px, py, '#2EC4B6', 9);
+      this.resolveElim(e);
+    } else if (b.kind === 'clear') {
+      if (CS.audio) CS.audio.playSpecial();
+      var rem = e.snake.removeByColor(b.color);
+      this.scoreChain(e, rem, 1.3, cfg.CLEAR_SCORE);
+      var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.scoreChain(e, rem2, 1, 0);
+      this.particles.burst(px, py, cfg.COLORS[b.color], 12, 1.5);
+    } else if (b.kind === 'clear3') {
+      if (CS.audio) CS.audio.playSpecial();
+      var rem = e.snake.removeRearByColor(b.color, 3);
+      this.scoreChain(e, rem, 1.2, cfg.CLEAR3_SCORE);
+      var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.scoreChain(e, rem2, 1, 0);
+      this.particles.burst(px, py, cfg.COLORS[b.color], 9, 1.3);
+    } else if (b.kind === 'rand1' || b.kind === 'rand2' || b.kind === 'rand3') {
+      if (CS.audio) CS.audio.playSpecial();
+      var rn = b.kind === 'rand1' ? 1 : (b.kind === 'rand2' ? 2 : 3);
+      var rem = e.snake.removeRandom(rn);
+      this.scoreChain(e, rem, 1.2, cfg.RAND_SCORE);
+      var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.scoreChain(e, rem2, 1, 0);
+      this.particles.burst(px, py, '#FFD94A', 9, 1.3);
+    } else {
+      if (CS.audio) CS.audio.playEat();
+      e.snake.grow(b.color);
+      this.particles.burst(px, py, cfg.COLORS[b.color], 4);
+      this.resolveElim(e);
+    }
+  };
+
+  /**
+   * 阵亡掉落道具：除身体散落色块（dropCorpse）外，必然额外掉落一个随机道具，
+   * 且玩家/任意蛇每有 10 个颜色节（不含尾巴节）再额外掉一个随机道具（长度越长奖励越多）。
+   * @param {Entry} e 被淘汰的蛇
+   */
+  Multiplayer.prototype.dropDeathItems = function (e) {
+    var s = e.snake;
+    var colorLen = s.colors.length; // 颜色节数（尾巴节不在 colors[] 内，天然排除）
+    var count = 1 + Math.floor(colorLen / 10);
+    for (var i = 0; i < count; i++) {
+      var kind = this.spawner.randomSpecialKind();
+      var p = s.segPos[Math.floor(Math.random() * s.segPos.length)] || { x: s.x, y: s.y };
+      var jx = (Math.random() * 2 - 1) * 26, jy = (Math.random() * 2 - 1) * 26;
+      this.spawner.addDroppedItem(p.x + jx, p.y + jy, kind);
+    }
+  };
+
+  /**
+   * 处理 AI 重生 + 动态增长（v2.8.7：AI 数量随时间从 MP_AI_START_COUNT 增长到 MP_AI_MAX_COUNT）。
+   * 逻辑：
+   *  1) 到期的淘汰 AI 按原延迟重生（维持基本编制）；
+   *  2) 计算当前存活时间对应的目标 AI 数量，若当前活 AI 少于目标，额外补招新 AI；
+   *  3) 新补招的 AI 使用 currentSmartness() 智力参数（后期 AI 更聪明）。
+   */
+  Multiplayer.prototype.processRespawns = function () {
+    var now = this.timeMs;
+    var sec = this.timeMs / 1000;
+    var smartness = this.currentSmartness();
+
+    // 1) 到期重生（淘汰的 AI 回来）
+    var due = 0;
+    var keep = [];
+    for (var i = 0; i < this.respawnQueue.length; i++) {
+      if (this.respawnQueue[i].at <= now) due++;
+      else keep.push(this.respawnQueue[i]);
+    }
+    this.respawnQueue = keep;
+    for (i = 0; i < due; i++) {
+      this.spawnBot(smartness);  // 重生的 AI 也带当前智力水平
+      this.respawned++;
+    }
+
+    // 2) 动态增长：若「活 AI + 重生队列」< 目标数量，补招新 AI（队列中的待重生蛇也算编制，
+    //    避免「刚被淘汰→队列里还躺着一条→又补一条」导致数量瞬间越界）。
+    //    节流仅作为「增长补招」的速率限制（每隔 >=800ms 才允许补一条），绝不越过目标数量硬上限。
+    var alive = this.aliveBotCount() + this.respawnQueue.length;
+    var target = this.targetAiCount(sec);
+    var canGrow = !this._lastGrowSpawn || now - this._lastGrowSpawn >= 800;
+    if (alive < target && canGrow) {
+      this.spawnBot(smartness);
+      this.respawned++;
+      this._lastGrowthSpawn = now; // 注意：故意用不同变量名避免与重生混淆
+      this._lastGrowSpawn = now;
+    }
+  };
+
+  /**
+   * 每帧推进（由 game.updateMulti 调用，玩家输入已由 game 写入 targetAngle）：
+   *  AI 决策 → 动态速度 → 推进所有蛇 → 碰撞淘汰 → 吃色/消除 → 重生补充 → 色块刷新。
+   */
+  Multiplayer.prototype.update = function (dt) {
+    this.timeMs += dt;
+    var entries = this.allEntries();
+    var snakes = this.aliveSnakes();
+    var env = { walls: this.walls, blocks: this.spawner.blocks, snakes: snakes };
+    var sec = this.timeMs / 1000;
+    var i, e;
+
+    // 随时间提升特殊道具刷新概率（越后期道具越密集）
+    this.spawner.specialChance = cfg.specialChanceForElapsed(this.game.elapsed);
+
+    // AI 决策（与玩家同规则：只设目标角，转向速率由 Snake.update 钳制）
+    for (i = 0; i < this.bots.length; i++) {
+      e = this.bots[i];
+      if (!e.alive) continue;
+      e.snake.setTargetAngle(CS.AI.decide(e.snake, env, e));
+    }
+
+    // 动态速度（长度/时间加成，封顶 SPEED_MAX；减速道具期间 ×SLOW_FACTOR）+ 推进
+    for (i = 0; i < entries.length; i++) {
+      e = entries[i];
+      if (!e.alive) continue;
+      var sp = e.base + e.snake.length() * cfg.SPEED_LEN_COEF + sec * cfg.ENDLESS_SPEEDUP_PER_SEC;
+      if (e.slowUntil && this.timeMs < e.slowUntil) sp *= cfg.SLOW_FACTOR;
+      e.snake.speed = Math.min(cfg.SPEED_MAX, sp);
+      e.snake.update(dt);
+      if (e.snake.length() > e.maxLen) e.maxLen = e.snake.length();
+    }
+
+    // 碰撞淘汰（墙 / 头头 / 头身）
+    this.collide();
+
+    // 吃色块 + 消除（玩家优先，其后 AI；特殊道具走 applyItem 真正生效 + 玩家飘字）
+    for (i = 0; i < entries.length; i++) {
+      e = entries[i];
+      if (!e.alive) continue;
+      var got = this.spawner.collectAt(e.snake);
+      for (var g = 0; g < got.length; g++) this.applyItem(e, got[g]);
+    }
+
+    // 流星砖块：直线飞行 + 命中玩家蛇身注入中段（与单人同规则；玩家专属，AI 不受影响）
+    var mev = this.spawner.updateMeteors(dt, this.game.snake);
+    for (var mi = 0; mi < mev.length; mi++) {
+      var ev = mev[mi];
+      this.game.snake.insertAt(ev.idx, ev.color);
+      this.particles.burst(ev.x, ev.y, cfg.COLORS[ev.color], 7, 1.3);
+      if (CS.audio) CS.audio.playSpecial();
+      this.playerEntry.elimScore += cfg.METEOR_SCORE; // 记到玩家 Entry（多人对局分以 Entry 为准）
+      this.game.setItemToast('meteor', ev.color); // 流星注入飘字（仅玩家可见）
+      this.resolveElim(this.playerEntry);
+    }
+
+    // AI 补充 + 稀疏刷新
+    this.processRespawns();
+    this.spawner.update(dt);
+  };
+
+  // ---------------- 排行榜与名次 ----------------
+
+  /** 实时排行榜：活蛇按当前节数降序（同节数玩家优先），[{name, length, isPlayer}] */
+  Multiplayer.prototype.leaderboard = function () {
+    var es = this.allEntries();
+    var arr = [];
+    for (var i = 0; i < es.length; i++) {
+      if (es[i].alive) arr.push({ name: es[i].name, length: es[i].snake.length(), isPlayer: es[i].isPlayer });
+    }
+    arr.sort(function (a, b) {
+      if (b.length !== a.length) return b.length - a.length;
+      return (a.isPlayer ? 0 : 1) - (b.isPlayer ? 0 : 1);
+    });
+    return arr;
+  };
+
+  /** 某 Entry 在当前场上的名次（1 起）：1 + 节数严格更多的活蛇数 */
+  Multiplayer.prototype.rankOf = function (e) {
+    var len = e.snake.length();
+    var rank = 1;
+    var es = this.allEntries();
+    for (var i = 0; i < es.length; i++) {
+      if (es[i] !== e && es[i].alive && es[i].snake.length() > len) rank++;
+    }
+    return rank;
+  };
+
+  CS.Multiplayer = Multiplayer;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/renderer.js ===== */
+'use strict';
+/**
+ * renderer.js — 全部程序化 Canvas 2D 绘制（蜡笔手绘风，v2：相机视口 + 大地图）
+ *  - 背景：浅奶油纸色 + 预生成的噪点平铺（离屏 canvas 只生成一次，document.createElement）；
+ *  - 相机：视口区内 translate(-cam.x,-cam.y) 画世界，视口外裁剪；世界外区域压暗；
+ *  - 手绘感：描边用 INK 深色，抖动用"固定种子伪随机"（同物每帧一致，不闪烁）；
+ *  - 墙壁：边界为灰色排线墙带，内部墙为排线矩形；色块：带蜡笔笔触的圆角色块；
+ *    蛇：圆形蜡笔节沿轨迹排布，末尾恒带 1 节深色小尾鳍（不可消除的尾巴节），
+ *    蛇头表情眼睛朝向移动方向；
+ *  - 右侧 HUD 面板：分数/目标/关卡/已解锁颜色预览 + 小地图（世界缩略 + 蛇头亮点）；
+ *  - 摇杆：固定底座浮在视口区左下角，半透明手绘风。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+  var u = CS.utils;
+
+  var noiseTile = null;
+
+  /** 预生成纸张噪点 tile（只做一次） */
+  function getNoiseTile() {
+    if (noiseTile) return noiseTile;
+    if (typeof document === 'undefined' || !document.createElement) return null;
+    var c = document.createElement('canvas');
+    c.width = 160; c.height = 160;
+    var g = c.getContext('2d');
+    for (var i = 0; i < 420; i++) { // 纸面斑点
+      g.fillStyle = Math.random() < 0.55 ? 'rgba(58,50,56,0.045)' : 'rgba(255,255,255,0.5)';
+      g.beginPath();
+      g.arc(Math.random() * 160, Math.random() * 160, Math.random() * 1.3 + 0.3, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.strokeStyle = 'rgba(58,50,56,0.035)'; // 少许纸纤维
+    g.lineWidth = 0.6;
+    for (i = 0; i < 26; i++) {
+      var x = Math.random() * 160, y = Math.random() * 160, a = Math.random() * Math.PI;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + Math.cos(a) * (6 + Math.random() * 10), y + Math.sin(a) * (6 + Math.random() * 10));
+      g.stroke();
+    }
+    noiseTile = c;
+    return c;
+  }
+
+  /** 手绘风圆角矩形路径：四角按 (seedX,seedY) 做确定性抖动 */
+  function wobblyRoundRect(ctx, x, y, w, h, r, seedX, seedY, wobble) {
+    var j = wobble === undefined ? 1.2 : wobble;
+    function ox(k) { return (u.hash2(seedX, seedY, k) - 0.5) * 2 * j; }
+    function oy(k) { return (u.hash2(seedY, seedX, k + 9) - 0.5) * 2 * j; }
+    ctx.beginPath();
+    ctx.moveTo(x + r + ox(1), y + oy(1));
+    ctx.lineTo(x + w - r + ox(2), y + oy(2));
+    ctx.quadraticCurveTo(x + w + ox(3), y + oy(3), x + w + ox(4), y + r + oy(4));
+    ctx.lineTo(x + w + ox(5), y + h - r + oy(5));
+    ctx.quadraticCurveTo(x + w + ox(6), y + h + oy(6), x + w - r + ox(6), y + h + oy(7));
+    ctx.lineTo(x + r + ox(7), y + h + oy(8));
+    ctx.quadraticCurveTo(x + ox(8), y + h + oy(9), x + ox(9), y + h - r + oy(10));
+    ctx.lineTo(x + ox(10), y + r + oy(11));
+    ctx.quadraticCurveTo(x + ox(11), y + oy(12), x + r + ox(12), y + oy(13));
+    ctx.closePath();
+  }
+
+  /** 在色块上叠加短笔触，模拟蜡笔涂抹纹理 */
+  function crayonStrokes(ctx, x, y, w, h, seedX, seedY) {
+    ctx.lineWidth = 1.1;
+    ctx.lineCap = 'round';
+    for (var i = 0; i < 4; i++) {
+      var sx = x + 3 + u.hash2(seedX, seedY, 20 + i) * (w - 8);
+      var sy = y + 3 + u.hash2(seedX, seedY, 30 + i) * (h - 8);
+      var len = 3 + u.hash2(seedX, seedY, 40 + i) * (w * 0.45);
+      var ang = (u.hash2(seedX, seedY, 50 + i) - 0.5) * 1.1; // 大致水平的涂抹
+      ctx.strokeStyle = i % 2 === 0 ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.10)';
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + Math.cos(ang) * len, sy + Math.sin(ang) * len);
+      ctx.stroke();
+    }
+  }
+
+  /** 画一颗蜡笔色块（蛇身节 / 道具 / 预览色块共用），(px,py) 为左上 */
+  function drawCrayonBlock(ctx, px, py, size, colorHex, seedX, seedY, opts) {
+    opts = opts || {};
+    var rot = opts.rot || 0;
+    var scale = opts.scale || 1;
+    ctx.save();
+    ctx.translate(px + size / 2, py + size / 2);
+    ctx.rotate(rot);
+    ctx.scale(scale, scale);
+    ctx.translate(-size / 2, -size / 2);
+    var r = size * 0.28;
+    wobblyRoundRect(ctx, 0, 0, size, size, r, seedX, seedY, opts.wobble);
+    ctx.fillStyle = colorHex;
+    ctx.fill();
+    crayonStrokes(ctx, 0, 0, size, size, seedX, seedY);
+    // 手绘描边：两遍微错位，制造"描了两次"的草图感
+    // opts.stroke 可覆盖主描边粗细（蛇节用 SEG_STROKE≈3px，相邻节边界一眼可辨）
+    var mainStroke = opts.stroke || Math.max(1.4, size * 0.07);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = mainStroke;
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(0.8, -0.6);
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = Math.max(0.8, mainStroke * 0.55);
+    ctx.stroke();
+    ctx.restore();
+    ctx.restore();
+  }
+
+  /** 排线填充（裁剪在已建立的路径内），墙壁质感 */
+  function hatchClip(ctx, x, y, w, h, spacing) {
+    ctx.save();
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(58,50,56,0.35)';
+    ctx.lineWidth = 1;
+    var step = spacing || 12;
+    for (var d = -h; d < w + h; d += step) {
+      ctx.beginPath();
+      ctx.moveTo(x + d, y + h + 2);
+      ctx.lineTo(x + d + h + 4, y - 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** 内部墙矩形：灰色蜡笔底 + 斜线排线 */
+  function drawWallRect(ctx, r, seed) {
+    wobblyRoundRect(ctx, r.x, r.y, r.w, r.h, 8, seed, seed + 3, 2.2);
+    ctx.fillStyle = cfg.WALL_FILL;
+    ctx.fill();
+    hatchClip(ctx, r.x, r.y, r.w, r.h, 14);
+    wobblyRoundRect(ctx, r.x, r.y, r.w, r.h, 8, seed, seed + 3, 2.2);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+  }
+
+  /**
+   * 边界墙：世界四周的墙带（带视口裁剪，只画可见带）。
+   * 直接复用内部墙 drawWallRect 的画法（蜡笔灰底 + 斜线排线 + 深色描边），
+   * 与里面的墙「同一个效果」，一眼可读"这是墙不能碰"；撞界判定不变（逻辑仍在 walls.hitsCircle）。
+   */
+  /**
+   * 边界墙：世界四周的墙带（带视口裁剪，只画可见带）。
+   * 与地图内部墙使用同一套 drawWallRect 画法（蜡笔灰底 + 斜线排线 + 深色描边），
+   * 视觉完全统一；撞界判定不变（逻辑仍在 walls.hitsCircle）。
+   */
+  function drawBoundary(ctx, walls, cam, vw, vh) {
+    var T = cfg.WALL_THICK;
+    var bands = [
+      { x: -T, y: -T, w: walls.W + 2 * T, h: T },  // 上
+      { x: -T, y: walls.H, w: walls.W + 2 * T, h: T }, // 下
+      { x: -T, y: 0, w: T, h: walls.H },           // 左
+      { x: walls.W, y: 0, w: T, h: walls.H }       // 右
+    ];
+    for (var i = 0; i < 4; i++) {
+      var b = bands[i];
+      if (b.x + b.w < cam.x || b.x > cam.x + vw || b.y + b.h < cam.y || b.y > cam.y + vh) continue;
+      drawWallRect(ctx, b, 91 + i);   // 与地图内部墙同一套蜡笔排线视觉
+    }
+    // 世界内边缘：一道明显粗黑线，明确「可玩范围界线、碰即死」
+    wobblyRoundRect(ctx, 0, 0, walls.W, walls.H, 6, 5, 5, 3.0);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 3.4;
+    ctx.stroke();
+  }
+
+  /** 万能色蛇节：白底蜡笔块 + 彩色描边 + 中心手绘星标（一眼可辨「万能、通配任何色」） */
+  function drawWildSeg(ctx, px, py, size, seedX, seedY) {
+    var r = size * 0.30;
+    wobblyRoundRect(ctx, 0, 0, size, size, r, seedX, seedY, 1.1);
+    ctx.fillStyle = '#FFFDF5';
+    ctx.fill();
+    crayonStrokes(ctx, 0, 0, size, size, seedX, seedY);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = cfg.SEG_STROKE;
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(0.8, -0.6);
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = Math.max(0.8, cfg.SEG_STROKE * 0.55);
+    ctx.stroke();
+    ctx.restore();
+    // 四角彩色小点（暗示「可匹配任意颜色」）
+    var cols = ['#E8552F', '#4A7FD4', '#6FBF4A', '#F5A623'];
+    for (var c = 0; c < 4; c++) {
+      ctx.beginPath();
+      ctx.arc(size * (0.3 + 0.4 * (c % 2)), size * (0.3 + 0.4 * (c < 2 ? 0 : 1)), size * 0.07, 0, Math.PI * 2);
+      ctx.fillStyle = cols[c];
+      ctx.fill();
+    }
+    starPath(ctx, size / 2, size / 2, size * 0.20, 0.3);
+    ctx.fillStyle = '#FFD94A';
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+  }
+
+  /**
+   * 特殊道具绘制（地图上的万能色/炸弹/减速）。普通色块由 drawCrayonBlock 处理。
+   * @param {string} kind 'wild' | 'bomb' | 'slow'
+   */
+  /**
+   * 特殊道具绘制（地图上的万能色/炸弹/减速/消色/后3消色/随机消N）。
+   * 统一：先 translate 到块中心 + 脉动缩放，再按 kind 画；白底块一律加粗黑灰描边（浅色场景可见）。
+   * @param {string} kind 'wild' | 'bomb' | 'slow' | 'clear' | 'clear3' | 'rand1|2|3'
+   */
+  function drawItemBlock(ctx, b, cx, cy, size, seedX, seedY, rot, pulse) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(pulse, pulse);
+
+    if (b.kind === 'wild') {
+      // 万能色：白底块 + 角上四色点 + 中心星标 + 粗黑描边
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, '#FFFDF5', seedX, seedY, { rot: rot, wobble: 1.0 });
+      var cols = ['#E8552F', '#4A7FD4', '#6FBF4A', '#F5A623'];
+      for (var c = 0; c < 4; c++) {
+        ctx.beginPath();
+        ctx.arc(Math.cos(c * Math.PI / 2) * size * 0.34, Math.sin(c * Math.PI / 2) * size * 0.34, size * 0.10, 0, Math.PI * 2);
+        ctx.fillStyle = cols[c]; ctx.fill();
+        ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1; ctx.stroke();
+      }
+      starPath(ctx, 0, 0, size * 0.24, 0.3);
+      ctx.fillStyle = '#FFD94A'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.2; ctx.stroke();
+      // 白底在浅色/白色场景易隐形 → 粗黑灰描边
+      wobblyRoundRect(ctx, -size / 2, -size / 2, size, size, size * 0.28, seedX, seedY, 1.0);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(2.5, size * 0.13); ctx.stroke();
+
+    } else if (b.kind === 'bomb') {
+      // 炸弹：深灰圆 + 引线火光
+      ctx.beginPath(); ctx.arc(0, 0, size * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = '#3A3238'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, -size * 0.42);
+      ctx.quadraticCurveTo(size * 0.18, -size * 0.62, size * 0.06, -size * 0.72);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.beginPath(); ctx.arc(size * 0.06, -size * 0.72, size * 0.09, 0, Math.PI * 2);
+      ctx.fillStyle = '#F5A623'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1; ctx.stroke();
+
+    } else if (b.kind === 'slow') {
+      // 减速：蓝绿圆 + 时钟指针
+      ctx.beginPath(); ctx.arc(0, 0, size * 0.44, 0, Math.PI * 2);
+      ctx.fillStyle = '#2EC4B6'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -size * 0.26);
+      ctx.moveTo(0, 0); ctx.lineTo(size * 0.20, size * 0.06);
+      ctx.strokeStyle = '#FFFDF5'; ctx.lineWidth = 2; ctx.stroke();
+
+    } else if (b.kind === 'clear') {
+      // 消色（全部）：该色块 + 12 道粗放射线 + 外环，表达「整片清掉」
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
+      wobblyRoundRect(ctx, -size / 2, -size / 2, size, size, size * 0.28, seedX, seedY, 1.0);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(1.8, size * 0.07); ctx.stroke();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(2, size * 0.10);
+      for (var a = 0; a < 12; a++) {
+        var an = a * Math.PI / 6;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(an) * size * 0.16, Math.sin(an) * size * 0.16);
+        ctx.lineTo(Math.cos(an) * size * 0.47, Math.sin(an) * size * 0.47);
+        ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(0, 0, size * 0.5, 0, Math.PI * 2);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(1.8, size * 0.07); ctx.stroke();
+
+    } else if (b.kind === 'clear3') {
+      // 后 3 消色：该色块 + 居中大号「×3」
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
+      wobblyRoundRect(ctx, -size / 2, -size / 2, size, size, size * 0.28, seedX, seedY, 1.0);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(1.8, size * 0.07); ctx.stroke();
+      ctx.font = 'bold ' + Math.round(size * 0.62) + 'px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = Math.max(2, size * 0.10); ctx.strokeStyle = '#FFFDF5';
+      ctx.strokeText('×3', 0, 1);
+      ctx.fillStyle = cfg.INK; ctx.fillText('×3', 0, 1);
+
+    } else if (b.kind === 'rand1' || b.kind === 'rand2' || b.kind === 'rand3') {
+      // 随机消除：白底块 + 粗黑描边 + 居中大号数字 + ? 角标
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, '#FFFDF5', seedX, seedY, { rot: rot, wobble: 1.0 });
+      wobblyRoundRect(ctx, -size / 2, -size / 2, size, size, size * 0.28, seedX, seedY, 1.0);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(2.5, size * 0.13); ctx.stroke();
+      var n = b.kind === 'rand1' ? 1 : (b.kind === 'rand2' ? 2 : 3);
+      ctx.font = 'bold ' + Math.round(size * 0.6) + 'px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = Math.max(2, size * 0.10); ctx.strokeStyle = '#FFFDF5';
+      ctx.strokeText(String(n), 0, 1);
+      ctx.fillStyle = cfg.INK; ctx.fillText(String(n), 0, 1);
+      ctx.font = 'bold ' + Math.round(size * 0.28) + 'px sans-serif';
+      ctx.fillStyle = cfg.INK; ctx.fillText('?', size * 0.30, -size * 0.30);
+
+    } else if (b.kind === 'meteor') {
+      // 流星砖块：会直线飞行的彩色砖块（与游戏内 drawMeteor 一致：彩色蜡笔砖 + 淡拖尾）
+      var mc = cfg.COLORS[b.color] || '#E8552F';
+      // 身后拖尾：几个依次变淡的残影，指示飞行方向（向右下飞入）
+      for (var mt = 3; mt >= 1; mt--) {
+        ctx.beginPath();
+        ctx.arc(-size * 0.20 * mt, -size * 0.12 * mt, size * (0.30 - 0.05 * mt), 0, Math.PI * 2);
+        ctx.fillStyle = mc;
+        ctx.globalAlpha = 0.22 * (4 - mt);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      // 本体：彩色蜡笔砖块
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, mc, seedX, seedY, { rot: 0.2, wobble: 1.0, stroke: cfg.SEG_STROKE });
+
+    } else {
+      // 普通色块（默认）：纯色蜡笔砖块（带描边），即游戏内最常见的色块
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
+    }
+
+    // 稀有度边框：在方块外侧加一道明显加粗的彩色描边（强→弱：蓝/紫/橙），一眼可辨道具强度
+    var rar = b.rarity || (b.kind && cfg.ITEM_RARITY ? cfg.ITEM_RARITY[b.kind] : null);
+    if (rar && cfg.RARITY_COLORS && cfg.RARITY_COLORS[rar]) {
+      wobblyRoundRect(ctx, -size / 2 - 3, -size / 2 - 3, size + 6, size + 6, size * 0.34, seedX, seedY, 1.1);
+      ctx.strokeStyle = cfg.RARITY_COLORS[rar];
+      ctx.lineWidth = Math.max(3, size * 0.17);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * 流星砖块：带拖尾的彩色光球（在 drawPlay 已做相机平移的世界坐标系内绘制）。
+   * @param {object} m {x,y,color,trail}
+   */
+  function drawMeteor(ctx, m) {
+    // 拖尾：淡淡的运动残影，指示来向
+    for (var t = 0; t < m.trail.length; t++) {
+      var p = m.trail[t];
+      var a = (t + 1) / m.trail.length;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, cfg.METEOR_RADIUS * (0.4 + 0.4 * t / m.trail.length), 0, Math.PI * 2);
+      ctx.fillStyle = cfg.COLORS[m.color];
+      ctx.globalAlpha = a * 0.25;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // 本体：会移动的彩色蜡笔砖块（不是流星光球，就是移动中的砖）
+    var size = cfg.METEOR_RADIUS * 2;
+    drawCrayonBlock(ctx, m.x - size / 2, m.y - size / 2, size, cfg.COLORS[m.color],
+      Math.round(m.x / 10), Math.round(m.y / 10), { rot: 0.2, wobble: 1.0, stroke: cfg.SEG_STROKE });
+  }
+
+  /**
+   * 尾巴节（v2.3+）：不可消除的尾巴节，一眼可辨「消不掉」。
+   * 重做版：主体为深色圆润圆角蜡笔块（与颜色节统一风格，不突兀），
+   * 朝外方向再叠一个小小的圆润尾尖（深色小半圆），整体可爱、不像尖三角。
+   * @param {number} dx,dy 尾巴朝向单位向量（指向蛇尾外侧）
+   */
+  function drawTail(ctx, cx, cy, dx, dy, size, seedX, seedY) {
+    var jx = (u.hash2(seedX, seedY, 60) - 0.5) * 2.0;
+    var jy = (u.hash2(seedY, seedX, 70) - 0.5) * 2.0;
+    // 主体：深色圆润圆角块（与颜色节同风格）
+    drawCrayonBlock(ctx, cx - size / 2 + jx, cy - size / 2 + jy, size, cfg.TAIL_COLOR, seedX, seedY, {
+      rot: (u.hash2(seedX, seedY, 3) - 0.5) * 0.4, wobble: 1.0
+    });
+    // 朝外小圆润尾尖（短、圆，不突兀）
+    var tipX = cx + dx * size * 0.5, tipY = cy + dy * size * 0.5;
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, size * 0.24, 0, Math.PI * 2);
+    ctx.fillStyle = cfg.TAIL_COLOR;
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+  }
+
+  /** 蛇头眼睛（朝向跟随移动方向 dir 单位向量） */
+  function drawEyes(ctx, cx, cy, size, dir) {
+    var fx = dir.x * size * 0.16, fy = dir.y * size * 0.16;  // 整体朝前移
+    var pxp = -dir.y, pyp = dir.x;                            // 垂直方向
+    var sep = size * 0.2, r = size * 0.13;
+    for (var s = -1; s <= 1; s += 2) {
+      var ex = cx + fx + pxp * sep * s;
+      var ey = cy + fy + pyp * sep * s;
+      ctx.beginPath();
+      ctx.arc(ex, ey, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFDF5';
+      ctx.fill();
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(ex + dir.x * r * 0.45, ey + dir.y * r * 0.45, r * 0.45, 0, Math.PI * 2);
+      ctx.fillStyle = cfg.INK;
+      ctx.fill();
+    }
+  }
+
+  /** 五角星路径 */
+  function starPath(ctx, cx, cy, r, rot) {
+    ctx.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var rr = i % 2 === 0 ? r : r * 0.45;
+      var a = rot + i * Math.PI / 5 - Math.PI / 2;
+      var x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+
+  /** 冠军皇冠涂鸦（多人结算第 1 名标题用）：三折尖顶 + 尖顶圆珠 */
+  function drawCrown(ctx, cx, cy, w, h) {
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - w / 2, cy + h / 2);
+    ctx.lineTo(cx - w / 2, cy - h * 0.15);
+    ctx.lineTo(cx - w * 0.22, cy + h * 0.12);
+    ctx.lineTo(cx, cy - h / 2);
+    ctx.lineTo(cx + w * 0.22, cy + h * 0.12);
+    ctx.lineTo(cx + w / 2, cy - h * 0.15);
+    ctx.lineTo(cx + w / 2, cy + h / 2);
+    ctx.closePath();
+    ctx.fillStyle = '#FFD94A';
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+    var tips = [[cx - w / 2, cy - h * 0.15], [cx, cy - h / 2], [cx + w / 2, cy - h * 0.15]];
+    for (var i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(tips[i][0], tips[i][1] - 3, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFDF5';
+      ctx.fill();
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * 多人结算统计行的手绘小图标（纯 canvas 涂鸦，不用外部图）。
+   * @param {string} kind medal/clock/star/spark/block/burst/snake
+   * @param {number} s 图标外接尺寸（px）
+   */
+  function drawStatIcon(ctx, kind, cx, cy, s) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = cfg.INK;
+    if (kind === 'medal') {            // 排名：绶带 + 圆牌奖章
+      ctx.beginPath();
+      ctx.moveTo(cx - s * 0.26, cy - s * 0.5);
+      ctx.lineTo(cx, cy - s * 0.08);
+      ctx.lineTo(cx + s * 0.26, cy - s * 0.5);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx, cy + s * 0.16, s * 0.36, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFD94A';
+      ctx.fill();
+      ctx.stroke();
+      starPath(ctx, cx, cy + s * 0.16, s * 0.16, 0.3);
+      ctx.fillStyle = '#C47F17';
+      ctx.fill();
+    } else if (kind === 'clock') {     // 存活时间 / 时间分：小闹钟
+      ctx.beginPath();
+      ctx.arc(cx, cy, s * 0.4, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFDF5';
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx, cy - s * 0.24);
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + s * 0.18, cy + s * 0.08);
+      ctx.stroke();
+    } else if (kind === 'star') {      // 总分：大星星
+      starPath(ctx, cx, cy, s * 0.48, 0.2);
+      ctx.fillStyle = '#FFD94A';
+      ctx.fill();
+      ctx.stroke();
+    } else if (kind === 'spark') {     // 消除分：四角闪光
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s * 0.5);
+      ctx.quadraticCurveTo(cx, cy, cx + s * 0.5, cy);
+      ctx.quadraticCurveTo(cx, cy, cx, cy + s * 0.5);
+      ctx.quadraticCurveTo(cx, cy, cx - s * 0.5, cy);
+      ctx.quadraticCurveTo(cx, cy, cx, cy - s * 0.5);
+      ctx.fillStyle = cfg.COLORS.purple;
+      ctx.fill();
+      ctx.stroke();
+    } else if (kind === 'block') {     // 累计消除方块：蜡笔小方块
+      drawCrayonBlock(ctx, cx - s * 0.4, cy - s * 0.4, s * 0.8, cfg.COLORS.teal, 61, 13, { wobble: 0.8 });
+    } else if (kind === 'burst') {     // 击杀数：爆炸尖角
+      ctx.beginPath();
+      for (var i = 0; i < 8; i++) {
+        var a = i * Math.PI / 4 - Math.PI / 2;
+        var rr = i % 2 === 0 ? s * 0.5 : s * 0.22;
+        var px2 = cx + Math.cos(a) * rr, py2 = cy + Math.sin(a) * rr;
+        if (i === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+      }
+      ctx.closePath();
+      ctx.fillStyle = cfg.COLORS.red;
+      ctx.fill();
+      ctx.stroke();
+    } else if (kind === 'snake') {     // 最终节数：小蛇波浪线 + 头点
+      ctx.strokeStyle = cfg.COLORS.green;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(cx - s * 0.45, cy + s * 0.15);
+      ctx.quadraticCurveTo(cx - s * 0.2, cy - s * 0.35, cx + s * 0.05, cy + s * 0.1);
+      ctx.quadraticCurveTo(cx + s * 0.25, cy + s * 0.4, cx + s * 0.4, cy - s * 0.05);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx + s * 0.42, cy - s * 0.08, s * 0.15, 0, Math.PI * 2);
+      ctx.fillStyle = cfg.COLORS.green;
+      ctx.fill();
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function Renderer(ctx, screenW, screenH) {
+    this.ctx = ctx;
+    this.W = screenW;
+    this.H = screenH;
+  }
+
+  Renderer.prototype.resize = function (w, h) {
+    this.W = w;
+    this.H = h;
+  };
+
+  Renderer.prototype.drawBackground = function () {
+    var ctx = this.ctx;
+    ctx.fillStyle = cfg.PAPER;
+    ctx.fillRect(0, 0, this.W, this.H);
+    var tile = getNoiseTile();
+    if (tile) {
+      for (var x = 0; x < this.W; x += 160) {
+        for (var y = 0; y < this.H; y += 160) ctx.drawImage(tile, x, y);
+      }
+    }
+  };
+
+  // ---------------- 对局场景（相机视口区） ----------------
+
+  Renderer.prototype.drawPlay = function (game) {
+    var ctx = this.ctx, l = game.layout();
+    var walls = game.walls, snake = game.snake, spawner = game.spawner;
+    var cam = game.camera;
+    var vw = l.areaW, vh = this.H;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, vw, vh);
+    ctx.clip();                       // 世界内容裁剪在视口区
+    ctx.translate(-cam.x, -cam.y);    // 相机变换
+
+    // 世界外区域压暗（衬托可玩范围）
+    var M = Math.max(vw, vh) + 80;
+    ctx.fillStyle = 'rgba(58,50,56,0.10)';
+    ctx.fillRect(-M, -M, walls.W + 2 * M, M);
+    ctx.fillRect(-M, walls.H, walls.W + 2 * M, M);
+    ctx.fillRect(-M, 0, M, walls.H);
+    ctx.fillRect(walls.W, 0, M, walls.H);
+
+    // 视口内的淡墨点阵（运动参照物，帮助感知移动）
+    ctx.fillStyle = 'rgba(58,50,56,0.10)';
+    var step = 140;
+    var x0 = Math.max(0, Math.floor(cam.x / step) * step);
+    var y0 = Math.max(0, Math.floor(cam.y / step) * step);
+    var x1 = Math.min(walls.W, cam.x + vw);
+    var y1 = Math.min(walls.H, cam.y + vh);
+    for (var gx = x0; gx <= x1; gx += step) {
+      for (var gy = y0; gy <= y1; gy += step) {
+        ctx.beginPath();
+        ctx.arc(gx, gy, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // 边界墙 + 内部墙
+    drawBoundary(ctx, walls, cam, vw, vh);
+    for (var i = 0; i < walls.rects.length; i++) {
+      var r = walls.rects[i];
+      if (r.x + r.w < cam.x - 20 || r.x > cam.x + vw + 20 ||
+          r.y + r.h < cam.y - 20 || r.y > cam.y + vh + 20) continue; // 视口裁剪
+      drawWallRect(ctx, r, i + 11);
+    }
+
+    // 道具：普通色块 + 特殊道具（万能色/炸弹/减速）；略小、旋转 + 脉动
+    var bs = cfg.BLOCK_RADIUS * 2;
+    for (i = 0; i < spawner.blocks.length; i++) {
+      var b = spawner.blocks[i];
+      if (b.x < cam.x - 40 || b.x > cam.x + vw + 40 || b.y < cam.y - 40 || b.y > cam.y + vh + 40) continue;
+      var pulse = 1 + 0.09 * Math.sin(game.timeMs / 280 + b.phase);
+      var seedX = Math.round(b.x / 10), seedY = Math.round(b.y / 10);
+      if (b.kind && b.kind !== 'color') {
+        drawItemBlock(ctx, b, b.x, b.y, bs, seedX, seedY, (u.hash2(seedX, seedY, 7) - 0.5) * 0.55, pulse);
+      } else {
+        drawCrayonBlock(ctx, b.x - bs / 2, b.y - bs / 2, bs, cfg.COLORS[b.color], seedX, seedY, {
+          rot: (u.hash2(seedX, seedY, 7) - 0.5) * 0.55,
+          scale: pulse,
+          wobble: 1.0
+        });
+      }
+    }
+
+    // 流星砖块：带拖尾的彩色光球，从四周飞入命中身体
+    for (i = 0; i < spawner.meteors.length; i++) {
+      var m = spawner.meteors[i];
+      if (m.x < cam.x - 60 || m.x > cam.x + vw + 60 || m.y < cam.y - 60 || m.y > cam.y + vh + 60) continue;
+      drawMeteor(ctx, m);
+    }
+
+    // 蛇：从尾画到头，头在最上层；节为圆形蜡笔块沿轨迹排布
+    // 节间距 SEG_SPACING ≥ 直径+间隙，描边 SEG_STROKE 加粗加深——相邻节一眼可辨、可逐个数清
+    // 多人对战：被咬的蛇附带 MP_BITE_FLASH_MS 毫秒的闪白 + 抖动反馈
+    var playerFlash = 0;
+    if (game.mode === 'multi' && game.mp && game.mp.playerEntry) {
+      playerFlash = Math.max(0, game.mp.playerEntry.bittenUntil - game.mp.timeMs);
+    }
+    this.drawSnakeBody(snake, cam, vw, vh, 200, playerFlash);
+    // 多人对战：AI 蛇（同一套蜡笔渲染）+ 头顶昵称标签
+    if (game.mode === 'multi' && game.mp) {
+      var bots = game.mp.bots;
+      for (i = 0; i < bots.length; i++) {
+        if (!bots[i].alive) continue;
+        var botFlash = Math.max(0, bots[i].bittenUntil - game.mp.timeMs);
+        this.drawSnakeBody(bots[i].snake, cam, vw, vh, 200 + bots[i].id * 131, botFlash);
+      }
+      this.drawNameLabels(game, cam, vw, vh);
+    }
+
+    // 粒子（世界坐标，随相机）
+    this.drawParticles(game);
+
+    ctx.restore();
+  };
+
+  /**
+   * 画一条蛇的身体（玩家/AI 共用）：seedBase 区分不同蛇的手绘抖动种子。
+   * segPos 比 colors 多 1 节：末尾恒为尾巴节（v2.3），画成深色蜡笔小尾鳍，
+   * 一眼可辨"这节消不掉"；尾巴节不做闪白覆盖（不可被咬），但随全蛇一起抖动。
+   * @param {number} flashMs 被咬反馈剩余毫秒（>0 时全节闪白 + 抖动，幅度随剩余时间衰减）
+   */
+  Renderer.prototype.drawSnakeBody = function (snake, cam, vw, vh, seedBase, flashMs) {
+    var ctx = this.ctx;
+    var ss = cfg.SEG_RADIUS * 2;
+    var n = snake.segPos.length; // = colors.length + 1（末尾为尾巴节）
+    var shake = flashMs > 0 ? Math.min(1, flashMs / cfg.MP_BITE_FLASH_MS) : 0;
+    var tb = Math.floor((flashMs || 0) / 45); // 抖动时间桶：每 45ms 换一组确定性偏移
+    for (var i = n - 1; i >= 0; i--) {
+      var p = snake.segPos[i];
+      var ox2 = 0, oy2 = 0;
+      if (shake > 0) { // 被咬抖动（种子含时间桶，画面抖动但不随机闪烁）
+        ox2 = (u.hash2(i + seedBase, tb, 91) - 0.5) * 7 * shake;
+        oy2 = (u.hash2(tb, i + seedBase, 92) - 0.5) * 7 * shake;
+      }
+      var px = p.x + ox2, py = p.y + oy2;
+      if (px < cam.x - 60 || px > cam.x + vw + 60 || py < cam.y - 60 || py > cam.y + vh + 60) continue;
+      if (snake.colors[i] === 'wild') { // 万能色节：白底星标块（消除时通配任意相邻同色）
+        ctx.save();
+        ctx.translate(px - ss / 2, py - ss / 2);
+        drawWildSeg(ctx, 0, 0, ss, seedBase + i, 41);
+        ctx.restore();
+        if (shake > 0) {
+          ctx.save();
+          ctx.globalAlpha = 0.6 * shake;
+          ctx.save();
+          ctx.translate(px - ss / 2, py - ss / 2);
+          drawWildSeg(ctx, 0, 0, ss, seedBase + i, 41);
+          ctx.restore();
+          ctx.restore();
+        }
+        if (i === 0) drawEyes(ctx, px, py, ss, snake.headDir());
+        continue;
+      }
+      if (i >= snake.colors.length) { // 尾巴节：深色圆润圆块 + 小尾尖，朝向 = 前一节 → 尾巴节
+        var prev = snake.segPos[i - 1] ||
+          { x: p.x - Math.cos(snake.angle) * cfg.SEG_SPACING, y: p.y - Math.sin(snake.angle) * cfg.SEG_SPACING };
+        var tdx = p.x - prev.x, tdy = p.y - prev.y;
+        var tl = Math.sqrt(tdx * tdx + tdy * tdy) || 1;
+        drawTail(ctx, px, py, tdx / tl, tdy / tl, ss, seedBase + i, 43);
+        continue;
+      }
+      var rot = (u.hash2(i, 77, 3) - 0.5) * 0.5;
+      var wob = i === 0 ? 0.8 : 1.2;
+      drawCrayonBlock(ctx, px - ss / 2, py - ss / 2, ss, cfg.COLORS[snake.colors[i]], seedBase + i, 41, {
+        rot: rot, wobble: wob, stroke: cfg.SEG_STROKE
+      });
+      if (shake > 0) { // 闪白覆盖（纸白蜡笔块，透明度随剩余时间衰减）
+        ctx.save();
+        ctx.globalAlpha = 0.6 * shake;
+        drawCrayonBlock(ctx, px - ss / 2, py - ss / 2, ss, '#FFFDF5', seedBase + i, 41, {
+          rot: rot, wobble: wob, stroke: cfg.SEG_STROKE
+        });
+        ctx.restore();
+      }
+      if (i === 0) drawEyes(ctx, px, py, ss, snake.headDir());
+    }
+  };
+
+  /** 多人对战：头顶昵称小手绘标签（深色描边文字，无底板；玩家标签为「我」，蜡笔黄） */
+  Renderer.prototype.drawNameLabels = function (game, cam, vw, vh) {
+    var ctx = this.ctx;
+    var es = game.mp.allEntries();
+    ctx.save();
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.lineJoin = 'round';
+    for (var i = 0; i < es.length; i++) {
+      var e = es[i];
+      if (!e.alive) continue;
+      var hx = e.snake.x, hy = e.snake.y - cfg.SEG_RADIUS - 8;
+      if (hx < cam.x - 40 || hx > cam.x + vw + 40 || hy < cam.y - 40 || hy > cam.y + vh + 40) continue;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = cfg.INK;
+      ctx.strokeText(e.name, hx, hy);
+      ctx.fillStyle = e.isPlayer ? '#FFD94A' : '#FFFDF5';
+      ctx.fillText(e.name, hx, hy);
+    }
+    ctx.restore();
+  };
+
+  // ---------------- 粒子 ----------------
+
+  Renderer.prototype.drawParticles = function (game) {
+    var ctx = this.ctx;
+    for (var i = 0; i < game.particles.list.length; i++) {
+      var p = game.particles.list[i];
+      var t = p.life / p.maxLife; // 1 → 0
+      if (p.type === 'crumb') {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, t * 1.6);
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.7);
+        ctx.strokeStyle = cfg.INK;
+        ctx.lineWidth = 0.8;
+        ctx.strokeRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.7);
+        ctx.restore();
+      } else if (p.type === 'star') {
+        var prog = 1 - t;
+        var sc = p.scale || 1; // 连锁逐级放大
+        ctx.save();
+        ctx.globalAlpha = t;
+        starPath(ctx, p.x, p.y, (8 + prog * 34) * sc, prog * 0.6);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+        ctx.strokeStyle = cfg.INK;
+        ctx.lineWidth = 1.6 * Math.min(sc, 1.6);
+        ctx.stroke();
+        ctx.restore();
+      } else if (p.type === 'text') {
+        // 连锁文字：手绘风「N连锁！」，深色描边 + 蜡笔黄填充，上飘淡出
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, t * 2.2); // 短暂停留，末尾淡出
+        ctx.font = 'bold ' + Math.round(p.size) + 'px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = Math.max(3, p.size * 0.16);
+        ctx.strokeStyle = cfg.INK;
+        ctx.strokeText(p.text, p.x, p.y);
+        ctx.fillStyle = '#FFD94A';
+        ctx.fillText(p.text, p.x, p.y);
+        ctx.restore();
+      } else if (p.type === 'ring') {
+        // 消除高亮：扩张圆环 + 中心 ✕，标出被消除节位置（非连续消除也清楚可见）
+        var prog = 1 - t; // 0 → 1
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, t * 1.5);
+        var sc = p.scale || 1;
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = Math.max(2, 3 * (1 - prog) + 1.5);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (5 + prog * 30) * sc, 0, Math.PI * 2);
+        ctx.stroke();
+        var s = 6 * sc;
+        ctx.lineWidth = Math.max(1.5, 2 * sc);
+        ctx.beginPath();
+        ctx.moveTo(p.x - s, p.y - s); ctx.lineTo(p.x + s, p.y + s);
+        ctx.moveTo(p.x + s, p.y - s); ctx.lineTo(p.x - s, p.y + s);
+        ctx.stroke();
+        ctx.restore();
+      } else if (p.type === 'streak') {
+        // 自吃牵引线：从身体接触点拉向蛇头，表达「砖块被吸到头部」
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, t * 1.8);
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = Math.max(2.5, 4 * t + 1);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p.x1, p.y1);
+        ctx.lineTo(p.x2, p.y2);
+        ctx.stroke();
+        // 头部端的箭头小三角（指示被拉过去的方向）
+        var ang = Math.atan2(p.y2 - p.y1, p.x2 - p.x1);
+        var ah = 7;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.moveTo(p.x2, p.y2);
+        ctx.lineTo(p.x2 - Math.cos(ang - 0.4) * ah, p.y2 - Math.sin(ang - 0.4) * ah);
+        ctx.lineTo(p.x2 - Math.cos(ang + 0.4) * ah, p.y2 - Math.sin(ang + 0.4) * ah);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  };
+
+  // ---------------- 小地图 ----------------
+
+  /** HUD 内小地图：世界边界、墙、色块、视口框、蛇头亮点 */
+  Renderer.prototype.drawMinimap = function (game, mx, my, mw) {
+    var ctx = this.ctx, walls = game.walls;
+    var scale = mw / walls.W;
+    var mh = walls.H * scale;
+
+    // 底
+    wobblyRoundRect(ctx, mx, my, mw, mh, 4, 17, 29, 1.0);
+    ctx.fillStyle = '#F3ECDD';
+    ctx.fill();
+    ctx.save();
+    ctx.clip();
+
+    // 边界墙带（与世界内一致的排线墙样式：灰底 + 斜线排线 + 细描边）
+    var bt = Math.max(2.5, cfg.WALL_THICK * scale);
+    var strips = [
+      { x: mx, y: my, w: mw, h: bt },            // 上
+      { x: mx, y: my + mh - bt, w: mw, h: bt },  // 下
+      { x: mx, y: my, w: bt, h: mh },            // 左
+      { x: mx + mw - bt, y: my, w: bt, h: mh }   // 右
+    ];
+    for (i = 0; i < 4; i++) {
+      var st = strips[i];
+      ctx.fillStyle = cfg.WALL_FILL;
+      ctx.fillRect(st.x, st.y, st.w, st.h);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(st.x, st.y, st.w, st.h);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(58,50,56,0.45)';
+      ctx.lineWidth = 0.7;
+      for (var d = -st.h; d < st.w + st.h; d += 4) {
+        ctx.beginPath();
+        ctx.moveTo(st.x + d, st.y + st.h + 1);
+        ctx.lineTo(st.x + d + st.h + 2, st.y - 1);
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 0.8;
+      ctx.strokeRect(st.x, st.y, st.w, st.h);
+    }
+
+    // 内部墙
+    ctx.fillStyle = 'rgba(58,50,56,0.5)';
+    for (var i = 0; i < walls.rects.length; i++) {
+      var r = walls.rects[i];
+      ctx.fillRect(mx + r.x * scale, my + r.y * scale, Math.max(1.5, r.w * scale), Math.max(1.5, r.h * scale));
+    }
+    // 色块
+    for (i = 0; i < game.spawner.blocks.length; i++) {
+      var b = game.spawner.blocks[i];
+      ctx.fillStyle = cfg.COLORS[b.color];
+      ctx.fillRect(mx + b.x * scale - 1, my + b.y * scale - 1, 2.5, 2.5);
+    }
+    // 视口框
+    var l = game.layout();
+    ctx.strokeStyle = 'rgba(58,50,56,0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(mx + game.camera.x * scale, my + game.camera.y * scale,
+      l.areaW * scale, this.H * scale);
+    // 多人对战：AI 蛇亮点（各自头部颜色小点），画在玩家亮点下层
+    if (game.mode === 'multi' && game.mp) {
+      var bots = game.mp.bots;
+      for (var bi = 0; bi < bots.length; bi++) {
+        if (!bots[bi].alive) continue;
+        var bsn = bots[bi].snake;
+        ctx.beginPath();
+        ctx.arc(mx + bsn.x * scale, my + bsn.y * scale, 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = cfg.COLORS[bsn.headColor()] || '#8A8278';
+        ctx.fill();
+      }
+    }
+    // 蛇头亮点（描边高光点，大地图里一眼定位）
+    var hx = mx + game.snake.x * scale, hy = my + game.snake.y * scale;
+    ctx.beginPath();
+    ctx.arc(hx, hy, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFD94A';
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.restore();
+
+    // 外框
+    wobblyRoundRect(ctx, mx, my, mw, mh, 4, 17, 29, 1.0);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+    return mh;
+  };
+
+  // ---------------- 右侧 HUD 面板 ----------------
+
+  Renderer.prototype.drawPanel = function (game) {
+    var ctx = this.ctx, l = game.layout();
+    var px = l.panelX, pw = l.panelW, H = this.H;
+    var cx = px + pw / 2;
+
+    ctx.save();
+    // 面板底：略亮纸色 + 左侧手绘分隔线
+    ctx.fillStyle = 'rgba(255,253,245,0.72)';
+    ctx.fillRect(px, 0, pw, H);
+    ctx.strokeStyle = 'rgba(58,50,56,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    var seg = 10;
+    for (var i = 0; i <= seg; i++) {
+      var ly = H * i / seg;
+      var lx = px + (u.hash2(i, 7, 3) - 0.5) * 5;
+      if (i === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
+    }
+    ctx.stroke();
+
+    ctx.fillStyle = cfg.INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // 标题
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText('消食蛇', cx, 24);
+
+    // 模式 / 关卡号
+    ctx.font = '12px sans-serif';
+    ctx.globalAlpha = 0.75;
+    var modeText = game.mode === 'level' ? ('闯关模式 · 第 ' + game.levelCfg.level + ' 关')
+      : (game.mode === 'multi' ? '多人对战 · 7 蛇同场' : '无尽模式');
+    ctx.fillText(modeText, cx, 46);
+    ctx.globalAlpha = 1;
+
+    // 分数
+    ctx.font = '11px sans-serif';
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('分数', cx, 74);
+    ctx.globalAlpha = 1;
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText(String(game.score), cx, 100);
+
+    // 目标 / 最高分 + 进度条
+    ctx.font = 'bold 13px sans-serif';
+    if (game.mode === 'level') {
+      ctx.fillText('目标 ' + game.levelCfg.targetScore, cx, 126);
+      var barW = pw - 44, barH = 9, bx = cx - barW / 2, by = 136;
+      var prog = u.clamp(game.score / game.levelCfg.targetScore, 0, 1);
+      wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
+      ctx.fillStyle = 'rgba(58,50,56,0.12)';
+      ctx.fill();
+      if (prog > 0.02) {
+        wobblyRoundRect(ctx, bx, by, Math.max(8, barW * prog), barH, 4, 9, 3, 0.8);
+        ctx.fillStyle = cfg.COLORS.green;
+        ctx.fill();
+      }
+      wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    } else if (game.mode === 'multi') {
+      ctx.fillText('最佳 ' + Math.max(game.mpBest.len, game.snake.length()) + '节 · ' +
+        Math.max(game.mpBest.score, game.score) + '分', cx, 126);
+    } else {
+      ctx.fillText('最高 ' + Math.max(game.best, game.score), cx, 126);
+    }
+
+    // 分数构成
+    ctx.font = '10px sans-serif';
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('存活 ' + game.survivalScore + ' · 消除 ' + game.elimScore, cx, 160);
+    // 当前速度（动态加速可视化：随长度/时间提升，吃减速道具时回落）
+    var spd = Math.round(game.currentSpeed());
+    var slow = (game.slowUntil && game.timeMs < game.slowUntil);
+    ctx.fillStyle = slow ? '#2EC4B6' : cfg.INK;
+    ctx.fillText('速度 ' + spd + (slow ? ' (减速)' : '') + ' px/s', cx, 176);
+    ctx.fillStyle = cfg.INK;
+    ctx.globalAlpha = 1;
+
+    // 多人对战：实时排行榜（按当前节数降序，玩家高亮加粗）
+    var yOff = 0;
+    if (game.mode === 'multi' && game.mp) {
+      var lb = game.mp.leaderboard();
+      ctx.font = '11px sans-serif';
+      ctx.globalAlpha = 0.6;
+      ctx.fillText('排行榜', cx, 180);
+      ctx.globalAlpha = 1;
+      var rowH = 16, ly = 194;
+      for (var li = 0; li < lb.length; li++) {
+        var rowY = ly + li * rowH;
+        var row = lb[li];
+        ctx.globalAlpha = row.isPlayer ? 1 : 0.8;
+        ctx.fillStyle = row.isPlayer ? '#C47F17' : cfg.INK;
+        ctx.font = (row.isPlayer ? 'bold ' : '') + '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText((li + 1) + '. ' + row.name, px + 16, rowY);
+        ctx.textAlign = 'right';
+        ctx.fillText(row.length + '节', px + pw - 16, rowY);
+        ctx.textAlign = 'center';
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = cfg.INK;
+      yOff = 30 + lb.length * rowH; // 排行榜占用的纵向高度，后续板块整体下移
+    }
+
+    // 已解锁颜色预览（4 列 x 2 行，未解锁灰色带叉）
+    ctx.font = '11px sans-serif';
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('已解锁颜色', cx, 186 + yOff);
+    ctx.globalAlpha = 1;
+    var sw = 20, gap = 7, cols = 4;
+    var gridW = cols * sw + (cols - 1) * gap;
+    var sx = cx - gridW / 2, sy = 196 + yOff;
+    for (i = 0; i < cfg.MAX_COLORS; i++) {
+      var col = i % cols, row = Math.floor(i / cols);
+      var bx2 = sx + col * (sw + gap), by2 = sy + row * (sw + gap);
+      if (i < game.unlockedCount) {
+        drawCrayonBlock(ctx, bx2, by2, sw, cfg.COLORS[cfg.COLOR_KEYS[i]], 30 + i, 4, {
+          rot: (u.hash2(i, 5, 2) - 0.5) * 0.3, wobble: 0.9
+        });
+      } else {
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        wobblyRoundRect(ctx, bx2, by2, sw, sw, sw * 0.28, 30 + i, 4, 0.9);
+        ctx.fillStyle = '#CFC8BC';
+        ctx.fill();
+        ctx.strokeStyle = cfg.INK;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.beginPath(); // 锁定叉号
+        ctx.moveTo(bx2 + sw * 0.3, by2 + sw * 0.3);
+        ctx.lineTo(bx2 + sw * 0.7, by2 + sw * 0.7);
+        ctx.moveTo(bx2 + sw * 0.7, by2 + sw * 0.3);
+        ctx.lineTo(bx2 + sw * 0.3, by2 + sw * 0.7);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 小地图
+    var mapTop = sy + 2 * (sw + gap) + 18;
+    ctx.font = '11px sans-serif';
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('小地图', cx, mapTop);
+    ctx.globalAlpha = 1;
+    var mh = this.drawMinimap(game, px + 14, mapTop + 10, pw - 28);
+
+    // 底部操作提示（空间不足时省略，多人模式面板较长）
+    if (mapTop + 10 + mh < H - 60) {
+      ctx.font = '11px sans-serif';
+      ctx.globalAlpha = 0.55;
+      ctx.fillText('方向键 / WASD 转向', cx, H - 44);
+      ctx.fillText('或按住左下摇杆拖动', cx, H - 26);
+    }
+    ctx.restore();
+  };
+
+  // ---------------- 摇杆（固定底座，视口区左下角） ----------------
+
+  Renderer.prototype.drawJoystick = function (game) {
+    var j = game.joystick;
+    var ctx = this.ctx;
+    ctx.save();
+    if (!j.active) {
+      // 未激活：淡淡的提示圆盘
+      ctx.globalAlpha = 0.28;
+      ctx.setLineDash([6, 6]);
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(j.baseX, j.baseY, j.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = cfg.INK;
+      ctx.fillText('摇杆', j.baseX, j.baseY);
+      ctx.restore();
+      return;
+    }
+    ctx.globalAlpha = 0.55;
+    // 底盘
+    ctx.beginPath();
+    ctx.arc(j.baseX, j.baseY, j.radius, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,253,245,0.6)';
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    // 摇杆头
+    ctx.beginPath();
+    ctx.arc(j.knobX, j.knobY, 20, 0, Math.PI * 2);
+    ctx.fillStyle = cfg.PANEL;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // ---------------- 界面（菜单 / 选关 / 结算） ----------------
+
+  Renderer.prototype.drawButton = function (b) {
+    var ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = b.enabled ? 1 : 0.35;
+    wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 12, Math.round(b.x), Math.round(b.y), 1.6);
+    ctx.fillStyle = cfg.PANEL;
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(1, -0.8);
+    ctx.globalAlpha *= 0.3;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = cfg.INK;
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 1);
+    ctx.restore();
+  };
+
+  Renderer.prototype.drawOverlay = function (alpha) {
+    var ctx = this.ctx;
+    ctx.fillStyle = 'rgba(251,246,233,' + (alpha === undefined ? 0.94 : alpha) + ')';
+    ctx.fillRect(0, 0, this.W, this.H);
+  };
+
+  Renderer.prototype.drawMenu = function (game) {
+    var ctx = this.ctx;
+    this.drawOverlay(0.0); // 主菜单直接用纸面
+    var cx = this.W / 2;
+    var ty = this.H * 0.22; // 标题基线 Y
+
+    // ---- 标题「消食蛇」美术设计 ----
+    // 设计意图：每个字用不同颜色（红=消除、绿=吃、蓝=蛇身），
+    //   字间穿插小蜡笔色块（体现"蛇由色块组成"），
+    //   底部蜡笔波浪下划线 + 少量砖块沿线缓慢往返滑动（手绘感，平滑不跳动）
+    ctx.save();
+    var titleChars = ['消', '食', '蛇'];
+    var titleColors = [cfg.COLORS.red, cfg.COLORS.green, cfg.COLORS.blue]; // 红(消) 绿(食) 蓝(蛇)
+    var fontSize = 52;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold ' + fontSize + 'px sans-serif';
+
+    // 测量总宽以便居中
+    var totalW = 0;
+    for (var tc = 0; tc < titleChars.length; tc++) totalW += ctx.measureText(titleChars[tc]).width;
+    var charGap = 8; // 字间距
+    totalW += charGap * (titleChars.length - 1);
+    var startX = cx - totalW / 2;
+
+    // 逐字绘制（每字独立颜色 + 轻微蜡笔描边）
+    var curX = startX;
+    for (var ci = 0; ci < titleChars.length; ci++) {
+      var ch = titleChars[ci];
+      var chW = ctx.measureText(ch).width;
+      var chCx = curX + chW / 2;
+
+      // 字体颜色（深色描边 + 彩色填充，保证在浅色背景可读）
+      ctx.font = 'bold ' + fontSize + 'px sans-serif';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = cfg.INK;
+      ctx.strokeText(ch, chCx, ty);
+      ctx.fillStyle = titleColors[ci];
+      ctx.fillText(ch, chCx, ty);
+
+      curX += chW + charGap;
+    }
+
+    // 蜡笔波浪下划线（手绘感，贯穿标题下方）
+    ctx.beginPath();
+    var ulY = ty + fontSize * 0.48;
+    var ulW = totalW + 40;
+    var ulX0 = cx - ulW / 2;
+    ctx.moveTo(ulX0, ulY);
+    for (var wx = 1; wx <= 12; wx++) {
+      var px = ulX0 + (wx / 12) * ulW;
+      var py = ulY + Math.sin(wx * 1.3 + 0.7) * 3.5;
+      ctx.lineTo(px, py);
+    }
+    ctx.strokeStyle = cfg.COLORS.orange; // 橙色下划线（第 4 色，点缀用）
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // 标题两侧各飘 1 个稍大的装饰色块（四色各一，表达"四色消除"核心机制）
+    var decorBlocks = [
+      { x: cx - totalW / 2 - 28, y: ty - 6, color: cfg.COLORS.orange, size: 14, rot: -0.25 },
+      { x: cx + totalW / 2 + 26, y: ty + 10, color: cfg.COLORS.purple, size: 12, rot: 0.35 }
+    ];
+    for (var di = 0; di < decorBlocks.length; di++) {
+      var db = decorBlocks[di];
+      ctx.save();
+      ctx.translate(db.x, db.y);
+      ctx.rotate(db.rot);
+      drawCrayonBlock(ctx, -db.size / 2, -db.size / 2, db.size, db.color,
+        di * 77, di * 43, { rot: db.rot * 0.8, wobble: 1.0 });
+      ctx.restore();
+    }
+
+    // 标题下方「色块滑动 → 触发消除」循环动效（多色轮播 + 随机效果）
+    this.drawTitleFx(game);
+
+    ctx.restore();
+    // ---- 标题结束 ----
+
+    // 副标题：四个起始色块做装饰（保留原有设计，位置随标题下移）
+    ctx.save();
+    ctx.fillStyle = cfg.INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '15px sans-serif';
+    ctx.fillText('自由游动 · 吃色补头 · 四连消除 · 别撞墙', cx, this.H * 0.35);
+    ctx.font = '13px sans-serif';
+    ctx.globalAlpha = 0.7;
+    ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.89);
+    ctx.fillText('多人对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.89 + 22);
+    ctx.restore();
+    this.drawParticles(game); // 标题消除动效的粒子（屏幕坐标，无相机变换）
+    this.drawButtons(game);
+  };
+
+  /**
+   * 标题下方装饰动效：小蛇「向左走」一边吃砖块一边凑 4 连消除，循环演示每种颜色各来一次。
+   * 蛇头朝左、蛇身向右铺开；砖块从左侧远处流入、被蛇头吃掉补到头部（与游戏内 unshift 一致），
+   * 同色节在头侧累积，凑够 4 连即触发消除（蜡笔屑迸裂 + 高亮环 + 星形闪光 + 飘字「4连消除！」），随后循环。
+   * 颜色按 COLOR_KEYS 顺序轮播（红→蓝→绿→橙→紫→黄→青→粉→…），保证每种颜色都演示一次再循环。
+   * 状态挂在 renderer 实例上（this.titleFx），逐帧更新。
+   */
+  Renderer.prototype.drawTitleFx = function (game) {
+    var ctx = this.ctx;
+    var fx = this.titleFx;
+    if (!fx) fx = this.titleFx = {
+      segs: ['red', 'blue', 'green', 'orange', 'purple'], // 常驻蛇身（多色、无 4 连同色），保证蛇一直有身体在"走"
+      feeder: null,      // 正在流入、待"吃"下的砖块 {color, x}
+      lastMs: game.timeMs,
+      feedTimer: 300,    // 距下一块砖出现的间隔
+      colorCursor: 0,    // 当前这一轮要连吃的颜色在 COLOR_KEYS 里的下标
+      runLeft: 0,        // 该色还差几块才凑满一轮（一轮=4）
+      runColor: cfg.COLOR_KEYS[0],
+      bite: 0,           // 蛇头咬合动画剩余时长(ms)
+      bob: 0             // 行走摆动相位
+    };
+    var nowMs = game.timeMs;
+    var dt = nowMs - fx.lastMs;
+    fx.lastMs = nowMs;
+    if (dt < 0) dt = 0;
+    if (dt > 80) dt = 80; // 切后台回来防跳帧
+    fx.bob += dt;
+
+    var cx = this.W / 2;
+    var ty = this.H * 0.22;
+    var fontSize = 52;
+    var laneY = ty + fontSize * 0.95;             // 标题与副标题之间的一条轨道
+    var SEG = 24, BLK = 20, MAXLEN = 14;
+    var headX = cx - Math.min(this.W * 0.16, 130); // 蛇头在偏左（朝左走），蛇身向右铺开
+    var walkSpeed = 175;                           // 砖块从左侧流入、向右被吃（视觉上=蛇向左走）
+
+    // 1) 出块：COLOR_KEYS 顺序轮一遍（红→蓝→绿→…→粉→红…），每色喂 4 块凑 4 连
+    fx.feedTimer -= dt;
+    if (!fx.feeder && fx.feedTimer <= 0) {
+      fx.feedTimer = 360 + Math.random() * 200;    // 0.36~0.56s 出一块（连续走、不断粮）
+      if (fx.runLeft <= 0) {                       // 上一轮凑满，切到下一色
+        fx.runColor = cfg.COLOR_KEYS[fx.colorCursor % cfg.COLOR_KEYS.length];
+        fx.colorCursor++;
+        fx.runLeft = 4;
+      }
+      fx.feeder = { color: fx.runColor, x: headX - 200 }; // 从左侧远处流入
+      fx.runLeft--;
+    }
+
+    // 2) 推进待吃砖块（向左流入 → 到蛇头被吃下）；补到头部，超长去尾
+    if (fx.feeder) {
+      fx.feeder.x += walkSpeed * dt / 1000;
+      if (fx.feeder.x >= headX) {
+        fx.segs.unshift(fx.feeder.color);          // 补头（与游戏一致：吃到→unshift 到头部）
+        if (fx.segs.length > MAXLEN) fx.segs.pop(); // 尾部掉落，总长有界
+        fx.bite = 160;
+        game.particles.ring(headX, laneY, cfg.COLORS[fx.feeder.color], 0.9); // 咬合小高亮
+        fx.feeder = null;
+        // 头侧 4 连（前 4 个同色）→ 消除
+        var L = fx.segs.length;
+        if (L >= 4 && fx.segs[0] === fx.segs[1] && fx.segs[1] === fx.segs[2] && fx.segs[2] === fx.segs[3]) {
+          var col = cfg.COLORS[fx.segs[0]];
+          for (var k = 0; k < 4; k++) {
+            var px = headX + k * SEG;
+            game.particles.burst(px, laneY, col, 7, 1.3);
+            game.particles.ring(px, laneY, col, 1.3);
+          }
+          game.particles.flash(headX + 1.5 * SEG, laneY, '#FFD94A', 1.4, 3);
+          game.particles.chainText(headX + 1.5 * SEG, laneY - 26, '4连消除！', 20);
+          fx.segs.splice(0, 4); // 移除头侧 4 节（常驻蛇身保留）
+        }
+      }
+    }
+    if (fx.bite > 0) fx.bite -= dt;
+
+    // 3) 绘制：蛇头在左（朝左走、眼睛朝左），常驻蛇身向右铺开；整体波浪式摆动表现"走"
+    ctx.save();
+    ctx.textBaseline = 'middle';
+    for (var i = 0; i < fx.segs.length; i++) {
+      var sx = headX + i * SEG;
+      var isHead = (i === 0);
+      var sz = isHead ? BLK + 2 : BLK;
+      var py = laneY + Math.sin(fx.bob / 240 - i * 0.55) * 2.6; // 蛇身波浪式摆动
+      if (sx > headX + MAXLEN * SEG + 30) continue;
+      drawCrayonBlock(ctx, sx - sz / 2, py - sz / 2, sz, cfg.COLORS[fx.segs[i]], i * 53 + 17, 41,
+        { rot: 0.08, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      if (isHead) {
+        var sc = 1 + Math.max(0, fx.bite) / 160 * 0.18; // 咬合瞬间微微鼓一下
+        ctx.save();
+        ctx.translate(sx, py);
+        ctx.scale(sc, sc);
+        drawEyes(ctx, 0, 0, sz, { x: -1, y: 0 }); // 朝左（行进方向=向左走）
+        ctx.restore();
+      }
+    }
+    if (fx.feeder) { // 正在流入、待吃的砖块（带轻微脉冲提示"正在靠近"）
+      var fsz = BLK * (1 + 0.08 * Math.sin(nowMs / 120));
+      ctx.save();
+      ctx.globalAlpha = 0.95;
+      drawCrayonBlock(ctx, fx.feeder.x - fsz / 2, laneY - fsz / 2, fsz, cfg.COLORS[fx.feeder.color], 7, 41,
+        { rot: 0.08, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      ctx.restore();
+    }
+    ctx.restore();
+  };
+
+
+  Renderer.prototype.drawLevels = function (game) {
+    var ctx = this.ctx;
+    this.drawOverlay(0.0);
+    ctx.save();
+    ctx.fillStyle = cfg.INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillText('选择关卡', this.W / 2, this.H * 0.22);
+    ctx.font = '13px sans-serif';
+    ctx.globalAlpha = 0.65;
+    ctx.fillText('通关可解锁后续关卡，每 2 关解锁 1 种新颜色', this.W / 2, this.H * 0.22 + 34);
+    ctx.restore();
+    this.drawButtons(game);
+  };
+
+  Renderer.prototype.drawResult = function (game, isClear) {
+    var ctx = this.ctx;
+    this.drawOverlay(0.9);
+    ctx.save();
+    ctx.fillStyle = cfg.INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 32px sans-serif';
+    ctx.fillText(isClear ? '过关！' : '游戏结束', this.W / 2, this.H * 0.30);
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('得分 ' + game.score, this.W / 2, this.H * 0.39);
+    ctx.font = '14px sans-serif';
+    ctx.globalAlpha = 0.75;
+    if (isClear) {
+      ctx.fillText('存活 ' + game.survivalScore + ' 分 + 消除 ' + game.elimScore + ' 分', this.W / 2, this.H * 0.45);
+    } else if (game.mode === 'endless') {
+      ctx.fillText('历史最高 ' + game.best + ' 分', this.W / 2, this.H * 0.45);
+    } else {
+      ctx.fillText('目标分数 ' + game.levelCfg.targetScore + '，再接再厉', this.W / 2, this.H * 0.45);
+    }
+    ctx.restore();
+    this.drawButtons(game);
+  };
+
+  Renderer.prototype.drawButtons = function (game) {
+    for (var i = 0; i < game.uiButtons.length; i++) this.drawButton(game.uiButtons[i]);
+  };
+
+  // ---------------- 多人对战结算（手绘风卡片 + 逐行统计，v2.2） ----------------
+
+  /**
+   * 手绘风结算按钮：主按钮（再来一局）蜡笔黄填充 + 加粗描边，副按钮纸色。
+   * @param {number} alpha 淡入透明度（结算动画用）
+   */
+  Renderer.prototype.drawDoodleButton = function (b, primary, alpha) {
+    var ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = (b.enabled ? 1 : 0.35) * (alpha === undefined ? 1 : alpha);
+    wobblyRoundRect(ctx, b.x, b.y, b.w, b.h, 14, Math.round(b.x), Math.round(b.y), 2.0);
+    ctx.fillStyle = primary ? '#FFD94A' : cfg.PANEL;
+    ctx.fill();
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = primary ? 3.2 : 2.4;
+    ctx.stroke();
+    ctx.save(); // 第二遍错位描边（手绘"描了两次"感）
+    ctx.translate(1.4, -1);
+    ctx.globalAlpha *= 0.3;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = cfg.INK;
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 1);
+    ctx.restore();
+  };
+
+  /**
+   * 多人对战结算界面：手绘风卡片底板（抖动描边圆角 + 纸张噪点），
+   * 标题按名次变化（第 1 名「冠军！」+ 皇冠/星星涂鸦，2~3 名「很棒！」，其余「再接再厉」），
+   * 统计每行一项（左侧涂鸦小图标 + 标签 + 右侧醒目数值），
+   * 动画：卡片 280ms 淡入上移，各行依次延迟 ~80ms 从左侧滑入，按钮最后淡入。
+   */
+  Renderer.prototype.drawMultiResult = function (game) {
+    var ctx = this.ctx, r = game.mpResult;
+    var W = this.W, H = this.H;
+    var t = Math.max(0, game.timeMs - (game.overAt || 0));
+    this.drawOverlay(0.6); // 压暗战场，突出卡片
+
+    // 统计行（每行一项：图标 / 标签 / 数值 / 数值颜色）
+    var rows = [
+      { icon: 'medal', label: '排名',         value: '第 ' + r.rank + ' 名', color: '#C47F17' },
+      { icon: 'clock', label: '存活时间',     value: r.surviveSec + ' 秒',   color: cfg.INK },
+      { icon: 'star',  label: '总分',         value: String(r.score),        color: '#E8552F' },
+      { icon: 'clock', label: '时间分',       value: '+' + r.survivalScore,  color: '#4A7FD4' },
+      { icon: 'spark', label: '消除分',       value: '+' + r.elimScore,      color: '#9B5DE5' },
+      { icon: 'block', label: '累计消除方块', value: String(r.elimTotal),    color: '#2EC4B6' },
+      { icon: 'burst', label: '击杀数',       value: String(r.kills),        color: '#E8552F' },
+      { icon: 'snake', label: '最终节数',     value: r.finalLen + ' 节',     color: '#6FBF4A' }
+    ];
+
+    // 卡片几何：内容优先，小屏压缩行距；卡片整体停在按钮上方
+    var rowH = 34, padV = 18, titleH = 96, footH = 30;
+    var cw = Math.min(440, W * 0.62);
+    var ch = padV * 2 + titleH + rows.length * rowH + footH;
+    var btnTop = H;
+    for (var bi = 0; bi < game.uiButtons.length; bi++) btnTop = Math.min(btnTop, game.uiButtons[bi].y);
+    var maxCh = btnTop - 20 - 16;
+    if (ch > maxCh) {
+      rowH = Math.max(24, (maxCh - padV * 2 - titleH - footH) / rows.length);
+      ch = padV * 2 + titleH + rows.length * rowH + footH;
+    }
+    var cx = W / 2;
+    var x = cx - cw / 2;
+    var y = Math.max(12, (btnTop - 20 - ch) / 2);
+
+    // ---- 卡片底板（280ms 淡入 + 轻微上移）----
+    var aCard = u.clamp(t / 280, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = aCard;
+    ctx.translate(0, (1 - aCard) * 14);
+    wobblyRoundRect(ctx, x, y, cw, ch, 18, 71, 73, 2.4);
+    ctx.fillStyle = cfg.PANEL;
+    ctx.fill();
+    var tile = getNoiseTile(); // 纸张质感：噪点平铺裁剪进卡片
+    if (tile) {
+      wobblyRoundRect(ctx, x, y, cw, ch, 18, 71, 73, 2.4);
+      ctx.save();
+      ctx.clip();
+      for (var nx = x; nx < x + cw; nx += 160) {
+        for (var ny = y; ny < y + ch; ny += 160) ctx.drawImage(tile, nx, ny);
+      }
+      ctx.restore();
+    }
+    wobblyRoundRect(ctx, x, y, cw, ch, 18, 71, 73, 2.4);
+    ctx.strokeStyle = cfg.INK;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(1.4, -1);
+    ctx.globalAlpha = aCard * 0.3;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+    ctx.restore();
+
+    // ---- 标题区（按名次变化）----
+    var title = r.rank === 1 ? '冠军！' : (r.rank <= 3 ? '很棒！' : '再接再厉');
+    var titleColor = r.rank === 1 ? '#C47F17' : (r.rank <= 3 ? '#4A8C3F' : cfg.INK);
+    var ty = y + padV + 50;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (r.rank === 1) {
+      drawCrown(ctx, cx, y + padV + 14, 46, 24);
+      starPath(ctx, cx - 76, ty, 12, 0.4);
+      ctx.fillStyle = '#FFD94A';
+      ctx.fill();
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      starPath(ctx, cx + 76, ty, 12, -0.3);
+      ctx.fillStyle = '#FFD94A';
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.font = 'bold 34px sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText(title, cx, ty);
+    ctx.fillStyle = titleColor;
+    ctx.fillText(title, cx, ty);
+    ctx.font = '12px sans-serif';
+    ctx.globalAlpha = aCard * 0.65;
+    ctx.fillStyle = cfg.INK;
+    ctx.fillText('多人对战 · 7 蛇同场', cx, ty + 30);
+    ctx.globalAlpha = aCard;
+
+    // ---- 统计行（每行一项，依次延迟 ~80ms 从左侧滑入）----
+    var y0 = y + padV + titleH;
+    for (var ri = 0; ri < rows.length; ri++) {
+      var p = u.clamp((t - 260 - ri * 80) / 160, 0, 1);
+      if (p <= 0) continue;
+      var ry = y0 + ri * rowH + rowH / 2;
+      var slide = (1 - p) * 22;
+      ctx.save();
+      ctx.globalAlpha = p * aCard;
+      ctx.strokeStyle = 'rgba(58,50,56,0.18)'; // 行上手绘虚线分隔
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x + 22, y0 + ri * rowH);
+      ctx.lineTo(x + cw - 22, y0 + ri * rowH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      drawStatIcon(ctx, rows[ri].icon, x + 44 - slide, ry, 20);
+      ctx.textAlign = 'left';
+      ctx.font = '14px sans-serif';
+      ctx.fillStyle = cfg.INK;
+      ctx.fillText(rows[ri].label, x + 68 - slide, ry);
+      ctx.textAlign = 'right';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.fillStyle = rows[ri].color;
+      ctx.fillText(rows[ri].value, x + cw - 30 - slide, ry);
+      ctx.restore();
+    }
+
+    // ---- 卡片脚注：历史最佳（+ 新纪录标签）----
+    var aFoot = u.clamp((t - 260 - rows.length * 80) / 200, 0, 1);
+    if (aFoot > 0) {
+      var fy = y + ch - padV - 8;
+      ctx.save();
+      ctx.globalAlpha = aFoot * aCard * 0.7;
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = cfg.INK;
+      ctx.fillText('历史最佳 ' + r.bestLen + ' 节 · ' + r.bestScore + ' 分', cx, fy);
+      ctx.restore();
+      if (r.newBest) {
+        ctx.save();
+        ctx.globalAlpha = aFoot * aCard;
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.lineJoin = 'round';
+        var nb = '新纪录！';
+        var bw3 = ctx.measureText('历史最佳 ' + r.bestLen + ' 节 · ' + r.bestScore + ' 分').width;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#FFFDF5';
+        ctx.strokeText(nb, cx + bw3 / 2 + 10, fy);
+        ctx.fillStyle = '#E8552F';
+        ctx.fillText(nb, cx + bw3 / 2 + 10, fy);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+
+    // ---- 按钮（最后淡入；主按钮更醒目）----
+    var aBtn = u.clamp((t - 300 - rows.length * 80) / 220, 0, 1);
+    for (bi = 0; bi < game.uiButtons.length; bi++) {
+      this.drawDoodleButton(game.uiButtons[bi], game.uiButtons[bi].id === 'retry', aBtn);
+    }
+  };
+
+  // ---------------- 解锁提示横幅 ----------------
+
+  /**
+   * 手绘风「新颜色解锁！」提示（需求 3：无底板）。
+   * 只有文字 + 新颜色小色块图标，直接浮在画面上，不遮挡地图：
+   * 文字带深色描边保证可读性，无任何矩形底色/面板；
+   * 位置在视口上方 1/4 处，停留 1.5 秒（200ms 淡入 / 300ms 淡出，时长不变）。
+   */
+  Renderer.prototype.drawUnlockBanner = function (game) {
+    var b = game.unlockBanner;
+    if (!b || !b.keys || !b.keys.length) return;
+    var ctx = this.ctx, l = game.layout();
+    var life = cfg.UNLOCK_BANNER_MS;
+    var remain = b.until - game.timeMs;     // 剩余毫秒
+    var since = life - remain;              // 已显示毫秒
+    var a = 1;
+    if (since < 200) a = since / 200;       // 前 200ms 淡入
+    else if (remain < 300) a = Math.max(0, remain / 300); // 末尾 300ms 淡出
+    a = Math.max(0, Math.min(1, a));
+    if (a <= 0) return;
+
+    var cx = l.areaW / 2;
+    var ty = this.H * 0.25; // 视口上方 1/4 处
+
+    ctx.save();
+    ctx.globalAlpha = a;
+    // 手绘风文字：深色粗描边 + 纸色填充（无底板也可读）
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 26px sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText(b.text, cx, ty);
+    ctx.fillStyle = '#FFFDF5';
+    ctx.fillText(b.text, cx, ty);
+
+    // 新颜色小色块图标（文字下方一排，无任何底色衬板）
+    var keys = b.keys;
+    var sw = 22, gap = 10;
+    var totalW = keys.length * sw + (keys.length - 1) * gap;
+    var sx = cx - totalW / 2;
+    for (var i = 0; i < keys.length; i++) {
+      drawCrayonBlock(ctx, sx + i * (sw + gap), ty + 18, sw, cfg.COLORS[keys[i]], 50 + i, 9, {
+        rot: (u.hash2(i, 7, 3) - 0.5) * 0.4, wobble: 1.0
+      });
+    }
+    ctx.restore();
+  };
+
+  // ---------------- 特殊道具效果提示（HUD，屏幕空间，不遮挡地图） ----------------
+
+  /**
+   * 吃到特殊道具时弹出的效果说明文字（game.itemToast）。
+   * 屏幕顶部居中、手绘描边 + 纸色填充（无底板，与解锁横幅同风格），约 1.6s 后淡出。
+   * 停留在视口区上方，不侵入右侧 HUD 面板与小地图。
+   */
+  Renderer.prototype.drawItemToast = function (game) {
+    var b = game.itemToast;
+    if (!b || !b.text) return;
+    var ctx = this.ctx, l = game.layout();
+    var life = cfg.ITEM_TOAST_MS;
+    var remain = b.until - game.timeMs;
+    var since = life - remain;
+    var a = 1;
+    if (since < 180) a = since / 180;                  // 前 180ms 淡入
+    else if (remain < 320) a = Math.max(0, remain / 320); // 末尾 320ms 淡出
+    a = Math.max(0, Math.min(1, a));
+    if (a <= 0) return;
+
+    var cx = l.areaW / 2;
+    var ty = 64; // 视口区顶部
+
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 19px sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText(b.text, cx, ty);
+    ctx.fillStyle = '#FFFDF5';
+    ctx.fillText(b.text, cx, ty);
+    // 下方一道短装饰线（纯手绘感，无底板）
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = a * 0.6;
+    var dw = Math.min(l.areaW * 0.5, ctx.measureText(b.text).width + 24);
+    ctx.beginPath();
+    ctx.moveTo(cx - dw / 2, ty + 16);
+    ctx.lineTo(cx + dw / 2, ty + 16);
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // ---------------- 道具图鉴页面 ----------------
+
+  /**
+   * 图鉴页：分页展示所有道具，每页 5 张卡片。
+   * 图标使用与游戏内完全相同的 drawItemBlock（离屏 canvas 渲染后贴图）。
+   * 支持翻页（点击左右区域或按钮）+ 底部页码指示器 + 返回按钮。
+   */
+  // ==================== 图鉴页面（完整重设计）====================
+  //
+  // 布局结构（三段式，像真正的应用页面）：
+  //   ┌─ 顶栏（全宽）：标题居中 + 页签在右侧 ──────────────────┐
+  //   ├─ 主体：左侧导航栏（竖排）+ 右侧内容区 ─────────────────┤
+  //   └─ 底栏（全宽）：翻页 + 页码 + 返回按钮 ────────────────┘
+  //
+
+  /** 统一计算图鉴页面的布局网格（供 drawGuide / drawGuideColors 共用）。 */
+  function guideLayout(game) {
+    var W = game.screenW, H = game.screenH;
+    var hdrH = 52;            // 顶栏高度
+    var ftrH = 52;            // 底栏高度
+    var hdrY = 0;             // 顶栏 Y
+    var ftrY = H - ftrH;      // 底栏 Y
+    var bodyTop = hdrY + hdrH; // 主体区域顶部
+    var bodyBtm = ftrY;       // 主体区域底部
+    var bodyH = bodyBtm - bodyTop;
+
+    // 左侧导航栏
+    var sbW = Math.min(130, W * 0.22);  // 侧边栏宽度
+    var sbX = 16;                        // 侧边栏左边距
+    var sbPad = 10;
+    var tabW = sbW - sbPad * 2;
+    var tabH = 38;
+    var tabGap = 8;
+
+    // 右侧内容区
+    var cx = sbX + sbW + 16;             // 内容区左边界
+    var cW = W - cx - 16;               // 内容区宽度
+
+    return {
+      W: W, H: H,
+      hdrY: hdrY, hdrH: hdrH,
+      ftrY: ftrY, ftrH: ftrH,
+      bodyTop: bodyTop, bodyBtm: bodyBtm, bodyH: bodyH,
+      sbX: sbX, sbW: sbW, sbPad: sbPad, tabW: tabW, tabH: tabH, tabGap: tabGap,
+      cx: cx, cW: cW
+    };
+  }
+
+  /**
+   * 图鉴入口：统一调度道具页/颜色页。
+   * 不再调用 drawButtons（返回按钮由本函数自绘，保证对齐）。
+   */
+  Renderer.prototype.drawGuide = function (game) {
+    var ctx = this.ctx, L = guideLayout(game);
+
+    // ════════════════ 1. 顶栏（全宽）════════════════
+    this.drawGuideHeader(game, L);
+
+    // ════════════════ 2. 左侧导航栏 ════════════════
+    this.drawGuideSidebar(game, L);
+
+    // ════════════════ 3. 内容区（按页签分发）════════════════
+    if (game.guideTab === 'colors') {
+      this.drawGuideColorsContent(game, L);
+    } else {
+      this.drawGuideItemsContent(game, L);
+    }
+
+    // ════════════════ 4. 底栏（全宽）════════════════
+    this.drawGuideFooter(game, L);
+  };
+
+  // ---- 1. 顶栏：标题 + 页签胶囊（右侧）----
+  Renderer.prototype.drawGuideHeader = function (game, L) {
+    var ctx = this.ctx;
+    // 标题（全屏居中）
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    var title = game.guideTab === 'colors' ? '颜色解锁顺序' : '道具图鉴';
+    ctx.fillText(title, L.W / 2, L.hdrY + L.hdrH / 2);
+    ctx.restore();
+
+    // 右侧页签胶囊（顶栏内，与标题同行）
+    var tw = 72, th = 30, tg = 6;
+    var tx = L.W - 16 - tw * 2 - tg;  // 右对齐
+    var ty = L.hdrY + (L.hdrH - th) / 2;
+    [['items', '道具'], ['colors', '颜色']].forEach(function (pair) {
+      var key = pair[0], label = pair[1];
+      var active = game.guideTab === key;
+      ctx.save();
+      wobblyRoundRect(ctx, tx, ty, tw, th, 8, tx * 3, ty * 7, 1.2);
+      ctx.fillStyle = active ? cfg.INK : '#FFFDF5';
+      ctx.fill();
+      if (!active) { ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.6; ctx.stroke(); }
+      else { ctx.lineWidth = 2.2; ctx.stroke(); }
+      ctx.fillStyle = active ? '#FFFDF5' : cfg.INK;
+      ctx.font = active ? 'bold 13px sans-serif' : '13px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(label, tx + tw / 2, ty + th / 2);
+      ctx.restore();
+      tx += tw + tg;
+    });
+  };
+
+  // ---- 2. 左侧导航栏（竖排，带背景面板）----
+  Renderer.prototype.drawGuideSidebar = function (game, L) {
+    var ctx = this.ctx;
+    // 背景面板
+    ctx.save();
+    wobblyRoundRect(ctx, L.sbX, L.bodyTop + 8, L.sbW, L.bodyH - 16, 12, L.sbX * 3, L.bodyTop * 5, 1.0);
+    ctx.fillStyle = '#FAF4E8';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(58,50,56,0.10)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.restore();
+
+    // 导航项（竖排：当前页高亮 + 左竖条）
+    var items = [
+      { key: 'items', label: '道具', icon: '📦' },
+      { key: 'colors', label: '颜色', icon: '🎨' }
+    ];
+    var iy = L.bodyTop + 24;
+    items.forEach(function (it, idx) {
+      var active = game.guideTab === it.key;
+      var ix = L.sbX + L.sbPad;
+      var iw = L.tabW, ih = L.tabH;
+      ctx.save();
+      wobblyRoundRect(ctx, ix, iy, iw, ih, 9, ix * 7, iy * 11, 1.3);
+      if (active) {
+        ctx.fillStyle = cfg.INK; ctx.fill();
+        // 左侧彩色竖条
+        ctx.fillStyle = cfg.COLORS.orange;
+        ctx.fillRect(ix + 3, iy + 6, 3, ih - 12);
+        ctx.fillStyle = '#FFFDF5';
+      } else {
+        ctx.fillStyle = '#FFFDF5'; ctx.fill();
+        ctx.strokeStyle = 'rgba(58,50,56,0.18)'; ctx.lineWidth = 1.4; ctx.stroke();
+        ctx.fillStyle = cfg.INK;
+      }
+      ctx.font = active ? 'bold 14px sans-serif' : '14px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(it.label, ix + iw / 2, iy + ih / 2);
+      ctx.restore();
+      iy += ih + L.tabGap;
+    });
+  };
+
+  // ---- 3a. 道具页内容区 ----
+  Renderer.prototype.drawGuideItemsContent = function (game, L) {
+    var ctx = this.ctx;
+    var items = cfg.ITEM_GUIDE.slice().sort(function (a, b) {
+      var oa = a.rarity ? cfg.RARITY_ORDER.indexOf(a.rarity) : 99;
+      var ob = b.rarity ? cfg.RARITY_ORDER.indexOf(b.rarity) : 99;
+      return oa - ob;
+    });
+    if (!items || !items.length) return;
+
+    var PER_PAGE = 5;
+    var totalPages = Math.ceil(items.length / PER_PAGE);
+    if (!game.guidePage || game.guidePage < 0) game.guidePage = 0;
+    if (game.guidePage >= totalPages) game.guidePage = totalPages - 1;
+    var pg = game.guidePage;
+    var startIdx = pg * PER_PAGE;
+    var endIdx = Math.min(startIdx + PER_PAGE, items.length);
+    var pageItems = [];
+    for (var k = startIdx; k < endIdx; k++) pageItems.push(items[k]);
+
+    // 稀有度图例行（内容区顶部）
+    ctx.save();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = '11.5px sans-serif';
+    var legY = L.bodyTop + 20;
+    var chipW = 28, chipH = 14, gapX = 6, labelGap = 3;
+    var labels = [['orange', '强'], ['purple', '中'], ['blue', '弱']];
+    var lx = L.cx;
+    for (var li = 0; li < labels.length; li++) {
+      var rc = cfg.RARITY_COLORS[labels[li][0]];
+      ctx.fillStyle = rc;
+      ctx.fillRect(lx, legY - chipH / 2, chipW, chipH);
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.0;
+      ctx.strokeRect(lx, legY - chipH / 2, chipW, chipH);
+      ctx.fillStyle = '#FFFDF5';
+      ctx.font = 'bold 9.5px sans-serif';
+      ctx.fillText(labels[li][1], lx + chipW / 2, legY);
+      ctx.fillStyle = '#777';
+      ctx.font = '11.5px sans-serif';
+      lx += chipW + gapX + ctx.measureText('▸').width + labelGap;
+      if (li < labels.length - 1) { ctx.fillText('▸', lx - labelGap, legY); }
+    }
+    ctx.restore();
+
+    // 卡片列表
+    var cardW = Math.min(540, L.cW - 8);
+    var cardX = L.cx + (L.cW - cardW) / 2;
+    var startY = L.bodyTop + 44;
+    var cardH = 78, gap = 7, iconSize = 46;
+
+    for (var i = 0; i < pageItems.length; i++) {
+      var it = pageItems[i];
+      var cy = startY + i * (cardH + gap);
+
+      // 卡片底板
+      ctx.save();
+      wobblyRoundRect(ctx, cardX, cy, cardW, cardH, 8, (startIdx + i) * 7, (startIdx + i) * 11, 1.4);
+      ctx.fillStyle = '#FFFDF5';
+      ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2.0; ctx.stroke();
+      ctx.restore();
+
+      // 图标
+      var ix = cardX + 18 + iconSize / 2, iy = cy + cardH / 2;
+      var tmpC = document.createElement('canvas');
+      tmpC.width = iconSize * 2 + 4; tmpC.height = iconSize * 2 + 4;
+      var tx = tmpC.getContext('2d');
+      tx.translate(iconSize + 2, iconSize + 2);
+      drawItemBlock(tx, { kind: it.kind, color: it.colorKey || 'red' }, 0, 0, iconSize, (startIdx + i) * 13, (startIdx + i) * 17, 0, 1.0);
+      ctx.drawImage(tmpC, ix - iconSize - 2, iy - iconSize - 2);
+
+      // 名称 + 描述
+      ctx.save();
+      ctx.font = 'bold 14.5px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillStyle = cfg.INK;
+      ctx.fillText(it.name, cardX + iconSize + 34, cy + 11);
+      if (it.rarity && cfg.RARITY_COLORS[it.rarity]) {
+        var bw = 68, bh = 17, bx = cardX + cardW - bw - 9, by = cy + 9;
+        ctx.fillStyle = cfg.RARITY_COLORS[it.rarity]; ctx.fillRect(bx, by, bw, bh);
+        ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.3; ctx.strokeRect(bx, by, bw, bh);
+        ctx.fillStyle = '#FFFDF5';
+        ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(cfg.RARITY_NAME[it.rarity], bx + bw / 2, by + bh / 2 + 0.5);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = 'bold 14.5px sans-serif';
+      }
+      ctx.font = '12px sans-serif'; ctx.fillStyle = '#555';
+      var descX = cardX + iconSize + 34, descY = cy + 33, maxW = cardW - iconSize - 48;
+      var words = it.desc.split(''), line = '', lineY = descY, lh = 16;
+      for (var c = 0; c < words.length; c++) {
+        var test = line + words[c];
+        if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, descX, lineY); line = ''; lineY += lh; }
+        line += words[c];
+      }
+      if (line) ctx.fillText(line, descX, lineY);
+      ctx.restore();
+    }
+
+    // 存储分页信息供 footer 使用
+    game._guideTotalPages = totalPages;
+    game._guidePage = pg;
+  };
+
+  // ---- 3b. 颜色解锁顺序内容区 ----
+  Renderer.prototype.drawGuideColorsContent = function (game, L) {
+    var ctx = this.ctx;
+    var plan = cfg.colorUnlockPlan();
+
+    // 副标题
+    ctx.save();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = '12px sans-serif'; ctx.fillStyle = '#888';
+    ctx.fillText('顺序 = 解锁先后 · 闯关按关卡 / 无尽按存活时间', L.cx, L.bodyTop + 22);
+    ctx.restore();
+
+    var top = L.bodyTop + 40;
+    var bottomLimit = L.ftrY - 8;
+    var rows = 4, gap = 10;
+    var cellH = Math.floor((bottomLimit - top - (rows - 1) * gap) / rows);
+    if (cellH < 68) cellH = 68;
+    var cellW = Math.min(300, (L.cW - gap) / 2);
+    var gridW = cellW * 2 + gap;
+    var gx0 = L.cx + (L.cW - gridW) / 2;
+
+    for (var i = 0; i < plan.length; i++) {
+      var p = plan[i], col = i % 2, row = Math.floor(i / 2);
+      var cx = gx0 + col * (cellW + gap), cy = top + row * (cellH + gap);
+
+      ctx.save();
+      wobblyRoundRect(ctx, cx, cy, cellW, cellH, 8, i * 7, i * 11, 1.4);
+      ctx.fillStyle = '#FFFDF5'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2.0; ctx.stroke();
+      ctx.restore();
+
+      // 角标
+      var br = 11;
+      ctx.save();
+      ctx.beginPath(); ctx.arc(cx + br + 5, cy + br + 5, br, 0, Math.PI * 2);
+      ctx.fillStyle = cfg.INK; ctx.fill();
+      ctx.fillStyle = '#FFFDF5';
+      ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(p.order), cx + br + 5, cy + br + 5 + 0.5);
+      ctx.restore();
+
+      // 色块
+      var bs = Math.min(42, cellH - 28);
+      ctx.save();
+      ctx.translate(cx + 16 + bs / 2, cy + cellH / 2);
+      drawCrayonBlock(ctx, -bs / 2, -bs / 2, bs, p.hex, 30 + i, 9, { rot: (i % 2 ? 0.12 : -0.12), wobble: 1.0 });
+      ctx.restore();
+
+      // 文字
+      var tx = cx + 16 + bs + 12;
+      ctx.save();
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = cfg.INK; ctx.font = 'bold 18px sans-serif';
+      ctx.fillText(p.name, tx, cy + cellH * 0.30);
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = p.initial ? '#C2185B' : '#555';
+      ctx.fillText('闯关：' + p.levelText, tx, cy + cellH * 0.58);
+      ctx.fillText('无尽：' + p.endlessText, tx, cy + cellH * 0.80);
+      ctx.restore();
+    }
+
+    game._guideTotalPages = 1;
+    game._guidePage = 0;
+  };
+
+  // ---- 4. 底栏（全宽：翻页 + 页码 + 返回按钮）----
+  Renderer.prototype.drawGuideFooter = function (game, L) {
+    var ctx = this.ctx;
+    var tp = game._guideTotalPages || 1, pg = game._guidePage || 0;
+    var fy = L.ftrY + L.ftrH / 2;
+
+    // 翻页提示（左右两侧）
+    if (tp > 1) {
+      ctx.save();
+      ctx.font = '12.5px sans-serif'; ctx.fillStyle = '#888';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(pg > 0 ? '◀ 上一页' : '', 20, fy);
+      ctx.textAlign = 'right';
+      ctx.fillText(pg < tp - 1 ? '下一页 ▶' : '', L.W - 20, fy);
+      ctx.restore();
+    }
+
+    // 页码（居中偏左）
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '12px sans-serif'; ctx.fillStyle = '#AAA';
+    ctx.fillText('第 ' + (pg + 1) + ' / ' + tp + ' 页', L.W / 2 - 60, fy);
+    ctx.restore();
+
+    // 返回按钮（右侧对齐）
+    var btnW = 110, btnH = 36, btnX = L.W - 20 - btnW, btnY = fy - btnH / 2;
+    ctx.save();
+    wobblyRoundRect(ctx, btnX, btnY, btnW, btnH, 10, btnX * 3, btnY * 7, 1.5);
+    ctx.fillStyle = cfg.PANEL; ctx.fill();
+    ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2.0; ctx.stroke();
+    ctx.fillStyle = cfg.INK;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('返回', btnX + btnW / 2, fy);
+    ctx.restore();
+  };
+
+  // ---------------- 总入口 ----------------
+
+  Renderer.prototype.draw = function (game) {
+    this.drawBackground();
+    if (game.state === 'menu') { this.drawMenu(game); return; }
+    if (game.state === 'guide') { this.drawGuide(game); return; }
+    if (game.state === 'levels') { this.drawLevels(game); return; }
+    // play / clear / over 都先画对局场景（世界 + 相机）
+    this.drawPlay(game);
+    this.drawPanel(game);
+    if (game.state === 'play') {
+      this.drawUnlockBanner(game); // 解锁提示横幅（在摇杆之上）
+      this.drawItemToast(game);    // 特殊道具效果提示（屏幕空间，不遮挡地图）
+      this.drawJoystick(game);
+    } else if (game.state === 'clear') this.drawResult(game, true);
+    else if (game.state === 'over') {
+      // 多人对战：卡片式逐行结算（含咬断/累计消除等新统计）；其余模式沿用简单结算
+      if (game.mode === 'multi' && game.mpResult) this.drawMultiResult(game);
+      else this.drawResult(game, false);
+    }
+  };
+
+  CS.Renderer = Renderer;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/game.js ===== */
+'use strict';
+/**
+ * game.js — 游戏主控：状态机 + 主循环逻辑（v2：自由方向 + 大地图 + 跟随镜头，横版布局）
+ * 状态：menu（主菜单）→ levels（选关）→ play（对局）→ clear（过关）/ over（结束）
+ * 模式：level（闯关 10 关）/ endless（无尽）/ multi（多人对战：玩家 + AI 蛇，见 multiplayer.js）
+ *
+ * 横版布局：左/中为视口区（相机跟随蛇头、钳制在世界内），右侧竖向 HUD 面板
+ * （分数/目标/关卡/已解锁颜色预览 + 小地图；多人模式另有实时排行榜）。
+ * 除 resize/触摸入口外不含 DOM 依赖，可在 node 中加载做逻辑验证。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+  var u = CS.utils;
+  var lv = CS.levels;
+  var store = CS.storage;
+  var Walls = CS.Walls;
+  var Snake = CS.Snake;
+  var Spawner = CS.Spawner;
+  var Particles = CS.Particles;
+  var Joystick = CS.Joystick;
+  var Audio = CS.audio;         // 音效系统（Web Audio API 振荡器合成）
+
+  // 颜色中文名（道具效果提示用）
+  var COLOR_NAMES = { red: '红', blue: '蓝', green: '绿', orange: '橙', purple: '紫', yellow: '黄', teal: '青', pink: '粉' };
+
+  function Game(screenW, screenH) {
+    this.screenW = screenW;
+    this.screenH = screenH;
+    this.state = 'menu';
+    this.timeMs = 0;
+
+    // 持久化进度
+    this.unlocked = u.clamp(store.get(cfg.STORAGE_UNLOCKED, 1) | 0, 1, lv.LEVEL_COUNT);
+    this.best = store.get(cfg.STORAGE_BEST, 0) | 0;
+    var mpb = store.get(cfg.STORAGE_MP_BEST, null); // 多人最佳 {len, score}
+    this.mpBest = (mpb && typeof mpb === 'object') ? { len: mpb.len | 0, score: mpb.score | 0 } : { len: 0, score: 0 };
+
+    // 对局数据（startRun 时初始化）
+    this.mode = 'level';
+    this.levelCfg = null;
+    this.walls = null;
+    this.snake = null;
+    this.spawner = null;
+    this.particles = new Particles();
+    this.joystick = new Joystick(); // 固定底座：浮在视口区左下角
+    this.camera = { x: 0, y: 0 };   // 相机左上角世界坐标
+    this.elapsed = 0;
+    this.score = 0;
+    this.survivalScore = 0;
+    this.elimScore = 0;
+    this.elimCombo = 0;     // 连击层数（v2.9）：窗口内连续触发消除 +1，分数 ×combo
+    this.elimComboTimer = 0; // 连击剩余窗口（ms），每帧衰减
+    this.mp = null;       // 多人对战编排器（mode==='multi' 时非空）
+    this.mpResult = null; // 多人结算数据 {surviveSec, score, survivalScore, elimScore, elimTotal,
+                        //   rank, kills, finalLen, maxLen, bestLen, bestScore, newBest}
+    this.overAt = 0;      // 进入结算界面的时刻（timeMs，结算卡片/逐行动画计时起点）
+    this.slowUntil = 0;   // 减速道具到期时刻（timeMs），0 表示未生效
+    this.wallSpawnTimer = 0; // 动态墙体生成倒计时（ms），startRun/startMulti 时重置
+
+    // ---- 颜色解锁系统（本局状态）----
+    this.unlockedCount = 0;     // 当前已解锁颜色数
+    this.unlockedKeys = [];     // 已解锁颜色的 key 数组（刷新色块 / 蛇身颜色都用它）
+    this.unlockBanner = null;   // 解锁提示横幅 {text, until, keys}
+    this.itemToast = null;      // 特殊道具效果提示 {text, until}（屏幕空间，HUD 层）
+    this.guidePage = 0;         // 图鉴当前页码（0-based）
+    this.guideTab = 'items';    // 图鉴页签：'items'=道具 / 'colors'=颜色解锁顺序
+
+    this.uiButtons = [];
+    this.buildButtons();
+    this.syncJoystick();
+  }
+
+  // ---------------- 横版布局 ----------------
+
+  /**
+   * 横版布局：右侧固定 HUD 面板，其余为视口区（相机画面）。
+   * @returns {{areaW:number, panelX:number, panelW:number}}
+   */
+  Game.prototype.layout = function () {
+    var panelW = Math.round(u.clamp(this.screenW * 0.19, 148, 230));
+    if (this.screenW < 560) panelW = Math.round(u.clamp(this.screenW * 0.24, 110, 148)); // 窄屏压缩面板
+    var areaW = Math.max(120, this.screenW - panelW);
+    return { areaW: areaW, panelX: areaW, panelW: panelW };
+  };
+
+  /** 摇杆底座：视口区左下角（浮于画面之上，半透明） */
+  Game.prototype.syncJoystick = function () {
+    var r = 52;
+    this.joystick.setBase(r + 30, this.screenH - r - 30, r);
+  };
+
+  /** 窗口尺寸变化（main.js 在 resize 时调用） */
+  Game.prototype.resize = function (w, h) {
+    this.screenW = w;
+    this.screenH = h;
+    this.buildButtons();
+    this.syncJoystick();
+  };
+
+  // ---------------- 相机 ----------------
+
+  /**
+   * 单轴相机钳制：世界小于视口时居中，否则夹在 [0, world-view]。
+   * 注意：两侧各放行 WALL_THICK 余量，让"世界四周边界墙带"能进入视口——
+   * 边界墙带画在世界坐标 [-T,0]/[W,W+T] 等外侧，若相机严格夹在 [0,W-view] 内，
+   * 这些带永远在视口之外被裁剪，导致"地图边缘看不到墙"（历史 bug）。
+   */
+  function clampCam(v, world, view) {
+    var T = cfg.WALL_THICK;
+    if (world <= view) return (world - view) / 2;
+    return u.clamp(v, -T, world - view + T);
+  }
+
+  /** 相机平滑跟随蛇头（帧率无关指数趋近）并钳制在世界边界内 */
+  Game.prototype.updateCamera = function (dt) {
+    if (!this.snake || !this.walls) return;
+    var l = this.layout();
+    var vw = l.areaW, vh = this.screenH;
+    var tx = clampCam(this.snake.x - vw / 2, this.walls.W, vw);
+    var ty = clampCam(this.snake.y - vh / 2, this.walls.H, vh);
+    var k = 1 - Math.exp(-cfg.CAMERA_LERP * dt / 1000); // lerp 系数
+    this.camera.x = clampCam(this.camera.x + (tx - this.camera.x) * k, this.walls.W, vw);
+    this.camera.y = clampCam(this.camera.y + (ty - this.camera.y) * k, this.walls.H, vh);
+  };
+
+  /** 相机立即就位（开局调用，避免从原点飞入） */
+  Game.prototype.snapCamera = function () {
+    var l = this.layout();
+    this.camera.x = clampCam(this.snake.x - l.areaW / 2, this.walls.W, l.areaW);
+    this.camera.y = clampCam(this.snake.y - this.screenH / 2, this.walls.H, this.screenH);
+  };
+
+  // ---------------- 对局生命周期 ----------------
+
+  Game.prototype.startRun = function (mode, levelCfg) {
+    this.mode = mode;
+    this.levelCfg = levelCfg;
+    var W = levelCfg.W, H = levelCfg.H;
+    var spawn = { x: W / 2, y: H / 2 }; // 出生在世界中心
+    this.walls = new Walls(W, H, spawn);
+    this.walls.generateWalls(levelCfg.wallSegments);
+    // 计算本局初始解锁颜色数（闯关按当前关卡、无尽按 0 秒）
+    this.unlockedCount = (mode === 'level')
+      ? cfg.unlockedCountForLevel(levelCfg.level)
+      : cfg.unlockedCountForEndless(0);
+    this.unlockedKeys = cfg.unlockedColorKeys(this.unlockedCount);
+    // 先清零计时/计分，再算开局速度（动态速度含时间加成，必须在 elapsed=0 时初始化）
+    this.elapsed = 0;
+    this.score = 0;
+    this.survivalScore = 0;
+    this.elimScore = 0;
+    this.elimCombo = 0;
+    this.elimComboTimer = 0;
+    this.mp = null;
+    this.mpResult = null;
+    this.slowUntil = 0;
+    this.snake = new Snake(spawn.x, spawn.y, cfg.START_LENGTH, 0, this.unlockedKeys);
+    this.snake.speed = this.currentSpeed();
+    this.spawner = new Spawner(this.walls, this.snake);
+    this.spawner.unlockedKeys = this.unlockedKeys; // 色块只从已解锁颜色刷新
+    this.spawner.fillNow();
+    this.particles.clear();
+    this.joystick.onTouchEnd(this.joystick.touchId); // 重置摇杆状态
+    this.wallSpawnTimer = Math.round(cfg.WALL_SPAWN_INTERVAL_MS * 0.5); // 开局延迟约半周期再生成首段
+    this.snapCamera();
+    this.syncJoystick();
+    if (Audio) Audio.startBgm();  // 对局开始 → 启动背景音乐
+    this.setState('play');
+  };
+
+  Game.prototype.startLevel = function (n) {
+    var prevCount = this.unlockedCount; // 进入前已解锁数（菜单首进为 0）
+    this.startRun('level', lv.levelConfig(n));
+    // 仅在"从已有对局推进关卡"且颜色增多时弹横幅（菜单首进 prev=0 不弹）
+    if (this.unlockedCount > prevCount && prevCount >= cfg.INITIAL_UNLOCKED) {
+      this.unlockBanner = {
+        text: '新颜色解锁！',
+        until: this.timeMs + cfg.UNLOCK_BANNER_MS,
+        keys: cfg.COLOR_KEYS.slice(prevCount, this.unlockedCount) // 本次新增颜色
+      };
+    }
+  };
+
+  Game.prototype.startEndless = function () {
+    var e = cfg.ENDLESS;
+    this.startRun('endless', { level: 0, W: e.W, H: e.H, wallSegments: e.wallSegments, targetScore: 0, speed: cfg.SNAKE_SPEED });
+  };
+
+  /**
+   * 多人对战：共享大地图（cfg.MULTI），玩家出生在世界中心，AI 出生在边缘安全位。
+   * 颜色解锁规则同无尽（按玩家存活时间）；色块目标密度比单人略高（7 条蛇在吃）。
+   * 玩家蛇仍是 this.snake（相机/摇杆/渲染主路径不变），AI 蛇由 this.mp 管理。
+   */
+  Game.prototype.startMulti = function () {
+    this.mode = 'multi';
+    var m = cfg.MULTI;
+    this.levelCfg = { level: 0, W: m.W, H: m.H, wallSegments: m.wallSegments, targetScore: 0, speed: cfg.SNAKE_SPEED };
+    var spawn = { x: m.W / 2, y: m.H / 2 };
+    this.walls = new Walls(m.W, m.H, spawn);
+    this.walls.generateWalls(m.wallSegments);
+    this.unlockedCount = cfg.unlockedCountForEndless(0);
+    this.unlockedKeys = cfg.unlockedColorKeys(this.unlockedCount);
+    this.elapsed = 0;
+    this.score = 0;
+    this.survivalScore = 0;
+    this.elimScore = 0;
+    this.elimCombo = 0;
+    this.elimComboTimer = 0;
+    this.mpResult = null;
+    this.snake = new Snake(spawn.x, spawn.y, cfg.START_LENGTH, 0, this.unlockedKeys);
+    this.snake.speed = cfg.SNAKE_SPEED;
+    this.spawner = new Spawner(this.walls, this.snake);
+    this.spawner.unlockedKeys = this.unlockedKeys;
+    // 多人色块目标密度：世界面积 / MP_BLOCK_AREA_DIV，夹取 [MP_BLOCKS_MIN, MP_BLOCKS_MAX]
+    this.spawner.target = u.clamp(Math.round(m.W * m.H / cfg.MP_BLOCK_AREA_DIV), cfg.MP_BLOCKS_MIN, cfg.MP_BLOCKS_MAX);
+    this.particles.clear();
+    this.mp = new CS.Multiplayer(this);
+    this.mp.setup(); // 玩家 Entry + 补足 AI 编制（同时挂 spawner.others 活引用）
+    this.spawner.fillNow();
+    this.joystick.onTouchEnd(this.joystick.touchId); // 重置摇杆状态
+    this.wallSpawnTimer = Math.round(cfg.WALL_SPAWN_INTERVAL_MS * 0.5); // 开局延迟约半周期再生成首段
+    this.snapCamera();
+    this.syncJoystick();
+    if (Audio) Audio.startBgm();  // 多人对局开始 → 启动背景音乐
+    this.setState('play');
+  };
+
+  /** 多人对战帧更新：输入 → mp 编排（AI/碰撞/淘汰/补充/吃色/消除）→ 相机 → 结算判定 */
+  Game.prototype.updateMulti = function (dt) {
+    this.elapsed += dt;
+    this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
+
+    // 输入：摇杆/键盘给出目标角（与 AI 同规则：只设目标角，转向速率由 Snake 钳制）
+    var ang = this.joystick.currentAngle();
+    if (ang !== null && this.mp.playerEntry.alive) this.snake.setTargetAngle(ang);
+
+    this.mp.update(dt);
+
+    // 玩家自碰重组（v2.9）：与单人同规则；触发后走 mp.resolveElim 计分（含连击倍率 + 特效）
+    if (this.mp.playerEntry.alive && this.snake.selfPullCd <= 0) {
+      var pulledM = this.snake.trySelfPull();
+      if (pulledM) {
+        this.snake.selfPullCd = cfg.SELF_PULL_CD;
+        var scolM = cfg.COLORS[pulledM.color] || '#FFD94A';
+        // 明显动效：身体接触点咬合环 + 牵引线拉到头部 + 头部迸裂 + 「自吃 +1」飘字
+        this.particles.ring(pulledM.x, pulledM.y, scolM, 1.4);
+        this.particles.burst(pulledM.x, pulledM.y, scolM, 8, 1.4);
+        this.particles.streak(pulledM.x, pulledM.y, this.snake.x, this.snake.y, scolM);
+        this.particles.burst(this.snake.x, this.snake.y, '#FFD94A', 6, 1.1);
+        this.particles.chainText(this.snake.x, this.snake.y - 26, '自吃 +1', 16);
+        if (CS.audio) CS.audio.playEat();
+        this.mp.resolveElim(this.mp.playerEntry);
+      }
+    }
+
+    // 玩家得分 = 存活分 + 消除分（消除分在 mp.resolveElim 中按连锁 + 连击倍率累计）
+    this.elimScore = this.mp.playerEntry.elimScore;
+    this.score = this.survivalScore + this.elimScore;
+
+    this.updateCamera(dt);
+
+    if (!this.mp.playerEntry.alive) this.gameOverMulti();
+  };
+
+  /** 多人结算：排名 / 存活时间 / 总分（时间分+消除分）/ 累计消除方块 / 击杀数 / 最终节数
+   *  + 本地最佳（最长节数 / 最高分）；overAt 供结算卡片逐行动画计时 */
+  Game.prototype.gameOverMulti = function () {
+    if (Audio) { Audio.stopBgm(); Audio.playWall(); }  // 多人结束音效
+    var e = this.mp.playerEntry;
+    var rank = this.mp.rankOf(e);
+    var bestLen = Math.max(this.mpBest.len, e.maxLen);
+    var bestScore = Math.max(this.mpBest.score, this.score);
+    var newBest = e.maxLen > this.mpBest.len || this.score > this.mpBest.score;
+    this.mpBest = { len: bestLen, score: bestScore };
+    store.set(cfg.STORAGE_MP_BEST, this.mpBest);
+    this.mpResult = {
+      surviveSec: Math.floor(this.elapsed / 1000),
+      score: this.score,
+      survivalScore: this.survivalScore,
+      elimScore: this.elimScore,
+      elimTotal: e.elimTotal,       // 累计消除方块（含连锁、含被咬触发的消除）
+      rank: rank,
+      kills: e.kills,
+      finalLen: e.snake.length(),   // 淘汰瞬间节数
+      maxLen: e.maxLen,
+      bestLen: bestLen,
+      bestScore: bestScore,
+      newBest: newBest
+    };
+    this.overAt = this.timeMs;
+    this.setState('over');
+  };
+
+  /**
+   * 把已解锁颜色数提升到 count（仅在增大时更新刷新池并弹横幅）。
+   * @param {number} count 目标解锁数
+   */
+  Game.prototype.unlockTo = function (count) {
+    count = Math.min(cfg.MAX_COLORS, Math.max(0, count | 0));
+    if (count <= this.unlockedCount) return; // 不加反、不重复弹
+    var prev = this.unlockedCount;
+    this.unlockedCount = count;
+    this.unlockedKeys = cfg.unlockedColorKeys(count);
+    if (this.spawner) this.spawner.unlockedKeys = this.unlockedKeys; // 新颜色立即进入刷新池
+    this.unlockBanner = {
+      text: '新颜色解锁！',
+      until: this.timeMs + cfg.UNLOCK_BANNER_MS,
+      keys: cfg.COLOR_KEYS.slice(prev, count) // 本次新增的颜色
+    };
+    if (Audio) Audio.playUnlock();  // 解锁新颜色音效
+  };
+
+  /**
+   * 当前蛇速（px/s）——局内动态加速，每帧按公式重算（平滑，无跳变）：
+   *   闯关：min(基础 + LEVEL_SPEED_CAP_ADD, 基础 + SPEED_LEN_COEF×当前节数 + LEVEL_SPEED_TIME_COEF×存活秒)
+   *   无尽：min(SPEED_MAX, SNAKE_SPEED + ENDLESS_SPEEDUP_PER_SEC×存活秒 + SPEED_LEN_COEF×当前节数)
+   * 只改速度数值；节间距、消除/收集/撞墙判定等几何参数不受影响。
+   */
+  Game.prototype.currentSpeed = function () {
+    var len = this.snake ? this.snake.length() : cfg.START_LENGTH;
+    var sec = this.elapsed / 1000;
+    var sp, base;
+    if (this.mode === 'endless') {
+      sp = cfg.SNAKE_SPEED + sec * cfg.ENDLESS_SPEEDUP_PER_SEC + len * cfg.SPEED_LEN_COEF;
+      sp = Math.min(cfg.SPEED_MAX, sp);
+    } else {
+      base = this.levelCfg.speed;
+      sp = base + len * cfg.SPEED_LEN_COEF + sec * cfg.LEVEL_SPEED_TIME_COEF;
+      sp = Math.min(base + cfg.LEVEL_SPEED_CAP_ADD, sp);
+    }
+    if (this.slowUntil && this.timeMs < this.slowUntil) sp *= cfg.SLOW_FACTOR; // 减速道具
+    return sp;
+  };
+
+  /**
+   * 连击（v2.9）：窗口内连续触发消除时 combo 逐次 +1，分数按 combo 倍率成倍增加。
+   * 与连锁 chain 叠乘：单节得分 = ELIM_SCORE × chain × combo。
+   */
+  Game.prototype.bumpCombo = function () {
+    this.elimCombo = (this.elimComboTimer > 0) ? this.elimCombo + 1 : 1;
+    this.elimComboTimer = cfg.ELIM_COMBO_WINDOW;
+  };
+  /** 每帧衰减连击窗口；超窗口则归零 */
+  Game.prototype.tickCombo = function (dt) {
+    if (this.elimComboTimer > 0) {
+      this.elimComboTimer -= dt;
+      if (this.elimComboTimer <= 0) { this.elimComboTimer = 0; this.elimCombo = 0; }
+    }
+  };
+
+  /**
+   * 统一的消除计分 + 特效（连锁倍率 × 连击倍率、逐级放大粒子/星闪、N 连锁文字）。
+   * @param {Array} removed 被移除节 [{color,x,y,chain}]
+   * @param {number} fxBoost 特效放大（炸弹更强）
+   * @param {number} perSegBonus 每节额外得分（炸弹道具）
+   */
+  Game.prototype.applyElim = function (removed, fxBoost, perSegBonus) {
+    if (!removed || !removed.length) return;
+    if (Audio) Audio.playElim();  // 消除基础音效
+    this.bumpCombo();            // 本次消除计入连击（窗口内连续消除 → combo 递增 → 分数成倍）
+    var combo = Math.min(cfg.ELIM_COMBO_MAX, this.elimCombo);
+    var waves = {};
+    for (var i = 0; i < removed.length; i++) {
+      var ch = removed[i].chain || 1;
+      (waves[ch] = waves[ch] || []).push(removed[i]);
+    }
+    var chainLv = Object.keys(waves).map(Number).sort(function (a, b) { return a - b; });
+    for (var w = 0; w < chainLv.length; w++) {
+      var chain = chainLv[w], segs = waves[chain];
+      var fxScale = (1 + (chain - 1) * cfg.CHAIN_FX_STEP) * (fxBoost || 1);
+      this.elimScore += segs.length * (cfg.ELIM_SCORE * chain * combo + (perSegBonus || 0));
+      var sx = 0, sy = 0;
+      for (i = 0; i < segs.length; i++) {
+        var col = segs[i].color === 'wild' ? '#FFD94A' : cfg.COLORS[segs[i].color];
+        this.particles.burst(segs[i].x, segs[i].y, col, Math.round(5 * fxScale), fxScale);
+        this.particles.ring(segs[i].x, segs[i].y, col, fxScale); // 消除高亮：扩张环 + ✕，标出被消除节（非连续也可见）
+        sx += segs[i].x; sy += segs[i].y;
+      }
+      var ccx = sx / segs.length, ccy = sy / segs.length;
+      this.particles.flash(ccx, ccy, '#FFD94A', fxScale, Math.min(4, chain));
+      if (chain >= cfg.CHAIN_TEXT_MIN) {
+        this.particles.chainText(ccx, ccy - 24, chain + '连锁！', 20 + (chain - 1) * 6);
+      }
+      if (combo >= 2) { // 连击提示：在连锁文字上方再弹一行「N连击 ×倍率」
+        this.particles.chainText(ccx, ccy - 46, combo + '连击 ×' + combo, 18 + combo);
+      }
+      if (Audio && chain >= 2) Audio.playChain(chain);  // 连锁额外音效（越高越响）
+    }
+  };
+
+  // ---------------- 主循环 ----------------
+
+  /**
+   * 动态墙体生成：按固定间隔在地图上新增一段障碍墙（避开玩家与 AI 蛇身）。
+   * 渲染（drawWallRect）与碰撞（hitsCircle）都自动复用内部墙系统，无需额外接线。
+   */
+  Game.prototype.updateWallSpawn = function (dt) {
+    this.wallSpawnTimer -= dt;
+    if (this.wallSpawnTimer > 0) return;
+    this.wallSpawnTimer = cfg.WALL_SPAWN_INTERVAL_MS;
+    if (!this.walls) return;
+    // 收集所有蛇身节点作为避让点（玩家优先，多人再补 AI）
+    var pts = [];
+    if (this.snake && this.snake.segPos) {
+      for (var i = 0; i < this.snake.segPos.length; i++) pts.push(this.snake.segPos[i]);
+    }
+    if (this.mode === 'multi' && this.mp && this.mp.bots) {
+      for (var b = 0; b < this.mp.bots.length; b++) {
+        var bot = this.mp.bots[b];
+        if (bot.alive && bot.snake && bot.snake.segPos) {
+          for (var k = 0; k < bot.snake.segPos.length; k++) pts.push(bot.snake.segPos[k]);
+        }
+      }
+    }
+    this.walls.addRandomWall(pts, cfg.WALL_SPAWN_MAX);
+  };
+
+  Game.prototype.update = function (dt) {
+    this.timeMs += dt;
+    this.particles.update(dt);
+    if (this.state !== 'play') return;
+    this.tickCombo(dt); // 连击窗口每帧衰减（超窗口归零）
+
+    // 解锁提示横幅到期自动清除
+    if (this.unlockBanner && this.timeMs >= this.unlockBanner.until) this.unlockBanner = null;
+    // 特殊道具效果提示到期自动清除
+    if (this.itemToast && this.timeMs >= this.itemToast.until) this.itemToast = null;
+
+    // 无尽/多人模式：随存活时间解锁新颜色（每 ENDLESS_UNLOCK_INTERVAL_SEC 秒 +1，封顶 MAX_COLORS）
+    if (this.mode === 'endless' || this.mode === 'multi') {
+      this.unlockTo(cfg.unlockedCountForEndless(Math.floor(this.elapsed / 1000)));
+    }
+
+    // 多人对战：蛇群推进/淘汰/补充全部由 mp 编排（含吃色与消除）
+    if (this.mode === 'multi') {
+      this.updateWallSpawn(dt);
+      this.updateMulti(dt);
+      return;
+    }
+
+    this.updateWallSpawn(dt);
+    this.elapsed += dt;
+    this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
+    this.score = this.survivalScore + this.elimScore;
+
+    // 输入：摇杆/键盘给出目标角（无输入则保持上一目标角，蛇继续沿原方向）
+    var ang = this.joystick.currentAngle();
+    if (ang !== null) this.snake.setTargetAngle(ang);
+
+    // 推进蛇（转向速率钳制 + 恒速前进 + 轨迹跟随在 snake 内完成）
+    this.snake.speed = this.currentSpeed();
+    this.snake.update(dt);
+
+    // 相机跟随
+    this.updateCamera(dt);
+
+    // 撞墙判定：蛇头圆与世界边界 / 内部墙相交 → 结束
+    if (this.walls.hitsCircle(this.snake.x, this.snake.y, cfg.HEAD_HIT_RADIUS)) {
+      this.gameOver();
+      return;
+    }
+
+    // 收集：蛇头或任一身体节压到的色块都收集；按类型触发不同效果
+    var got = this.spawner.collectAt(this.snake);
+    for (var i = 0; i < got.length; i++) {
+      var b = got[i];
+      // 特殊道具：弹出效果说明文字（普通色块不弹）
+      if (b.kind && b.kind !== 'color') this.setItemToast(b.kind, b.color);
+      if (b.kind === 'wild') {
+        this.snake.growWild();
+        if (Audio) Audio.playSpecial();
+        this.particles.burst(b.x, b.y, '#FFD94A', 7);
+      } else if (b.kind === 'bomb') {
+        if (Audio) Audio.playSpecial();
+        this.particles.burst(b.x, b.y, '#E8552F', 12, 1.5);
+        var remB = this.snake.eliminate(2, 2);      // 炸弹：清掉所有 ≥2 连同色段
+        this.applyElim(remB, 1.4, cfg.BOMB_SCORE);
+      } else if (b.kind === 'slow') {
+        if (Audio) Audio.playSpecial();
+        this.slowUntil = this.timeMs + cfg.SLOW_MS;
+        this.particles.burst(b.x, b.y, '#2EC4B6', 9);
+      } else if (b.kind === 'clear') {
+        if (Audio) Audio.playSpecial();
+        // 消色：消除全体现该颜色节
+        var remC = this.snake.removeByColor(b.color);
+        this.applyElim(remC, 1.3, cfg.CLEAR_SCORE);
+        var remC2 = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+        this.applyElim(remC2, 1, 0);
+        this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 12, 1.5);
+      } else if (b.kind === 'clear3') {
+        if (Audio) Audio.playSpecial();
+        // 后 3 消色：消除该颜色最靠尾的至多 3 节
+        var rem3 = this.snake.removeRearByColor(b.color, 3);
+        this.applyElim(rem3, 1.2, cfg.CLEAR3_SCORE);
+        var rem32 = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+        this.applyElim(rem32, 1, 0);
+        this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 9, 1.3);
+      } else if (b.kind === 'rand1' || b.kind === 'rand2' || b.kind === 'rand3') {
+        if (Audio) Audio.playSpecial();
+        // 随机消除 1/2/3 节
+        var rn = b.kind === 'rand1' ? 1 : (b.kind === 'rand2' ? 2 : 3);
+        var remR = this.snake.removeRandom(rn);
+        this.applyElim(remR, 1.2, cfg.RAND_SCORE);
+        var remR2 = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+        this.applyElim(remR2, 1, 0);
+        this.particles.burst(b.x, b.y, '#FFD94A', 9, 1.3);
+      } else {
+        if (Audio) Audio.playEat();
+        this.snake.grow(b.color);
+        this.particles.burst(b.x, b.y, cfg.COLORS[b.color], 4);
+      }
+    }
+
+    // 流星砖块：移动 + 碰撞注入（命中身体即把该色注入中段，衔接消除连锁）
+    var mev = this.spawner.updateMeteors(dt, this.snake);
+    for (var mi = 0; mi < mev.length; mi++) {
+      var ev = mev[mi];
+      this.snake.insertAt(ev.idx, ev.color);
+      this.particles.burst(ev.x, ev.y, cfg.COLORS[ev.color], 7, 1.3);
+      this.elimScore += cfg.METEOR_SCORE;
+      this.setItemToast('meteor', ev.color); // 流星注入飘字
+      var remM = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.applyElim(remM, 1, 0);
+    }
+
+    // 消除：相邻连续 ≥4 节同色立即消除（含连锁），保底 3 节。
+    var removed = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+    this.applyElim(removed, 1, 0);
+
+    // 自碰重组（v2.9）：蛇头触到自身身体 → 把一个砖块吃到头部（总长不变），多为消除制造新机会
+    if (this.snake.selfPullCd <= 0) {
+      var pulled = this.snake.trySelfPull();
+      if (pulled) {
+        this.snake.selfPullCd = cfg.SELF_PULL_CD;
+        var scol = cfg.COLORS[pulled.color] || '#FFD94A';
+        // 明显动效：身体接触点咬合环 + 牵引线拉到头部 + 头部迸裂 + 「自吃 +1」飘字，一眼看出触发了"吃"
+        this.particles.ring(pulled.x, pulled.y, scol, 1.4);
+        this.particles.burst(pulled.x, pulled.y, scol, 8, 1.4);
+        this.particles.streak(pulled.x, pulled.y, this.snake.x, this.snake.y, scol);
+        this.particles.burst(this.snake.x, this.snake.y, '#FFD94A', 6, 1.1);
+        this.particles.chainText(this.snake.x, this.snake.y - 26, '自吃 +1', 16);
+        if (CS.audio) CS.audio.playEat();
+        var remSP = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+        this.applyElim(remSP, 1.1, 0);
+      }
+    }
+
+    this.spawner.specialChance = cfg.specialChanceForElapsed(this.elapsed); // 越后期特殊道具越多
+    this.spawner.update(dt);
+
+    if (this.state === 'play' && this.mode === 'level' && this.score >= this.levelCfg.targetScore) {
+      this.levelClear();
+    }
+  };
+
+  Game.prototype.gameOver = function () {
+    if (Audio) { Audio.stopBgm(); Audio.playWall(); }  // 结束音效
+    if (this.mode === 'endless' && this.score > this.best) {
+      this.best = this.score;
+      store.set(cfg.STORAGE_BEST, this.best);
+    }
+    this.overAt = this.timeMs;
+    this.setState('over');
+  };
+
+  Game.prototype.levelClear = function () {
+    var n = this.levelCfg.level;
+    if (n >= this.unlocked && this.unlocked < lv.LEVEL_COUNT) {
+      this.unlocked = n + 1;
+      store.set(cfg.STORAGE_UNLOCKED, this.unlocked);
+    }
+    this.setState('clear');
+  };
+
+  // ---------------- UI 状态与按钮 ----------------
+
+  Game.prototype.setState = function (s) {
+    this.state = s;
+    this.buildButtons();
+  };
+
+  Game.prototype.addButton = function (id, cx, cy, w, h, label, enabled) {
+    this.uiButtons.push({ id: id, x: cx - w / 2, y: cy - h / 2, w: w, h: h, label: label, enabled: enabled !== false });
+  };
+
+  Game.prototype.buildButtons = function () {
+    this.uiButtons = [];
+    var W = this.screenW, H = this.screenH, cx = W / 2;
+    var bw = Math.min(220, W * 0.3), bh = 54;
+    if (this.state === 'menu') {
+      this.addButton('level', cx, H * 0.44, bw, bh, '闯关模式');
+      this.addButton('endless', cx, H * 0.44 + bh + 16, bw, bh, '无尽模式');
+      this.addButton('multi', cx, H * 0.44 + 2 * (bh + 16), bw, bh, '多人对战');
+      this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), Math.round(bw * 0.72), bh - 6, '图鉴');
+    } else if (this.state === 'guide') {
+      // 返回按钮与 drawGuideFooter 自绘位置对齐：右对齐 110×36，距右边 20、底栏中部
+      this.addButton('back', W - 75, H - 26, 110, 36, '返回');
+    } else if (this.state === 'levels') {
+      var cols = 5, lw = Math.min(64, (W - 80) / cols - 10), lh = 50;
+      var gridW = cols * (lw + 12) - 12;
+      var startX = (W - gridW) / 2 + lw / 2;
+      var startY = H * 0.36;
+      for (var i = 1; i <= lv.LEVEL_COUNT; i++) {
+        var col = (i - 1) % cols, row = Math.floor((i - 1) / cols);
+        this.addButton('lv' + i, startX + col * (lw + 12), startY + row * (lh + 16), lw, lh, String(i), i <= this.unlocked);
+      }
+      this.addButton('back', cx, startY + 2 * (lh + 16) + 42, 160, 48, '返回');
+    } else if (this.state === 'clear') {
+      var hasNext = this.levelCfg.level < lv.LEVEL_COUNT;
+      if (hasNext) this.addButton('next', cx, H * 0.58, bw, bh, '下一关');
+      this.addButton('menu', cx, H * 0.58 + (hasNext ? bh + 20 : 0), bw, bh, '返回菜单');
+    } else if (this.state === 'over') {
+      if (this.mode === 'multi') {
+        // 多人结算：手绘卡片下方并排放置（renderer 的卡片自适应停在按钮上方）
+        var bw2 = Math.min(170, W * 0.24), bh2 = 50;
+        var by2 = Math.min(H * 0.87, H - bh2 / 2 - 16);
+        this.addButton('retry', cx - bw2 / 2 - 14, by2, bw2, bh2, '再来一局');
+        this.addButton('menu', cx + bw2 / 2 + 14, by2, bw2, bh2, '返回菜单');
+      } else {
+        this.addButton('retry', cx, H * 0.58, bw, bh, '重来');
+        this.addButton('menu', cx, H * 0.58 + bh + 20, bw, bh, '返回菜单');
+      }
+    }
+  };
+
+  Game.prototype.onButton = function (id) {
+    if (Audio) Audio.playClick();  // 按钮点击音效
+    if (id === 'level') this.setState('levels');
+    else if (id === 'endless') this.startEndless();
+    else if (id === 'multi') this.startMulti();
+    else if (id === 'guide') { this.guidePage = 0; this.guideTab = 'items'; this.setState('guide'); }
+    else if (id === 'back') this.setState('menu');
+    else if (id === 'menu') this.setState('menu');
+    else if (id === 'retry') {
+      if (this.mode === 'level') this.startLevel(this.levelCfg.level);
+      else if (this.mode === 'multi') this.startMulti();
+      else this.startEndless();
+    }
+    else if (id === 'next') this.startLevel(this.levelCfg.level + 1);
+    else if (id.indexOf('lv') === 0) {
+      var n = parseInt(id.slice(2), 10);
+      if (n >= 1 && n <= this.unlocked) this.startLevel(n);
+    }
+  };
+
+  // ---------------- 触摸/鼠标入口（main.js 转发，坐标为 CSS 逻辑像素） ----------------
+
+  Game.prototype.onTouchStart = function (x, y, id) {
+    if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); return; }
+    // 图鉴页：页签切换 / 翻页（按钮优先）
+    if (this.state === 'guide') {
+      // 1) 按钮（返回）优先
+      for (var bi = 0; bi < this.uiButtons.length; bi++) {
+        var b = this.uiButtons[bi];
+        if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { this.onButton(b.id); return; }
+      }
+      // 2) 页签切换（顶部右侧胶囊 + 左侧导航栏，二者都支持）
+      var tr = cfg.guideTabRects(this);
+      var tk = null;
+      function inRect(r, x, y) { return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
+      if (inRect(tr.hdrItems, x, y) || inRect(tr.sideItems, x, y)) tk = 'items';
+      else if (inRect(tr.hdrColors, x, y) || inRect(tr.sideColors, x, y)) tk = 'colors';
+      if (tk) {
+        if (this.guideTab !== tk) { this.guideTab = tk; this.guidePage = 0; }
+        return;
+      }
+      // 3) 道具页：点击内容区左/右半屏翻页（颜色页无分页）
+      if (this.guideTab === 'items') {
+        var totalPg = Math.ceil(cfg.ITEM_GUIDE.length / 5);
+        if (totalPg > 1) {
+          if (x < this.screenW / 2) { if (this.guidePage > 0) this.guidePage--; }
+          else { if (this.guidePage < totalPg - 1) this.guidePage++; }
+          return;
+        }
+      }
+      return;
+    }
+    for (var i = 0; i < this.uiButtons.length; i++) {
+      var b = this.uiButtons[i];
+      if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        this.onButton(b.id);
+        return;
+      }
+    }
+  };
+
+  Game.prototype.onTouchMove = function (x, y, id) {
+    if (this.state === 'play') this.joystick.onTouchMove(x, y, id);
+  };
+
+  Game.prototype.onTouchEnd = function (id) {
+    this.joystick.onTouchEnd(id);
+  };
+
+  /**
+   * 特殊道具效果文字提示：吃到 wild/bomb/slow/clear/clear3/rand1-3 时弹出，
+   * 屏幕顶部居中、手绘描边文字、约 1.6s 后淡出（渲染见 renderer.drawItemToast）。
+   * @param {string} kind 道具类型
+   * @param {string} [colorKey] 消色类道具的对应颜色 key
+   */
+  Game.prototype.setItemToast = function (kind, colorKey) {
+    var cn = COLOR_NAMES[colorKey] || '';
+    var txt;
+    if (kind === 'wild') txt = '万能色！可匹配任意相邻颜色';
+    else if (kind === 'bomb') txt = '炸弹！清除所有≥2连同色段';
+    else if (kind === 'slow') txt = '减速！短暂放慢移动速度';
+    else if (kind === 'clear') txt = '消色！消除全部' + cn + '色节';
+    else if (kind === 'clear3') txt = '后三消色！消除该色最末 3 节';
+    else if (kind === 'rand1') txt = '随机消除 1 节！';
+    else if (kind === 'rand2') txt = '随机消除 2 节！';
+    else if (kind === 'rand3') txt = '随机消除 3 节！';
+    else if (kind === 'meteor') txt = '流星注入！对应颜色已注入身体';
+    else return;
+    this.itemToast = { text: txt, until: this.timeMs + cfg.ITEM_TOAST_MS };
+  };
+
+  CS.Game = Game;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== inlined: js/main.js ===== */
+'use strict';
+/**
+ * main.js — 启动引导（浏览器版）：画布初始化、屏幕适配、输入转发、主循环
+ *  - 画布按设备像素比（devicePixelRatio）缩放，逻辑坐标 = CSS 像素；
+ *  - window resize 时重设画布尺寸并通知 game/renderer 重新布局；
+ *  - 输入：touchstart/move/end + mousedown/move/up 统一转发给 game
+ *    （鼠标 id 固定为 'mouse'，方便电脑上用鼠标拖动摇杆试玩）；
+ *  - 主循环用 requestAnimationFrame，蛇的连续移动/转向由 game.update(dt) 每帧驱动。
+ */
+(function (root) {
+  var CS = root.CS;
+
+  function boot() {
+    var canvas = document.getElementById('game');
+    var ctx = canvas.getContext('2d');
+
+    var game = new CS.Game(window.innerWidth, window.innerHeight);
+    var renderer = new CS.Renderer(ctx, window.innerWidth, window.innerHeight);
+
+    function resize() {
+      var w = window.innerWidth, h = window.innerHeight;
+      var dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 之后全部用逻辑像素绘制
+      game.resize(w, h);
+      renderer.resize(w, h);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ---------- 触摸输入 ----------
+    canvas.addEventListener('touchstart', function (e) {
+      e.preventDefault();
+      for (var i = 0; i < e.changedTouches.length; i++) {
+        var t = e.changedTouches[i];
+        game.onTouchStart(t.clientX, t.clientY, t.identifier);
+      }
+    }, { passive: false });
+    canvas.addEventListener('touchmove', function (e) {
+      e.preventDefault();
+      for (var i = 0; i < e.changedTouches.length; i++) {
+        var t = e.changedTouches[i];
+        game.onTouchMove(t.clientX, t.clientY, t.identifier);
+      }
+    }, { passive: false });
+    function onTouchEnd(e) {
+      e.preventDefault();
+      for (var i = 0; i < e.changedTouches.length; i++) {
+        game.onTouchEnd(e.changedTouches[i].identifier);
+      }
+    }
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+    canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
+
+    // ---------- 鼠标输入（桌面端拖动摇杆 / 点按钮） ----------
+    var mouseDown = false;
+    canvas.addEventListener('mousedown', function (e) {
+      mouseDown = true;
+      game.onTouchStart(e.clientX, e.clientY, 'mouse');
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (mouseDown) game.onTouchMove(e.clientX, e.clientY, 'mouse');
+    });
+    window.addEventListener('mouseup', function (e) {
+      if (mouseDown) {
+        mouseDown = false;
+        game.onTouchEnd('mouse');
+      }
+    });
+
+    // ---------- 主循环 ----------
+    var last = 0;
+    function loop(ts) {
+      var now = (typeof ts === 'number' && ts > 0) ? ts : Date.now();
+      if (!last) last = now;
+      var dt = now - last;
+      last = now;
+      if (dt > 100) dt = 100; // 切后台回来防跳帧
+      game.update(dt);
+      renderer.draw(game);
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+</body>
+</html>
