@@ -61,6 +61,7 @@
     this.unlockedKeys = [];     // 已解锁颜色的 key 数组（刷新色块 / 蛇身颜色都用它）
     this.unlockBanner = null;   // 解锁提示横幅 {text, until, keys}
     this.itemToast = null;      // 特殊道具效果提示 {text, until}（屏幕空间，HUD 层）
+    this.guidePage = 0;         // 图鉴当前页码（0-based）
 
     this.uiButtons = [];
     this.buildButtons();
@@ -522,10 +523,10 @@
     var W = this.screenW, H = this.screenH, cx = W / 2;
     var bw = Math.min(220, W * 0.3), bh = 54;
     if (this.state === 'menu') {
-      this.addButton('level', cx, H * 0.48, bw, bh, '闯关模式');
-      this.addButton('endless', cx, H * 0.48 + bh + 20, bw, bh, '无尽模式');
-      this.addButton('multi', cx, H * 0.48 + 2 * (bh + 20), bw, bh, '多人对战');
-      this.addButton('guide', cx, H * 0.48 + 3 * (bh + 20), Math.round(bw * 0.75), bh - 6, '图鉴');
+      this.addButton('level', cx, H * 0.40, bw, bh, '闯关模式');
+      this.addButton('endless', cx, H * 0.40 + bh + 16, bw, bh, '无尽模式');
+      this.addButton('multi', cx, H * 0.40 + 2 * (bh + 16), bw, bh, '多人对战');
+      this.addButton('guide', cx, H * 0.40 + 3 * (bh + 16), Math.round(bw * 0.72), bh - 6, '图鉴');
     } else if (this.state === 'guide') {
       this.addButton('back', cx, H * 0.92, 160, 48, '返回');
     } else if (this.state === 'levels') {
@@ -561,7 +562,7 @@
     if (id === 'level') this.setState('levels');
     else if (id === 'endless') this.startEndless();
     else if (id === 'multi') this.startMulti();
-    else if (id === 'guide') this.setState('guide');
+    else if (id === 'guide') { this.guidePage = 0; this.setState('guide'); }
     else if (id === 'back') this.setState('menu');
     else if (id === 'menu') this.setState('menu');
     else if (id === 'retry') {
@@ -580,6 +581,21 @@
 
   Game.prototype.onTouchStart = function (x, y, id) {
     if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); return; }
+    // 图鉴页：点击左/右半屏翻页（按钮优先）
+    if (this.state === 'guide') {
+      var hitBtn = false;
+      for (var bi = 0; bi < this.uiButtons.length; bi++) {
+        var b = this.uiButtons[bi];
+        if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { this.onButton(b.id); return; }
+      }
+      // 非按钮区域 → 翻页
+      var totalPg = Math.ceil(cfg.ITEM_GUIDE.length / 5);
+      if (totalPg > 1) {
+        if (x < this.screenW / 2) { if (this.guidePage > 0) this.guidePage--; }
+        else { if (this.guidePage < totalPg - 1) this.guidePage++; }
+        return;
+      }
+    }
     for (var i = 0; i < this.uiButtons.length; i++) {
       var b = this.uiButtons[i];
       if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {

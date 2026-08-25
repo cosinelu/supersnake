@@ -2,7 +2,7 @@
 /**
  * multiplayer.js — 多人对战模式编排（玩家 1 名 + AI 蛇，DOM 无关）
  * 职责：
- *  - 蛇管理：场上恒定维持 玩家 1 名 + MP_AI_COUNT 条 AI；每条蛇一个 Entry
+ *  - 蛇管理：玩家 1 名 + AI 蛇（v2.8.7 起**动态增长**：开局 MP_AI_START_COUNT 条（默认 3），
  *    （独立 Snake 实例、昵称、基础速度档位、性格参数 greed/caution、击杀数、消除分、历史最长节数）；
  *  - 淘汰：头撞墙/边界 → 淘汰；头撞其他蛇身体节 → 淘汰（身体主人记 1 击杀）；
  *    头对头相撞 → 两条都淘汰（简单公平，不记击杀）；不做蛇身自碰（沿用现有设计）；
@@ -82,7 +82,9 @@
   /** 初始化：玩家 Entry（包裹 game.snake）+ 补足 AI 编制 */
   Multiplayer.prototype.setup = function () {
     this.playerEntry = new Entry(this.game.snake, '我', true);
-    for (var i = 0; i < cfg.MP_AI_COUNT; i++) this.spawnBot();
+    // 开局只生成初始数量的 AI（后续随时间增长）
+    var startCount = cfg.MP_AI_START_COUNT || cfg.MP_AI_COUNT;
+    for (var i = 0; i < startCount; i++) this.spawnBot(0); // 早期 AI，智力普通
     this.spawner.others = this.botSnakes; // 活引用：重生/淘汰自动反映到刷新避让
   };
 
@@ -104,6 +106,33 @@
     var n = 0;
     for (var i = 0; i < this.bots.length; i++) if (this.bots[i].alive) n++;
     return n;
+  };
+
+  /**
+   * 根据存活时间计算当前应有的 AI 数量（线性增长：从 MP_AI_START_COUNT 到 MP_AI_MAX_COUNT）。
+   * @param {number} surviveSec 存活秒数
+   * @returns {number} 当前目标 AI 数量
+   */
+  Multiplayer.prototype.targetAiCount = function (surviveSec) {
+    var start = cfg.MP_AI_START_COUNT || 3;
+    var max = cfg.MP_AI_MAX_COUNT || 14;
+    var interval = cfg.MP_AI_GROW_INTERVAL_SEC || 25;
+    // 每过 interval 秒 +1，封顶 max
+    var count = start + Math.floor(surviveSec / interval);
+    return Math.min(max, Math.max(start, count));
+  };
+
+  /** 当前智力等级（0~1，随时间从 0 渐变到 1） */
+  Multiplayer.prototype.currentSmartness = function () {
+    var sec = this.timeMs / 1000;
+    var start = cfg.MP_AI_START_COUNT || 3;
+    var max = cfg.MP_AI_MAX_COUNT || 14;
+    var interval = cfg.MP_AI_GROW_INTERVAL_SEC || 25;
+    // 智力等级 = 已增长的步数 / 总增长步数
+    var totalSteps = max - start;
+    if (totalSteps <= 0) return 1;
+    var grown = Math.min(totalSteps, Math.floor(sec / interval));
+    return grown / totalSteps; // 0 → 1
   };
 
   /**
@@ -136,15 +165,31 @@
     return best || { x: w.W / 2, y: w.H / 2 };
   };
 
-  /** 生成一条 AI 蛇（边缘安全位、朝向场心、随机昵称/速度档位/性格） */
-  Multiplayer.prototype.spawnBot = function () {
+  /**
+   * 生成一条 AI 蛇（边缘安全位、朝向场心、随机昵称/速度档位/性格）。
+   * @param {number} smartness 智力等级 0~1（0=开局普通AI，1=后期聪明AI；越高越谨慎、速度越快）
+   */
+  Multiplayer.prototype.spawnBot = function (smartness) {
     var pos = this.findSpawn();
     var angle = Math.atan2(this.walls.H / 2 - pos.y, this.walls.W / 2 - pos.x);
     var snake = new Snake(pos.x, pos.y, cfg.MP_START_LENGTH, angle, this.game.unlockedKeys);
     var e = new Entry(snake, this.pickName(), false);
-    e.base = cfg.MP_AI_SPEED_MIN + Math.random() * (cfg.MP_AI_SPEED_MAX - cfg.MP_AI_SPEED_MIN);
-    e.greed = 0.6 + Math.random() * 0.8;    // 0.6~1.4 贪食
-    e.caution = 0.6 + Math.random() * 0.8;  // 0.6~1.4 谨慎
+
+    // 基础速度：后期 AI 略快（给玩家更大压力）
+    var speedRange = cfg.MP_AI_SPEED_MAX - cfg.MP_AI_SPEED_MIN;
+    e.base = cfg.MP_AI_SPEED_MIN + Math.random() * speedRange * (0.7 + smartness * 0.5);
+
+    // 性格参数：早期 AI 随机性大（可能很贪或很怂），后期 AI 更均衡聪明
+    if (smartness < 0.3) {
+      // 早期：极端随机（有的很莽有的很胆小）
+      e.greed = 0.4 + Math.random() * 1.2;    // 0.4~1.6
+      e.caution = 0.4 + Math.random() * 1.2;   // 0.4~1.6
+    } else {
+      // 后期：更聪明（适中偏高贪食 + 高谨慎 = 会吃但不容易送死）
+      e.greed = 0.8 + Math.random() * 0.5;     // 0.8~1.3
+      e.caution = 0.9 + Math.random() * 0.5;   // 0.9~1.4
+    }
+
     this.bots.push(e);
     this.botSnakes.push(snake);
     return e;
@@ -322,9 +367,19 @@
     }
   };
 
-  /** 处理到期的 AI 重生（编制恒定：活 AI + 排队数 === MP_AI_COUNT） */
+  /**
+   * 处理 AI 重生 + 动态增长（v2.8.7：AI 数量随时间从 MP_AI_START_COUNT 增长到 MP_AI_MAX_COUNT）。
+   * 逻辑：
+   *  1) 到期的淘汰 AI 按原延迟重生（维持基本编制）；
+   *  2) 计算当前存活时间对应的目标 AI 数量，若当前活 AI 少于目标，额外补招新 AI；
+   *  3) 新补招的 AI 使用 currentSmartness() 智力参数（后期 AI 更聪明）。
+   */
   Multiplayer.prototype.processRespawns = function () {
     var now = this.timeMs;
+    var sec = this.timeMs / 1000;
+    var smartness = this.currentSmartness();
+
+    // 1) 到期重生（淘汰的 AI 回来）
     var due = 0;
     var keep = [];
     for (var i = 0; i < this.respawnQueue.length; i++) {
@@ -333,8 +388,21 @@
     }
     this.respawnQueue = keep;
     for (i = 0; i < due; i++) {
-      this.spawnBot();
+      this.spawnBot(smartness);  // 重生的 AI 也带当前智力水平
       this.respawned++;
+    }
+
+    // 2) 动态增长：若「活 AI + 重生队列」< 目标数量，补招新 AI（队列中的待重生蛇也算编制，
+    //    避免「刚被淘汰→队列里还躺着一条→又补一条」导致数量瞬间越界）。
+    //    节流仅作为「增长补招」的速率限制（每隔 >=800ms 才允许补一条），绝不越过目标数量硬上限。
+    var alive = this.aliveBotCount() + this.respawnQueue.length;
+    var target = this.targetAiCount(sec);
+    var canGrow = !this._lastGrowSpawn || now - this._lastGrowSpawn >= 800;
+    if (alive < target && canGrow) {
+      this.spawnBot(smartness);
+      this.respawned++;
+      this._lastGrowthSpawn = now; // 注意：故意用不同变量名避免与重生混淆
+      this._lastGrowSpawn = now;
     }
   };
 

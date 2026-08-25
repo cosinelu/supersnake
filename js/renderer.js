@@ -1109,8 +1109,8 @@
     ctx.fillText('自由游动 · 吃色补头 · 四连消除 · 别撞墙', this.W / 2, this.H * 0.40);
     ctx.font = '13px sans-serif';
     ctx.globalAlpha = 0.7;
-    ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.84);
-    ctx.fillText('多人对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.84 + 24);
+    ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.89);
+    ctx.fillText('多人对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.89 + 22);
     ctx.restore();
     this.drawButtons(game);
   };
@@ -1452,98 +1452,91 @@
   // ---------------- 道具图鉴页面 ----------------
 
   /**
-   * 图鉴页：展示所有道具的图标 + 名称 + 效果说明（手绘风卡片列表，可滚动）。
-   * 每张卡片：左侧小图标（复用 drawItemBlock 缩小版）、右侧名称+描述文字。
+   * 图鉴页：分页展示所有道具，每页 5 张卡片。
+   * 图标使用与游戏内完全相同的 drawItemBlock（离屏 canvas 渲染后贴图）。
+   * 支持翻页（点击左右区域或按钮）+ 底部页码指示器 + 返回按钮。
    */
   Renderer.prototype.drawGuide = function (game) {
     var ctx = this.ctx, W = game.screenW, H = game.screenH;
     var items = cfg.ITEM_GUIDE;
     if (!items || !items.length) return;
 
+    var PER_PAGE = 5;                    // 每页显示数量
+    var totalPages = Math.ceil(items.length / PER_PAGE);
+    // 确保页码在合法范围
+    if (!game.guidePage || game.guidePage < 0) game.guidePage = 0;
+    if (game.guidePage >= totalPages) game.guidePage = totalPages - 1;
+
+    var pg = game.guidePage;
+    var startIdx = pg * PER_PAGE;
+    var endIdx = Math.min(startIdx + PER_PAGE, items.length);
+    var pageItems = [];
+    for (var k = startIdx; k < endIdx; k++) pageItems.push(items[k]);
+
     // 标题
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = 'bold 28px sans-serif';
+    ctx.font = 'bold 26px sans-serif';
     ctx.lineJoin = 'round';
     ctx.lineWidth = 4;
     ctx.strokeStyle = cfg.INK;
-    ctx.strokeText('道 具 图 鉴', W / 2, 52);
+    ctx.strokeText('道 具 图 鉴', W / 2, 44);
     ctx.fillStyle = cfg.INK;
-    ctx.fillText('道 具 图 鉴', W / 2, 52);
+    ctx.fillText('道 具 图 鉴', W / 2, 44);
     ctx.restore();
 
-    // 卡片区域
-    var cardW = Math.min(560, W - 48);
+    // 卡片区域参数
+    var cardW = Math.min(540, W - 48);
     var cardX = (W - cardW) / 2;
-    var startY = 95;
-    var cardH = 72;       // 每张卡片高度
-    var gap = 10;         // 卡片间距
-    var iconSize = 40;    // 左侧图标尺寸
+    var startY = 78;
+    var cardH = 80;       // 每张卡片高度（加高以容纳更大的图标）
+    var gap = 8;          // 卡片间距
+    var iconSize = 48;    // 左侧图标尺寸（加大以便看清细节）
 
-    for (var i = 0; i < items.length; i++) {
-      var it = items[i];
+    for (var i = 0; i < pageItems.length; i++) {
+      var it = pageItems[i];
       var cy = startY + i * (cardH + gap);
-      if (cy + cardH > H - 70) break; // 不超出返回按钮区
 
       // 卡片底板（手绘圆角矩形）
       ctx.save();
       ctx.fillStyle = '#FFFDF5';
       ctx.strokeStyle = cfg.INK;
       ctx.lineWidth = 2.2;
-      wobblyRoundRect(ctx, cardX, cy, cardW, cardH, 8, i * 7, i * 11, 1.4);
+      wobblyRoundRect(ctx, cardX, cy, cardW, cardH, 8, (startIdx + i) * 7, (startIdx + i) * 11, 1.4);
       ctx.fill();
       ctx.stroke();
       ctx.restore();
 
-      // 左侧：缩小版道具图标（离屏 canvas 绘制再贴图）
-      var ix = cardX + 18 + iconSize / 2;
+      // 左侧图标：用离屏 canvas 调用 drawItemBlock（与游戏内完全一致）
+      var ix = cardX + 20 + iconSize / 2;
       var iy = cy + cardH / 2;
-      // 用一个临时上下文画小图标
       var tmpC = document.createElement('canvas');
-      tmpC.width = iconSize * 2; tmpC.height = iconSize * 2;
+      tmpC.width = iconSize * 2 + 4; tmpC.height = iconSize * 2 + 4;
       var tx = tmpC.getContext('2d');
-      tx.translate(iconSize, iconSize);
-      // 复用 drawItemBlock 的逻辑（简化版：只画圆形色块 + kind 标记）
-      var ic = it.colorKey ? cfg.COLORS[it.colorKey] : '#DDD';
-      if (it.kind === 'wild') ic = '#FFD94A';
-      else if (it.kind === 'bomb') ic = '#E8552F';
-      else if (it.kind === 'slow') ic = '#2EC4B6';
-      else if (!it.colorKey) ic = '#FFD94A';
-
-      tx.beginPath(); tx.arc(0, 0, iconSize * 0.42, 0, Math.PI * 2);
-      tx.fillStyle = ic; tx.fill();
-      tx.strokeStyle = cfg.INK; tx.lineWidth = 2.2; tx.stroke();
-
-      // kind 标记
-      tx.fillStyle = cfg.INK; tx.font = 'bold ' + Math.round(iconSize * 0.5) + 'px sans-serif';
-      tx.textAlign = 'center'; tx.textBaseline = 'middle';
-      var label = '';
-      if (it.kind === 'wild') label = '★'; else if (it.kind === 'bomb') label = '💥';
-      else if (it.kind === 'slow') label = '🐢'; else if (it.kind === 'clear') label = '✕';
-      else if (it.kind === 'clear3') label = '×3'; else if (it.kind.indexOf('rand') === 0) label = '?';
-      else if (it.kind === 'meteor') label = '→'; else if (it.kind === 'color') label = '●';
-      if (label) tx.fillText(label, 0, 0);
-
-      ctx.drawImage(tmpC, ix - iconSize, iy - iconSize);
+      tx.translate(iconSize + 2, iconSize + 2);
+      // 构造与 spawner.blocks 同格式的对象 {kind, color}
+      var blockObj = { kind: it.kind, color: it.colorKey || 'red' };
+      drawItemBlock(tx, blockObj, 0, 0, iconSize, (startIdx + i) * 13, (startIdx + i) * 17, 0, 1.0);
+      ctx.drawImage(tmpC, ix - iconSize - 2, iy - iconSize - 2);
 
       // 右侧：名称 + 描述
       ctx.save();
-      ctx.font = 'bold 16px sans-serif';
+      ctx.font = 'bold 15px sans-serif';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = cfg.INK;
       ctx.fillText(it.name, cardX + iconSize + 36, cy + 12);
 
       // 描述文字（自动换行）
-      ctx.font = '13px sans-serif';
+      ctx.font = '12.5px sans-serif';
       ctx.fillStyle = '#555';
       var descX = cardX + iconSize + 36;
       var descY = cy + 34;
       var maxW = cardW - iconSize - 52;
       var words = it.desc.split('');
       var line = '', lineY = descY;
-      var lineHeight = 18;
+      var lineHeight = 17;
       for (var c = 0; c < words.length; c++) {
         var test = line + words[c];
         if (ctx.measureText(test).width > maxW && line) {
@@ -1554,6 +1547,32 @@
       if (line) ctx.fillText(line, descX, lineY);
       ctx.restore();
     }
+
+    // ---- 底部：页码指示器 + 翻页提示 + 返回按钮区 ----
+    var bottomY = H - 56;
+
+    // 页码 "第 X / Y 页"
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = '#888';
+    ctx.fillText('第 ' + (pg + 1) + ' / ' + totalPages + ' 页', W / 2, bottomY - 18);
+    ctx.restore();
+
+    // 翻页提示（左/右半屏点击）
+    if (totalPages > 1) {
+      ctx.save();
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = '#AAA';
+      ctx.textAlign = 'left';
+      ctx.fillText(pg > 0 ? '◀ 上一页' : '', cardX, bottomY);
+      ctx.textAlign = 'right';
+      ctx.fillText(pg < totalPages - 1 ? '下一页 ▶' : '', cardX + cardW, bottomY);
+      ctx.restore();
+    }
+
+    // 返回按钮由 buildButtons 提供（state==='guide' 时有 back 按钮），drawButtons 会画
   };
 
   // ---------------- 总入口 ----------------

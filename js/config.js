@@ -127,7 +127,10 @@
 
     // ---------- 多人对战模式（玩家 1 名 + AI 蛇同场竞技）----------
     MULTI: { W: 4200, H: 2800, wallSegments: 6 }, // 共享大地图；内部墙比无尽(8)略少，给追逐留空间
-    MP_AI_COUNT: 6,             // 场上恒定维持的 AI 蛇数量
+    MP_AI_COUNT: 6,             // 场上恒定维持的 AI 蛇数量（旧：固定值；v2.8.7 起改为初始值，后续动态增长）
+    MP_AI_START_COUNT: 3,       // 开局初始 AI 数量（随时间增长到 MP_AI_MAX）
+    MP_AI_MAX_COUNT: 14,        // AI 数量上限（后期越来越热闹，但不会无限膨胀卡顿）
+    MP_AI_GROW_INTERVAL_SEC: 25,// 每隔多少秒新增一条 AI（存活时间驱动，越后期 AI 越多）
     MP_START_LENGTH: 5,         // AI 出生 / 重生初始颜色节数（+1 尾巴节，总长 6 节）
     MP_RESPAWN_MIN_MS: 3000,    // AI 淘汰后重生延迟下限（毫秒）
     MP_RESPAWN_MAX_MS: 5000,    // 重生延迟上限（毫秒）

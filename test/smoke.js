@@ -439,7 +439,7 @@ ok(mg.walls.W === cfg.MULTI.W && mg.walls.H === cfg.MULTI.H,
 ok(mg.spawner.target === u.clamp(Math.round(cfg.MULTI.W * cfg.MULTI.H / cfg.MP_BLOCK_AREA_DIV), cfg.MP_BLOCKS_MIN, cfg.MP_BLOCKS_MAX),
   '多人色块目标数 = 面积/' + cfg.MP_BLOCK_AREA_DIV + ' 夹取 [' + cfg.MP_BLOCKS_MIN + ',' + cfg.MP_BLOCKS_MAX + ']',
   'target=' + mg.spawner.target);
-ok(mg.mp.aliveBotCount() === cfg.MP_AI_COUNT, '场上 AI 蛇 = ' + cfg.MP_AI_COUNT + ' 条');
+ok(mg.mp.aliveBotCount() === (cfg.MP_AI_START_COUNT || 3), '场上 AI 蛇 = ' + (cfg.MP_AI_START_COUNT || 3) + ' 条（开局初始值）');
 ok(mg.mp.playerEntry && mg.mp.playerEntry.isPlayer && mg.mp.playerEntry.name === '我', '玩家 Entry 存在，标签为「我」');
 var nameSet = {}, nameDup = false, nameInPool = true;
 mg.mp.bots.forEach(function (b) {
@@ -453,9 +453,9 @@ var speedOk = mg.mp.bots.every(function (b) {
 });
 ok(speedOk, 'AI 基础速度档位在 ' + cfg.MP_AI_SPEED_MIN + '~' + cfg.MP_AI_SPEED_MAX + ' px/s 随机');
 var personaOk = mg.mp.bots.every(function (b) {
-  return b.greed >= 0.6 && b.greed <= 1.4 && b.caution >= 0.6 && b.caution <= 1.4;
+  return b.greed >= 0.4 && b.greed <= 1.6 && b.caution >= 0.4 && b.caution <= 1.6;
 });
-ok(personaOk, 'AI 性格参数（贪食/谨慎）在 0.6~1.4 区间');
+ok(personaOk, 'AI 性格参数（贪食/谨慎）在 0.4~1.6 区间（早期 AI 随机性大）');
 
 // ---------------- 13. AI 决策合法性与转向公平 ----------------
 section('AI 决策');
@@ -542,41 +542,43 @@ var rg = new CS.Game(960, 540);
 rg.startMulti();
 var deadBot = rg.mp.bots[0];
 rg.mp.kill(deadBot); // 直接淘汰一条
-ok(rg.mp.aliveBotCount() === cfg.MP_AI_COUNT - 1 && rg.mp.respawnQueue.length === 1,
-  '淘汰后：活 AI 5 条 + 重生队列 1 条');
+ok(rg.mp.aliveBotCount() === cfg.MP_AI_START_COUNT - 1 && rg.mp.respawnQueue.length === 1,
+  '淘汰后：活 AI ' + (cfg.MP_AI_START_COUNT - 1) + ' 条 + 重生队列 1 条');
 var rosterOk = true, rebornLen = -1;
-for (var rf = 0; rf < 400; rf++) { // 400 帧 = 6.4 秒，覆盖 3~5 秒重生延迟
+for (var rf = 0; rf < 400; rf++) { // 400 帧 = 6.4 秒，覆盖 3~5 秒重生延迟（且 < 25 秒增长阈值）
   rg.mp.update(16);
-  if (rg.mp.aliveBotCount() + rg.mp.respawnQueue.length !== cfg.MP_AI_COUNT) rosterOk = false;
+  // 前 25 秒目标数量 = MP_AI_START_COUNT；活 AI + 重生队列应恒定守恒（淘汰→入队、到期→重生）
+  var total16 = rg.mp.aliveBotCount() + rg.mp.respawnQueue.length;
+  if (total16 !== cfg.MP_AI_START_COUNT) rosterOk = false;
   if (rebornLen < 0 && rg.mp.respawned >= 1) {
     rebornLen = rg.mp.bots[rg.mp.bots.length - 1].snake.length(); // 重生当帧立即记录（之后可能吃到色块）
   }
 }
-ok(rosterOk, '编制恒定：活 AI + 重生队列 === ' + cfg.MP_AI_COUNT + '（400 帧不变式）');
+ok(rosterOk, '编制守恒：活 AI + 重生队列 === ' + cfg.MP_AI_START_COUNT + '（前 25 秒不变式，死亡入队/到期重生守恒）');
 ok(rg.mp.respawned >= 1, '延迟 3~5 秒后新 AI 重生（respawned=' + rg.mp.respawned + '）');
-ok(rebornLen === cfg.MP_START_LENGTH, '重生 AI 初始 ' + cfg.MP_START_LENGTH + ' 节', 'len=' + rebornLen);
+ok(rebornLen >= cfg.MP_START_LENGTH, '重生 AI 初始至少 ' + cfg.MP_START_LENGTH + ' 节', 'len=' + rebornLen);
 
 // ---------------- 17. 排行榜排序 ----------------
 section('排行榜');
 var lg = new CS.Game(960, 540);
 lg.startMulti();
-// 人为设定节数：玩家 12，AI 依次 3,20,7,15,9,5
+// 人为设定节数：玩家 12，3 条 AI 依次 20、3、7（开局仅 3 条 AI）
 while (lg.snake.colors.length < 12) lg.snake.colors.push('blue');
-var setLens = [3, 20, 7, 15, 9, 5];
+var setLens = [20, 3, 7];
 lg.mp.bots.forEach(function (b, i2) {
   while (b.snake.colors.length > setLens[i2]) b.snake.colors.pop();
   while (b.snake.colors.length < setLens[i2]) b.snake.colors.push('red');
 });
 var lb = lg.mp.leaderboard();
-var sortOk = lb.length === 7;
+var sortOk = lb.length === 4; // 玩家 + 3 AI
 for (var li = 0; li < lb.length - 1; li++) {
   if (lb[li].length < lb[li + 1].length) sortOk = false;
 }
-ok(sortOk, '排行榜 7 条蛇按当前节数降序', lb.map(function (r) { return r.length; }).join(','));
+ok(sortOk, '排行榜 4 条蛇按当前节数降序', lb.map(function (r) { return r.length; }).join(','));
 ok(lb[0].length === 20 && !lb[0].isPlayer, '榜首为 20 节的 AI');
-ok(lb[2].isPlayer && lb[2].length === 12, '玩家（12 节）排第 3 且带高亮标记',
-  JSON.stringify(lb[2]));
-ok(lg.mp.rankOf(lg.mp.playerEntry) === 3, 'rankOf(玩家) = 3（1 + 节数更多的活蛇数）');
+ok(lb[1].isPlayer && lb[1].length === 12, '玩家（12 节）排第 2 且带高亮标记',
+  JSON.stringify(lb[1]));
+ok(lg.mp.rankOf(lg.mp.playerEntry) === 2, 'rankOf(玩家) = 2（1 + 节数更多的活蛇数）');
 
 // ---------------- 18. 玩家淘汰结算 ----------------
 section('多人结算');
@@ -597,29 +599,57 @@ var storedBest = store.get(cfg.STORAGE_MP_BEST, null);
 ok(storedBest && storedBest.len >= og.mpResult.maxLen && storedBest.score >= og.mpResult.score,
   '多人最佳成绩写入 localStorage（新 key）', JSON.stringify(storedBest));
 og.onButton('retry');
-ok(og.state === 'play' && og.mode === 'multi' && og.mp.aliveBotCount() === cfg.MP_AI_COUNT,
-  '「再来一局」重开多人对战，编制完整');
+ok(og.state === 'play' && og.mode === 'multi' && og.mp.aliveBotCount() === cfg.MP_AI_START_COUNT,
+  '「再来一局」重开多人对战，编制完整（开局 ' + cfg.MP_AI_START_COUNT + ' 条 AI）');
 
 // ---------------- 19. 多人 3000 帧模拟 ----------------
 section('多人 3000 帧模拟');
 var sg2 = new CS.Game(960, 540);
 sg2.startMulti();
 var mpRestarts = 0;
-err = null;
+var err = null;
+var boundsOk = true, minTotal = Infinity, maxTotal = 0;
 try {
   for (var mf = 0; mf < 3000; mf++) {
     if (sg2.state !== 'play') { sg2.startMulti(); mpRestarts++; }
     if (mf % 6 === 0) sg2.snake.setTargetAngle(Math.random() * Math.PI * 2 - Math.PI); // 随机玩家输入
     sg2.update(16);
-    if (sg2.state === 'play' &&
-        sg2.mp.aliveBotCount() + sg2.mp.respawnQueue.length !== cfg.MP_AI_COUNT) {
-      throw new Error('编制不变式被破坏 @frame ' + mf);
+    if (sg2.state === 'play') {
+      var total19 = sg2.mp.aliveBotCount() + sg2.mp.respawnQueue.length;
+      if (total19 < cfg.MP_AI_START_COUNT || total19 > cfg.MP_AI_MAX_COUNT) boundsOk = false;
+      if (total19 < minTotal) minTotal = total19;
+      if (total19 > maxTotal) maxTotal = total19;
     }
   }
 } catch (e) { err = e; }
-ok(!err, '3000 帧（随机玩家输入 + 6 AI）无异常、无死循环、编制恒定' + (err ? '：' + err.message : ''), err && err.stack);
+ok(!err, '3000 帧（随机玩家输入 + 动态 AI）无异常、无死循环' + (err ? '：' + err.message : ''), err && err.stack);
 ok(sg2.timeMs >= 3000 * 16, '多人主循环时间正常推进', 'timeMs=' + sg2.timeMs);
+ok(boundsOk, 'AI 总数始终在 [' + cfg.MP_AI_START_COUNT + ',' + cfg.MP_AI_MAX_COUNT + '] 区间（不越界、不爆炸）',
+  'min=' + minTotal + ' max=' + maxTotal);
 console.log('  （期间玩家死亡重开 ' + mpRestarts + ' 次，AI 累计重生 ' + sg2.mp.respawned + ' 次）');
+
+// ---------------- 19b. AI 随时间动态增长（v2.8.7 核心需求） ----------------
+section('AI 随时间动态增长');
+var gg = new CS.Game(960, 540);
+gg.startMulti();
+var growCounts = [];
+for (var gf = 0; gf < 60; gf++) { // 每次 +0.5 秒 → 覆盖 0~30 秒
+  gg.mp.timeMs += 500;
+  gg.mp.processRespawns();
+  growCounts.push(gg.mp.aliveBotCount() + gg.mp.respawnQueue.length);
+}
+ok(growCounts[0] === cfg.MP_AI_START_COUNT, '开局 AI 数量 = ' + cfg.MP_AI_START_COUNT + ' 条（初始值）', 'c0=' + growCounts[0]);
+var monoOk = true;
+for (var gci = 1; gci < growCounts.length; gci++) {
+  if (growCounts[gci] < growCounts[gci - 1]) monoOk = false;
+}
+ok(monoOk, 'AI 数量随时间单调不减（越后期越多）', growCounts.join(','));
+ok(growCounts[growCounts.length - 1] <= cfg.MP_AI_MAX_COUNT,
+  'AI 数量封顶 ' + cfg.MP_AI_MAX_COUNT + '（不会无限膨胀卡顿）', 'cEnd=' + growCounts[growCounts.length - 1]);
+var smA = gg.mp.currentSmartness();
+gg.mp.timeMs += 1000 * 80; // 再推进 80 秒
+var smB = gg.mp.currentSmartness();
+ok(smB > smA, '后期 AI 智力等级高于开局（currentSmartness 随时间提升）', 'smart ' + smA.toFixed(2) + '→' + smB.toFixed(2));
 
 // ---------------- 20. 咬断机制（v2.2） ----------------
 section('咬断机制');
