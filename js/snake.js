@@ -35,6 +35,7 @@
     this.speed = cfg.SNAKE_SPEED;
     this.colors = [];                 // colors[0] = 头
     this.trail = [{ x: x, y: y }];    // 头部轨迹，trail[0] 最新
+    this.selfPullCd = 0;             // 自碰重组冷却（ms），>0 时不可触发（防刷屏）
     this.segPos = [];                 // 每节中心（含头），computeBody 派生
     // 出生时颜色随机但避免直接凑成 4 连（tries 防御：可选颜色不足时接受现状，不死循环）
     for (var i = 0; i < len; i++) {
@@ -88,6 +89,34 @@
     }
     this.computeBody();
     this.trimTrail();
+    if (this.selfPullCd > 0) this.selfPullCd = Math.max(0, this.selfPullCd - dtMs); // 自碰重组冷却衰减
+  };
+
+  /**
+   * 自碰重组（v2.9 新机制）：当蛇头重叠到自身某一节身体（k≥1，不含恒在的尾巴节）时，
+   * 把该节颜色移出并 unshift 到头部——总长度不变，但头部颜色改变、身体沿轨迹自然收拢，
+   * 可能凑出新的同色段触发消除，增加消除的变化性（且不吃不长，节奏不膨胀）。
+   * 仅当 selfPullCd<=0 时调用方才应触发；触发后由调用方重新设置冷却。
+   * @returns {{color:string,x:number,y:number,idx:number}|null} 被拉到头部的节信息；无重叠返回 null
+   */
+  Snake.prototype.trySelfPull = function () {
+    if (this.colors.length < cfg.MIN_LENGTH + 1) return null; // 至少 4 节才值得重组
+    var tol = cfg.HEAD_HIT_RADIUS + cfg.SEG_RADIUS;
+    var tol2 = tol * tol;
+    // 从离头最近的一节开始找（k=1 是脖子，越往后越深）；命中第一个重叠的身体节
+    for (var k = 1; k < this.segPos.length - 1; k++) {
+      var sp = this.segPos[k];
+      var dx = sp.x - this.x, dy = sp.y - this.y;
+      if (dx * dx + dy * dy < tol2) {
+        var color = this.colors[k];
+        // 移出第 k 节、unshift 到头部（总长不变）；身体由轨迹重新派生自然收拢
+        this.colors.splice(k, 1);
+        this.colors.unshift(color);
+        this.computeBody();
+        return { color: color, x: sp.x, y: sp.y, idx: k };
+      }
+    }
+    return null;
   };
 
   /**

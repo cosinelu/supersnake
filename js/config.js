@@ -56,6 +56,7 @@
     SEG_STROKE: 3.0,             // 节描边粗细（px，深色 INK，相邻节边界一眼可辨）
     HEAD_HIT_RADIUS: 10,         // 撞墙判定半径（略小于节半径，手感宽容）
     START_LENGTH: 5,             // 出生颜色节数（另有恒在的 +1 尾巴节，出生总长 = 6 节）
+    SELF_PULL_CD: 380,          // 自碰重组冷却（ms）：触发一次后需间隔这么久才能再触发，避免刷屏
     MIN_LENGTH: 3,               // 消除保底长度（从末尾保留；只计颜色节，尾巴节恒在、不占保底计数）
     TRAIL_STEP: 3,               // 轨迹记录最小间距（px，≪ SEG_SPACING，弧长插值精度足够）
     // 收集判定半径 = SEG_RADIUS + BLOCK_RADIUS = 25px（以节中心圆形重叠为准，不随间距变化）
@@ -68,9 +69,12 @@
 
     // ---------- 消除 ----------
     ELIM_RUN: 4,           // 相邻同色 ≥4 节触发消除
-    ELIM_SCORE: 5,         // 每消除 1 节基础得分；连锁第 chain 次每节 = ELIM_SCORE × chain
+    ELIM_SCORE: 10,        // 每消除 1 节基础得分（v2.9 起调高，使消除分在结算中占比更高）；
+                           // 实际得分 = ELIM_SCORE × chain(连锁) × combo(连击)，叠乘成倍
     CHAIN_FX_STEP: 0.6,    // 连锁特效逐级放大：倍率 = 1 + (chain-1)×0.6（chain2=1.6, chain3=2.2…）
     CHAIN_TEXT_MIN: 2,     // chain ≥ 2 才弹「N连锁！」手绘文字
+    ELIM_COMBO_WINDOW: 2400, // 连击窗口（ms）：窗口内连续触发多次消除，combo 逐次 +1，分数 ×combo
+    ELIM_COMBO_MAX: 5,       // 连击倍率上限（防止分数爆炸，最多 ×5）
 
     // ---------- 计分 ----------
     SURVIVE_SCORE_PER_SEC: 1, // 存活得分：1 秒 = 1 分
@@ -148,18 +152,22 @@
     MP_BITE_FLASH_MS: 300,      // 被咬视觉反馈时长：闪白 + 抖动（毫秒）
 
     // ---------- AI 决策参数（加权转向，见 ai.js）----------
-    AI_DIRS: 16,                // 每帧评估的候选方向数（绕一圈均匀采样）
-    AI_FOOD_RANGE: 850,         // 寻食感知范围（px，再按贪食性格伸缩）
+    AI_DIRS: 24,                // 每帧评估的候选方向数（v2.9 起 24：转向更精细、更聪明）
+    AI_FOOD_RANGE: 900,         // 寻食感知范围（px，再按贪食性格伸缩）
     AI_FOOD_WEIGHT: 1.0,        // 寻食基础权重
     AI_SAME_COLOR_BONUS: 1.6,   // 偏好与头部同色的色块（凑 4 连）
+    AI_RUN_BONUS: 3.0,         // 凑「4 连消除」动机加成：若该色块能让头部凑成 ≥3 连同色（差 1 节即消除），额外按接近度大幅加权
     AI_PROBE_NEAR: 70,          // 避障近前景点距离（px，≈1 个身位，按谨慎性格伸缩）
-    AI_PROBE_FAR: 150,          // 避障远前景点距离（px，≈2 个身位，按谨慎性格伸缩）
-    AI_WALL_PENALTY: 120,       // 近点撞墙罚分（几乎否决该方向）
-    AI_WALL_PENALTY_FAR: 36,    // 远点撞墙罚分（提前避让）
-    AI_SNAKE_AVOID: 130,        // 避蛇感知半径（px，按谨慎性格伸缩）
-    AI_SNAKE_PENALTY: 80,       // 避蛇罚分系数
-    AI_INERTIA: 0.35,           // 惯性分：偏好保持当前朝向（防抖动）
-    AI_WANDER: 0.3,             // 随机游走噪声幅度（无威胁时小幅漂移）
+    AI_PROBE_FAR: 190,          // 避障远前景点距离（px，≈2.7 个身位：看得更远、提前避让，v2.9 起加大）
+    AI_WALL_PENALTY: 160,       // 近点撞墙罚分（几乎否决该方向，v2.9 起加重）
+    AI_WALL_PENALTY_FAR: 50,    // 远点撞墙罚分（提前避让）
+    AI_SNAKE_AVOID: 150,        // 避蛇感知半径（px，按谨慎性格伸缩，v2.9 起加大）
+    AI_SNAKE_PENALTY: 110,      // 避蛇罚分系数（v2.9 起加重）
+    AI_SELF_AVOID: 95,          // 自身蛇身规避半径（px）：避免高速自卷卡死自己
+    AI_SELF_PENALTY: 70,        // 自身蛇身规避罚分系数
+    AI_HEADON_PENALTY: 140,     // 头对头规避：避免冲向其他蛇头部前方（会双双淘汰）的罚分
+    AI_INERTIA: 0.30,           // 惯性分：偏好保持当前朝向（防抖动，v2.9 略降以更灵活）
+    AI_WANDER: 0.25,            // 随机游走噪声幅度（无威胁时小幅漂移）
     AI_NICKNAMES: [             // AI 昵称池（随机取用，场上不重复）
       '蜡笔小新', '橡皮擦', '卷卷', '小粉笔', '涂鸦侠', '彩虹糖',
       '墨墨', '皮皮', '大白', '颜料罐', '小画伯', '条条', '点点', '麻花'
@@ -168,15 +176,15 @@
     // ---------- 道具图鉴（主菜单「图鉴」页面展示）----------
     ITEM_GUIDE: [
       { kind: 'color',   name: '普通色块',        desc: '吃到后蛇身头部插入一节该颜色。凑齐 4 个相邻同色节即可触发消除得分。',       colorKey: 'red' },
-      { kind: 'wild',    name: '万能色',           desc: '通配任意颜色，可桥接不同颜色的同色段来触发消除。策略性最强。',         colorKey: null },
-      { kind: 'bomb',    name: '炸弹',             desc: '瞬间清除蛇身上所有 ≥2 节的连续同色段。大范围消除，小心别把自己清太短！', colorKey: null },
-      { kind: 'slow',    name: '减速',             desc: '4 秒内移动速度降至 60%。临时喘息机会，适合紧急避障或调整走位。',          colorKey: null },
-      { kind: 'clear',   name: '消色',             desc: '一次性消除蛇身上全部指定颜色的节（不管在哪、连不连续都清）。强力清除！',     colorKey: 'red' },
-      { kind: 'clear3',  name: '后三消色',         desc: '只消除指定颜色最靠尾巴的 3 节。精准修剪，不会大伤元气。',               colorKey: 'blue' },
-      { kind: 'rand1',   name: '随机消 1',         desc: '随机移除蛇身上 1 节。小刀修剪，微调长度。',                               colorKey: null },
-      { kind: 'rand2',   name: '随机消 2',         desc: '随机移除蛇身上 2 节。中等力度修剪。',                                   colorKey: null },
-      { kind: 'rand3',   name: '随机消 3',         desc: '随机移除蛇身上 3 节。力度较大，慎用。',                                 colorKey: null },
-      { kind: 'meteor',  name: '流星砖块',         desc: '从地图边缘直线飞入，命中蛇身即注入对应颜色到中段。自动触发的中段补给！', colorKey: 'green' }
+      { kind: 'wild',    name: '万能色',           desc: '通配任意颜色，可桥接不同颜色的同色段来触发消除。',                       colorKey: null },
+      { kind: 'bomb',    name: '炸弹',             desc: '瞬间清除蛇身上所有 ≥2 节的连续同色段。',                                 colorKey: null },
+      { kind: 'slow',    name: '减速',             desc: '4 秒内移动速度降至 60%。',                                               colorKey: null },
+      { kind: 'clear',   name: '消色',             desc: '一次性消除蛇身上全部指定颜色的节（不管在哪、连不连续都清）。',           colorKey: 'red' },
+      { kind: 'clear3',  name: '后三消色',         desc: '只消除指定颜色最靠尾巴的 3 节。',                                       colorKey: 'blue' },
+      { kind: 'rand1',   name: '随机消 1',         desc: '随机移除蛇身上 1 节。',                                                 colorKey: null },
+      { kind: 'rand2',   name: '随机消 2',         desc: '随机移除蛇身上 2 节。',                                                 colorKey: null },
+      { kind: 'rand3',   name: '随机消 3',         desc: '随机移除蛇身上 3 节。',                                                 colorKey: null },
+      { kind: 'meteor',  name: '流星砖块',         desc: '从地图边缘直线飞入，命中蛇身即注入对应颜色到中段。',                     colorKey: 'green' }
     ],
 
     // ---------- 存储 key ----------

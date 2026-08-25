@@ -342,6 +342,12 @@
     var removed = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
     if (!removed.length) return;
     e.elimTotal += removed.length;
+    // 连击（仅玩家计入，AI 的 elimScore 仅供调试）：窗口内连续消除 → combo 递增 → 分数成倍
+    var combo = 1;
+    if (e.isPlayer) {
+      this.game.bumpCombo();
+      combo = Math.min(cfg.ELIM_COMBO_MAX, this.game.elimCombo);
+    }
     var waves = {};
     var i;
     for (i = 0; i < removed.length; i++) {
@@ -352,7 +358,7 @@
     for (var w = 0; w < chainLv.length; w++) {
       var chain = chainLv[w], segs = waves[chain];
       var fxScale = 1 + (chain - 1) * cfg.CHAIN_FX_STEP;
-      e.elimScore += segs.length * cfg.ELIM_SCORE * chain;
+      e.elimScore += segs.length * cfg.ELIM_SCORE * chain * combo;
       var sx = 0, sy = 0;
       for (i = 0; i < segs.length; i++) {
         this.particles.burst(segs[i].x, segs[i].y, cfg.COLORS[segs[i].color],
@@ -363,6 +369,9 @@
       this.particles.flash(ccx, ccy, '#FFD94A', fxScale, Math.min(4, chain));
       if (chain >= cfg.CHAIN_TEXT_MIN) {
         this.particles.chainText(ccx, ccy - 24, chain + '连锁！', 20 + (chain - 1) * 6);
+      }
+      if (e.isPlayer && combo >= 2) {
+        this.particles.chainText(ccx, ccy - 46, combo + '连击 ×' + combo, 18 + combo);
       }
     }
   };

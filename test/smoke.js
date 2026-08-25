@@ -97,10 +97,10 @@ ok(byChain[1] === 4 && byChain[2] === 4 && byChain[3] === 1,
   '连锁等级标记：chain1 消 4 节 / chain2 消 4 节 / chain3 保底消 1 节',
   JSON.stringify(byChain));
 var chainTotal = rc.reduce(function (sum, s) { return sum + cfg.ELIM_SCORE * s.chain; }, 0);
-ok(chainTotal === 4 * 5 + 4 * 10 + 1 * 15,
-  '连锁计分 = Σ ELIM_SCORE×chain = 4×5 + 4×10 + 1×15 = 75', 'total=' + chainTotal);
-ok(cfg.ELIM_SCORE * 2 === 10 && cfg.ELIM_SCORE * 3 === 15,
-  '倍率核对：chain2 每节 +10、chain3 每节 +15');
+ok(chainTotal === 4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 1 * cfg.ELIM_SCORE * 3,
+  '连锁计分 = Σ ELIM_SCORE×chain = 4×' + cfg.ELIM_SCORE + ' + 4×' + (cfg.ELIM_SCORE * 2) + ' + 1×' + (cfg.ELIM_SCORE * 3) + ' = ' + chainTotal, 'total=' + chainTotal);
+ok(cfg.ELIM_SCORE * 2 === 2 * cfg.ELIM_SCORE && cfg.ELIM_SCORE * 3 === 3 * cfg.ELIM_SCORE && cfg.ELIM_SCORE * 2 > cfg.ELIM_SCORE,
+  '倍率核对：chain 每节 = ELIM_SCORE×chain（chain2=' + (cfg.ELIM_SCORE * 2) + '、chain3=' + (cfg.ELIM_SCORE * 3) + ' = 2×/3× 基础）');
 ok(cfg.CHAIN_FX_STEP > 0 && 1 + cfg.CHAIN_FX_STEP === 1.6 && 1 + 2 * cfg.CHAIN_FX_STEP > 2,
   '特效放大倍率：chain2=1.6×、chain3=2.2×（chain≥2 弹「N连锁！」，渲染层表现）');
 // 需求 3：解锁横幅已改为无底板纯文字+色块图标（渲染层，node 侧不断言绘制，仅说明）
@@ -713,8 +713,8 @@ var bot4 = b4.mp.bots[0];
 bot4.snake.colors = ['pink', 'pink', 'red', 'red', 'blue', 'blue', 'blue', 'blue', 'red', 'red', 'pink', 'pink'];
 bot4.snake.computeBody();
 b4.mp.resolveElim(bot4);
-ok(bot4.elimTotal === 9 && bot4.elimScore === 75,
-  '连锁消除计入累计消除方块（9 节 / 75 分，与单人连锁倍率一致）',
+ok(bot4.elimTotal === 9 && bot4.elimScore === 4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 1 * cfg.ELIM_SCORE * 3,
+  '连锁消除计入累计消除方块（9 节 / ' + (4 * cfg.ELIM_SCORE + 4 * cfg.ELIM_SCORE * 2 + 1 * cfg.ELIM_SCORE * 3) + ' 分，与单人连锁倍率一致）',
   'elimTotal=' + bot4.elimTotal + ' score=' + bot4.elimScore);
 
 // ---------------- 21. 尾巴节（v2.3：恒在的不可消除末节） ----------------

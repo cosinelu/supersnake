@@ -49,6 +49,8 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.elimCombo = 0;     // 连击层数（v2.9）：窗口内连续触发消除 +1，分数 ×combo
+    this.elimComboTimer = 0; // 连击剩余窗口（ms），每帧衰减
     this.mp = null;       // 多人对战编排器（mode==='multi' 时非空）
     this.mpResult = null; // 多人结算数据 {surviveSec, score, survivalScore, elimScore, elimTotal,
                         //   rank, kills, finalLen, maxLen, bestLen, bestScore, newBest}
@@ -147,6 +149,8 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.elimCombo = 0;
+    this.elimComboTimer = 0;
     this.mp = null;
     this.mpResult = null;
     this.slowUntil = 0;
@@ -200,6 +204,8 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.elimCombo = 0;
+    this.elimComboTimer = 0;
     this.mpResult = null;
     this.snake = new Snake(spawn.x, spawn.y, cfg.START_LENGTH, 0, this.unlockedKeys);
     this.snake.speed = cfg.SNAKE_SPEED;
@@ -230,7 +236,18 @@
 
     this.mp.update(dt);
 
-    // 玩家得分 = 存活分 + 消除分（消除分在 mp.resolveElim 中按连锁倍率累计）
+    // 玩家自碰重组（v2.9）：与单人同规则；触发后走 mp.resolveElim 计分（含连击倍率 + 特效）
+    if (this.mp.playerEntry.alive && this.snake.selfPullCd <= 0) {
+      var pulledM = this.snake.trySelfPull();
+      if (pulledM) {
+        this.snake.selfPullCd = cfg.SELF_PULL_CD;
+        this.particles.burst(pulledM.x, pulledM.y, cfg.COLORS[pulledM.color] || '#FFD94A', 6, 1.2);
+        this.particles.ring(this.snake.x, this.snake.y, '#FFD94A', 1.1);
+        this.mp.resolveElim(this.mp.playerEntry);
+      }
+    }
+
+    // 玩家得分 = 存活分 + 消除分（消除分在 mp.resolveElim 中按连锁 + 连击倍率累计）
     this.elimScore = this.mp.playerEntry.elimScore;
     this.score = this.survivalScore + this.elimScore;
 
@@ -310,7 +327,23 @@
   };
 
   /**
-   * 统一的消除计分 + 特效（连锁倍率、逐级放大粒子/星闪、N 连锁文字）。
+   * 连击（v2.9）：窗口内连续触发消除时 combo 逐次 +1，分数按 combo 倍率成倍增加。
+   * 与连锁 chain 叠乘：单节得分 = ELIM_SCORE × chain × combo。
+   */
+  Game.prototype.bumpCombo = function () {
+    this.elimCombo = (this.elimComboTimer > 0) ? this.elimCombo + 1 : 1;
+    this.elimComboTimer = cfg.ELIM_COMBO_WINDOW;
+  };
+  /** 每帧衰减连击窗口；超窗口则归零 */
+  Game.prototype.tickCombo = function (dt) {
+    if (this.elimComboTimer > 0) {
+      this.elimComboTimer -= dt;
+      if (this.elimComboTimer <= 0) { this.elimComboTimer = 0; this.elimCombo = 0; }
+    }
+  };
+
+  /**
+   * 统一的消除计分 + 特效（连锁倍率 × 连击倍率、逐级放大粒子/星闪、N 连锁文字）。
    * @param {Array} removed 被移除节 [{color,x,y,chain}]
    * @param {number} fxBoost 特效放大（炸弹更强）
    * @param {number} perSegBonus 每节额外得分（炸弹道具）
@@ -318,6 +351,8 @@
   Game.prototype.applyElim = function (removed, fxBoost, perSegBonus) {
     if (!removed || !removed.length) return;
     if (Audio) Audio.playElim();  // 消除基础音效
+    this.bumpCombo();            // 本次消除计入连击（窗口内连续消除 → combo 递增 → 分数成倍）
+    var combo = Math.min(cfg.ELIM_COMBO_MAX, this.elimCombo);
     var waves = {};
     for (var i = 0; i < removed.length; i++) {
       var ch = removed[i].chain || 1;
@@ -327,7 +362,7 @@
     for (var w = 0; w < chainLv.length; w++) {
       var chain = chainLv[w], segs = waves[chain];
       var fxScale = (1 + (chain - 1) * cfg.CHAIN_FX_STEP) * (fxBoost || 1);
-      this.elimScore += segs.length * (cfg.ELIM_SCORE * chain + (perSegBonus || 0));
+      this.elimScore += segs.length * (cfg.ELIM_SCORE * chain * combo + (perSegBonus || 0));
       var sx = 0, sy = 0;
       for (i = 0; i < segs.length; i++) {
         var col = segs[i].color === 'wild' ? '#FFD94A' : cfg.COLORS[segs[i].color];
@@ -339,6 +374,9 @@
       this.particles.flash(ccx, ccy, '#FFD94A', fxScale, Math.min(4, chain));
       if (chain >= cfg.CHAIN_TEXT_MIN) {
         this.particles.chainText(ccx, ccy - 24, chain + '连锁！', 20 + (chain - 1) * 6);
+      }
+      if (combo >= 2) { // 连击提示：在连锁文字上方再弹一行「N连击 ×倍率」
+        this.particles.chainText(ccx, ccy - 46, combo + '连击 ×' + combo, 18 + combo);
       }
       if (Audio && chain >= 2) Audio.playChain(chain);  // 连锁额外音效（越高越响）
     }
@@ -375,6 +413,7 @@
     this.timeMs += dt;
     this.particles.update(dt);
     if (this.state !== 'play') return;
+    this.tickCombo(dt); // 连击窗口每帧衰减（超窗口归零）
 
     // 解锁提示横幅到期自动清除
     if (this.unlockBanner && this.timeMs >= this.unlockBanner.until) this.unlockBanner = null;
@@ -481,6 +520,18 @@
     var removed = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
     this.applyElim(removed, 1, 0);
 
+    // 自碰重组（v2.9）：蛇头触到自身身体 → 把一个砖块吃到头部（总长不变），多为消除制造新机会
+    if (this.snake.selfPullCd <= 0) {
+      var pulled = this.snake.trySelfPull();
+      if (pulled) {
+        this.snake.selfPullCd = cfg.SELF_PULL_CD;
+        this.particles.burst(pulled.x, pulled.y, cfg.COLORS[pulled.color] || '#FFD94A', 6, 1.2);
+        this.particles.ring(this.snake.x, this.snake.y, '#FFD94A', 1.1);
+        var remSP = this.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+        this.applyElim(remSP, 1.1, 0);
+      }
+    }
+
     this.spawner.update(dt);
 
     if (this.state === 'play' && this.mode === 'level' && this.score >= this.levelCfg.targetScore) {
@@ -523,10 +574,10 @@
     var W = this.screenW, H = this.screenH, cx = W / 2;
     var bw = Math.min(220, W * 0.3), bh = 54;
     if (this.state === 'menu') {
-      this.addButton('level', cx, H * 0.40, bw, bh, '闯关模式');
-      this.addButton('endless', cx, H * 0.40 + bh + 16, bw, bh, '无尽模式');
-      this.addButton('multi', cx, H * 0.40 + 2 * (bh + 16), bw, bh, '多人对战');
-      this.addButton('guide', cx, H * 0.40 + 3 * (bh + 16), Math.round(bw * 0.72), bh - 6, '图鉴');
+      this.addButton('level', cx, H * 0.44, bw, bh, '闯关模式');
+      this.addButton('endless', cx, H * 0.44 + bh + 16, bw, bh, '无尽模式');
+      this.addButton('multi', cx, H * 0.44 + 2 * (bh + 16), bw, bh, '多人对战');
+      this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), Math.round(bw * 0.72), bh - 6, '图鉴');
     } else if (this.state === 'guide') {
       this.addButton('back', cx, H * 0.92, 160, 48, '返回');
     } else if (this.state === 'levels') {

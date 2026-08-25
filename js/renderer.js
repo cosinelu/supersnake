@@ -290,6 +290,25 @@
       ctx.fillStyle = cfg.INK; ctx.fillText(String(n), 0, 1);
       ctx.font = 'bold ' + Math.round(size * 0.28) + 'px sans-serif';
       ctx.fillStyle = cfg.INK; ctx.fillText('?', size * 0.30, -size * 0.30);
+
+    } else if (b.kind === 'meteor') {
+      // 流星砖块：会直线飞行的彩色砖块（与游戏内 drawMeteor 一致：彩色蜡笔砖 + 淡拖尾）
+      var mc = cfg.COLORS[b.color] || '#E8552F';
+      // 身后拖尾：几个依次变淡的残影，指示飞行方向（向右下飞入）
+      for (var mt = 3; mt >= 1; mt--) {
+        ctx.beginPath();
+        ctx.arc(-size * 0.20 * mt, -size * 0.12 * mt, size * (0.30 - 0.05 * mt), 0, Math.PI * 2);
+        ctx.fillStyle = mc;
+        ctx.globalAlpha = 0.22 * (4 - mt);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      // 本体：彩色蜡笔砖块
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, mc, seedX, seedY, { rot: 0.2, wobble: 1.0, stroke: cfg.SEG_STROKE });
+
+    } else {
+      // 普通色块（默认）：纯色蜡笔砖块（带描边），即游戏内最常见的色块
+      drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
     }
 
     ctx.restore();
@@ -883,7 +902,7 @@
 
     // 标题
     ctx.font = 'bold 15px sans-serif';
-    ctx.fillText('蜡笔贪吃蛇', cx, 24);
+    ctx.fillText('消食蛇', cx, 24);
 
     // 模式 / 关卡号
     ctx.font = '12px sans-serif';
@@ -1098,7 +1117,7 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = 'bold 44px sans-serif';
-    ctx.fillText('蜡笔贪吃蛇', this.W / 2, this.H * 0.24);
+    ctx.fillText('消食蛇', this.W / 2, this.H * 0.24);
     // 标题下画四个小色块做装饰
     var s = 18, total = s * 4 + 12 * 3;
     for (var i = 0; i < 4; i++) {
@@ -1106,7 +1125,7 @@
         cfg.COLORS[cfg.COLOR_KEYS[i]], 100 + i, 7, { rot: (u.hash2(i, 3, 5) - 0.5) * 0.5 });
     }
     ctx.font = '15px sans-serif';
-    ctx.fillText('自由游动 · 吃色补头 · 四连消除 · 别撞墙', this.W / 2, this.H * 0.40);
+    ctx.fillText('自由游动 · 吃色补头 · 四连消除 · 别撞墙', this.W / 2, this.H * 0.35);
     ctx.font = '13px sans-serif';
     ctx.globalAlpha = 0.7;
     ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.89);
@@ -1481,9 +1500,9 @@
     ctx.lineJoin = 'round';
     ctx.lineWidth = 4;
     ctx.strokeStyle = cfg.INK;
-    ctx.strokeText('道 具 图 鉴', W / 2, 44);
+    ctx.strokeText('道具图鉴', W / 2, 44);
     ctx.fillStyle = cfg.INK;
-    ctx.fillText('道 具 图 鉴', W / 2, 44);
+    ctx.fillText('道具图鉴', W / 2, 44);
     ctx.restore();
 
     // 卡片区域参数
