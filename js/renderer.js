@@ -1241,12 +1241,22 @@
    * 标题下方装饰动效：色块从左侧沿轨道滑入，到达中央触发「消除」效果
    * （蜡笔屑迸裂 + 高亮环 + 星形闪光 + 飘字），循环播放。
    * 颜色按 COLOR_KEYS 依次轮播覆盖全部色（偶尔随机），块数与飘字也随机变化，
-   * 看起来像各种颜色都在被消除。状态挂在 renderer 实例上（this.titleFx），逐帧更新。
+   * 看起来像各种颜色都在被消除——且真实还原「吃砖块→补到头→凑够 4 个同色→消除」的游戏过程。
+   * 状态挂在 renderer 实例上（this.titleFx），逐帧更新。
    */
   Renderer.prototype.drawTitleFx = function (game) {
     var ctx = this.ctx;
     var fx = this.titleFx;
-    if (!fx) fx = this.titleFx = { waves: [], lastMs: game.timeMs, spawnTimer: 500, colorCursor: 0 };
+    if (!fx) fx = this.titleFx = {
+      segs: [],          // 蛇身：最后一个是蛇头（颜色 key）；补头=push，去尾=shift
+      feeder: null,      // 正在滑向蛇头、待"吃"下的砖块 {color, x}
+      lastMs: game.timeMs,
+      feedTimer: 650,    // 距下一块砖出现的间隔
+      runColor: null,    // 当前连吃的目标色
+      runLeft: 0,        // 该色还差几块才凑满一轮（一轮=4，偶尔 3/5）
+      mixer: false,      // 下一轮前是否先扔一块杂色（展示"混色"）
+      bite: 0            // 蛇头咬合动画剩余时长(ms)
+    };
     var nowMs = game.timeMs;
     var dt = nowMs - fx.lastMs;
     fx.lastMs = nowMs;
@@ -1256,76 +1266,89 @@
     var cx = this.W / 2;
     var ty = this.H * 0.22;
     var fontSize = 52;
-    var laneY = ty + fontSize * 0.92;            // 标题与副标题之间的一条轨道
-    var laneHalf = Math.min(this.W * 0.32, 260);
-    var triggerX = cx;                           // 触发消除的位置（中央）
-    var speed = 150;                             // px/s
-    var gap = 24;                                // 同波内块间距
-    var blk = 18;                                // 块尺寸
+    var laneY = ty + fontSize * 0.95;            // 标题与副标题之间的一条轨道
+    var SEG = 24, BLK = 20, MAXLEN = 9;
+    var headX = cx + Math.min(this.W * 0.20, 150); // 蛇头固定在轨道右端，蛇身向左铺开
 
-    // 定时生成新一波
-    fx.spawnTimer -= dt;
-    if (fx.spawnTimer <= 0) {
-      fx.spawnTimer = 850 + Math.random() * 750; // 0.85~1.6s 间隔
-      var keys = cfg.COLOR_KEYS;
-      var colorKey;
-      if (Math.random() < 0.25) colorKey = keys[(Math.random() * keys.length) | 0];
-      else { colorKey = keys[fx.colorCursor % keys.length]; fx.colorCursor++; }
-      var n = 4, rr = Math.random();
-      if (rr < 0.18) n = 3; else if (rr > 0.84) n = 5;
-      var startX = cx - laneHalf - 30;
-      var blocks = [];
-      for (var i = 0; i < n; i++) blocks.push({ x: startX - i * gap, dead: false });
-      var texts = ['消除！', '4连！', '连锁！', '暴击！', '完美消除！'];
-      var txt = (n === 5) ? '5连！' : (n === 3 ? '3连！' : texts[(Math.random() * texts.length) | 0]);
-      fx.waves.push({
-        color: cfg.COLORS[colorKey], n: n, blocks: blocks,
-        triggered: false, triggerAt: 0,
-        scale: n >= 5 ? 1.5 : (n === 3 ? 1.1 : 1.3),
-        text: txt
-      });
+    // 1) 决定下一块要喂的颜色，制造"连续吃同色 4 块→消除"的节奏
+    if (!fx.runColor) { fx.runColor = cfg.COLOR_KEYS[fx.colorCursor % cfg.COLOR_KEYS.length]; fx.colorCursor++; fx.runLeft = 4; }
+    fx.feedTimer -= dt;
+    if (!fx.feeder && fx.feedTimer <= 0) {
+      fx.feedTimer = 620 + Math.random() * 480;  // 0.62~1.1s 出一块
+      var feedColor;
+      if (fx.mixer) { // 先扔一块杂色（不同色，不参与本轮 4 连），展示混色
+        do { feedColor = cfg.COLOR_KEYS[(Math.random() * cfg.COLOR_KEYS.length) | 0]; }
+        while (feedColor === fx.runColor);
+        fx.mixer = false;
+      } else {
+        feedColor = fx.runColor;
+        fx.runLeft--;
+        if (fx.runLeft <= 0) { // 本轮 4 连已喂完
+          fx.runColor = cfg.COLOR_KEYS[fx.colorCursor % cfg.COLOR_KEYS.length]; fx.colorCursor++;
+          fx.runLeft = (Math.random() < 0.2) ? 3 : (Math.random() < 0.12 ? 5 : 4);
+          fx.mixer = Math.random() < 0.35; // 下一轮前 35% 概率先来块杂色
+        }
+      }
+      fx.feeder = { color: feedColor, x: headX + 38 }; // 从蛇头右侧滑入
     }
 
-    // 更新 + 绘制各波
-    var keep = [];
-    for (var wi = 0; wi < fx.waves.length; wi++) {
-      var w = fx.waves[wi];
-      var headX = -1e9;
-      for (var bi = 0; bi < w.blocks.length; bi++) {
-        var b = w.blocks[bi];
-        if (b.dead) continue;
-        b.x += speed * dt / 1000;
-        if (b.x > headX) headX = b.x;
+    // 2) 推进待吃砖块；到达蛇头即"吃下"——补到头，蛇身左移，超长去尾
+    if (fx.feeder) {
+      fx.feeder.x -= 150 * dt / 1000;
+      if (fx.feeder.x <= headX) {
+        fx.segs.push(fx.feeder.color);          // 补头（与游戏一致：吃到→unshift 到头部）
+        if (fx.segs.length > MAXLEN) fx.segs.shift(); // 尾部掉落，总长有界
+        fx.bite = 160;
+        game.particles.ring(headX, laneY, cfg.COLORS[fx.feeder.color], 0.9); // 咬合小高亮
+        fx.feeder = null;
+        // 检查头侧是否有 4 连（最后 4 个同色）→ 消除
+        var L = fx.segs.length;
+        if (L >= 4 && fx.segs[L - 1] === fx.segs[L - 2] &&
+            fx.segs[L - 2] === fx.segs[L - 3] && fx.segs[L - 3] === fx.segs[L - 4]) {
+          var col = cfg.COLORS[fx.segs[L - 1]];
+          var big = (L >= 5 && fx.segs[L - 5] === fx.segs[L - 1]); // 实际 5 连
+          for (var k = 0; k < 4; k++) {
+            var px = headX - k * SEG;
+            game.particles.burst(px, laneY, col, 7, 1.3);
+            game.particles.ring(px, laneY, col, 1.3);
+          }
+          game.particles.flash(headX - 1.5 * SEG, laneY, '#FFD94A', 1.4, 3);
+          game.particles.chainText(headX - 1.5 * SEG, laneY - 26, big ? '5连！' : '4连消除！', big ? 22 : 18);
+          fx.segs.length = L - 4; // 移除头侧 4 节
+        }
       }
-      if (!w.triggered && headX >= triggerX) {
-        w.triggered = true;
-        w.triggerAt = nowMs;
-        game.particles.burst(triggerX, laneY, w.color, Math.round(7 * w.scale), w.scale);
-        game.particles.ring(triggerX, laneY, w.color, w.scale);
-        game.particles.flash(triggerX, laneY, '#FFD94A', w.scale, w.n >= 5 ? 3 : 2);
-        game.particles.chainText(triggerX, laneY - 24, w.text, 16 + (w.n >= 5 ? 8 : 0));
-      }
-      var alpha = 1;
-      if (w.triggered) {
-        var fp = (nowMs - w.triggerAt) / 220;
-        if (fp > 1) fp = 1;
-        alpha = 1 - fp;
-      }
-      var anyAlive = false;
-      for (var bj = 0; bj < w.blocks.length; bj++) {
-        var bb = w.blocks[bj];
-        if (bb.dead) continue;
-        if (w.triggered && (nowMs - w.triggerAt) >= 220) { bb.dead = true; continue; }
+    }
+    if (fx.bite > 0) fx.bite -= dt;
+
+    // 3) 绘制：蛇身（头在右，向左铺开）+ 蛇头眼睛 + 待吃砖块
+    ctx.save();
+    ctx.textBaseline = 'middle';
+    for (var i = 0; i < fx.segs.length; i++) {
+      var sx = headX - i * SEG;
+      var isHead = (i === fx.segs.length - 1);
+      var sz = isHead ? BLK + 2 : BLK;
+      if (sx < headX - MAXLEN * SEG - 30) continue; // 超出轨道左端不画
+      drawCrayonBlock(ctx, sx - sz / 2, laneY - sz / 2, sz, cfg.COLORS[fx.segs[i]], i * 53 + 17, 41,
+        { rot: 0.08, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      if (isHead) {
+        var sc = 1 + Math.max(0, fx.bite) / 160 * 0.18; // 咬合瞬间微微鼓一下
         ctx.save();
-        ctx.globalAlpha = Math.max(0, alpha);
-        ctx.translate(bb.x, laneY);
-        drawCrayonBlock(ctx, -blk / 2, -blk / 2, blk, w.color, bj * 53 + wi * 131, 41, { rot: 0.1, wobble: 1.0 });
+        ctx.translate(sx, laneY);
+        ctx.scale(sc, sc);
+        drawEyes(ctx, 0, 0, sz, { x: 1, y: 0 }); // 朝右（吃右侧来的砖块）
         ctx.restore();
-        anyAlive = true;
       }
-      if (anyAlive) keep.push(w);
     }
-    fx.waves = keep;
+    if (fx.feeder) { // 待吃的砖块（带轻微脉冲提示"正在靠近"）
+      var pulse = 1 + 0.08 * Math.sin(nowMs / 120);
+      var fsz = BLK * pulse;
+      ctx.save();
+      ctx.globalAlpha = 0.95;
+      drawCrayonBlock(ctx, fx.feeder.x - fsz / 2, laneY - fsz / 2, fsz, cfg.COLORS[fx.feeder.color], 7, 41,
+        { rot: 0.08, wobble: 1.0, stroke: cfg.SEG_STROKE });
+      ctx.restore();
+    }
+    ctx.restore();
   };
 
   Renderer.prototype.drawLevels = function (game) {
