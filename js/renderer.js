@@ -1215,24 +1215,8 @@
       ctx.restore();
     }
 
-    // 少量砖块沿线缓慢来回滑动（平滑 sin 振荡，不随机跳动，避免像 bug）
-    var tSlide = (game.timeMs || 0) / 1000;
-    var slideBlocks = [
-      { bx: cx - totalW * 0.30, color: cfg.COLORS.red,    amp: 16, spd: 1.0, ph: 0.0, size: 10 },
-      { bx: cx + totalW * 0.04, color: cfg.COLORS.green,  amp: 14, spd: 0.8, ph: 1.8, size: 9  },
-      { bx: cx + totalW * 0.32, color: cfg.COLORS.orange, amp: 18, spd: 1.2, ph: 3.2, size: 11 }
-    ];
-    var slideY = ty + fontSize * 0.66; // 标题下方一条水平线
-    for (var si = 0; si < slideBlocks.length; si++) {
-      var s = slideBlocks[si];
-      var off = Math.sin(tSlide * s.spd + s.ph) * s.amp; // -amp..+amp 平滑往返
-      ctx.save();
-      ctx.translate(s.bx + off, slideY);
-      ctx.rotate(Math.sin(tSlide * s.spd + s.ph) * 0.2); // 随滑动轻微摇摆
-      drawCrayonBlock(ctx, -s.size / 2, -s.size / 2, s.size, s.color, si * 53, si * 29,
-        { rot: 0.12, wobble: 1.0 });
-      ctx.restore();
-    }
+    // 标题下方「色块滑动 → 触发消除」循环动效（多色轮播 + 随机效果）
+    this.drawTitleFx(game);
 
     ctx.restore();
     // ---- 标题结束 ----
@@ -1249,7 +1233,99 @@
     ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.89);
     ctx.fillText('多人对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.89 + 22);
     ctx.restore();
+    this.drawParticles(game); // 标题消除动效的粒子（屏幕坐标，无相机变换）
     this.drawButtons(game);
+  };
+
+  /**
+   * 标题下方装饰动效：色块从左侧沿轨道滑入，到达中央触发「消除」效果
+   * （蜡笔屑迸裂 + 高亮环 + 星形闪光 + 飘字），循环播放。
+   * 颜色按 COLOR_KEYS 依次轮播覆盖全部色（偶尔随机），块数与飘字也随机变化，
+   * 看起来像各种颜色都在被消除。状态挂在 renderer 实例上（this.titleFx），逐帧更新。
+   */
+  Renderer.prototype.drawTitleFx = function (game) {
+    var ctx = this.ctx;
+    var fx = this.titleFx;
+    if (!fx) fx = this.titleFx = { waves: [], lastMs: game.timeMs, spawnTimer: 500, colorCursor: 0 };
+    var nowMs = game.timeMs;
+    var dt = nowMs - fx.lastMs;
+    fx.lastMs = nowMs;
+    if (dt < 0) dt = 0;
+    if (dt > 80) dt = 80; // 切后台回来防跳帧
+
+    var cx = this.W / 2;
+    var ty = this.H * 0.22;
+    var fontSize = 52;
+    var laneY = ty + fontSize * 0.92;            // 标题与副标题之间的一条轨道
+    var laneHalf = Math.min(this.W * 0.32, 260);
+    var triggerX = cx;                           // 触发消除的位置（中央）
+    var speed = 150;                             // px/s
+    var gap = 24;                                // 同波内块间距
+    var blk = 18;                                // 块尺寸
+
+    // 定时生成新一波
+    fx.spawnTimer -= dt;
+    if (fx.spawnTimer <= 0) {
+      fx.spawnTimer = 850 + Math.random() * 750; // 0.85~1.6s 间隔
+      var keys = cfg.COLOR_KEYS;
+      var colorKey;
+      if (Math.random() < 0.25) colorKey = keys[(Math.random() * keys.length) | 0];
+      else { colorKey = keys[fx.colorCursor % keys.length]; fx.colorCursor++; }
+      var n = 4, rr = Math.random();
+      if (rr < 0.18) n = 3; else if (rr > 0.84) n = 5;
+      var startX = cx - laneHalf - 30;
+      var blocks = [];
+      for (var i = 0; i < n; i++) blocks.push({ x: startX - i * gap, dead: false });
+      var texts = ['消除！', '4连！', '连锁！', '暴击！', '完美消除！'];
+      var txt = (n === 5) ? '5连！' : (n === 3 ? '3连！' : texts[(Math.random() * texts.length) | 0]);
+      fx.waves.push({
+        color: cfg.COLORS[colorKey], n: n, blocks: blocks,
+        triggered: false, triggerAt: 0,
+        scale: n >= 5 ? 1.5 : (n === 3 ? 1.1 : 1.3),
+        text: txt
+      });
+    }
+
+    // 更新 + 绘制各波
+    var keep = [];
+    for (var wi = 0; wi < fx.waves.length; wi++) {
+      var w = fx.waves[wi];
+      var headX = -1e9;
+      for (var bi = 0; bi < w.blocks.length; bi++) {
+        var b = w.blocks[bi];
+        if (b.dead) continue;
+        b.x += speed * dt / 1000;
+        if (b.x > headX) headX = b.x;
+      }
+      if (!w.triggered && headX >= triggerX) {
+        w.triggered = true;
+        w.triggerAt = nowMs;
+        game.particles.burst(triggerX, laneY, w.color, Math.round(7 * w.scale), w.scale);
+        game.particles.ring(triggerX, laneY, w.color, w.scale);
+        game.particles.flash(triggerX, laneY, '#FFD94A', w.scale, w.n >= 5 ? 3 : 2);
+        game.particles.chainText(triggerX, laneY - 24, w.text, 16 + (w.n >= 5 ? 8 : 0));
+      }
+      var alpha = 1;
+      if (w.triggered) {
+        var fp = (nowMs - w.triggerAt) / 220;
+        if (fp > 1) fp = 1;
+        alpha = 1 - fp;
+      }
+      var anyAlive = false;
+      for (var bj = 0; bj < w.blocks.length; bj++) {
+        var bb = w.blocks[bj];
+        if (bb.dead) continue;
+        if (w.triggered && (nowMs - w.triggerAt) >= 220) { bb.dead = true; continue; }
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, alpha);
+        ctx.translate(bb.x, laneY);
+        drawCrayonBlock(ctx, -blk / 2, -blk / 2, blk, w.color, bj * 53 + wi * 131, 41, { rot: 0.1, wobble: 1.0 });
+        ctx.restore();
+        anyAlive = true;
+      }
+      if (anyAlive) keep.push(w);
+    }
+    fx.waves = keep;
   };
 
   Renderer.prototype.drawLevels = function (game) {
