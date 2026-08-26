@@ -1695,7 +1695,7 @@
   /** 统一计算图鉴页面的布局网格（供 drawGuide / drawGuideColors 共用）。 */
   function guideLayout(game) {
     var W = game.screenW, H = game.screenH;
-    var hdrH = 72;             // 顶栏高度（标题+页签两行）
+    var hdrH = 100;            // 顶栏高度（标题 + 间距 + 页签）
     var ftrH = 56;             // 底栏高度
     var hdrY = 0;
     var ftrY = H - ftrH;
@@ -1708,11 +1708,11 @@
     var cx = pad;              // 内容区左边界
     var cW = W - pad * 2;     // 内容区宽度
 
-    // 页签（标题下方居中）
+    // 页签（标题下方居中，与标题拉开距离）
     var tw = 80, th = 32, tg = 10;
     var tabTotalW = tw * 2 + tg;
     var tabStartX = (W - tabTotalW) / 2;
-    var tabY = hdrY + 40;     // 标题下方
+    var tabY = hdrY + 60;     // 标题(26px) + 34px 间距
 
     return {
       W: W, H: H,
@@ -1863,14 +1863,7 @@
     var ctx = this.ctx;
     var plan = cfg.colorUnlockPlan();
 
-    // 副标题
-    ctx.save();
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.font = '12px sans-serif'; ctx.fillStyle = '#888';
-    ctx.fillText('顺序 = 解锁先后 · 闯关按关卡 / 无尽按存活时间', L.cx, L.bodyTop + 22);
-    ctx.restore();
-
-    var top = L.bodyTop + 40;
+    var top = L.bodyTop + 16;          // 紧贴顶栏下方（无副标题）
     var bottomLimit = L.ftrY - 8;
     var rows = 4, gap = 10;
     var cellH = Math.floor((bottomLimit - top - (rows - 1) * gap) / rows);

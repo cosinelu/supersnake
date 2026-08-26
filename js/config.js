@@ -283,11 +283,10 @@
   cfg.guideTabRects = function (game) {
     var W = game.screenW, H = game.screenH;
     // 居中页签（标题下方，与 drawGuideHeader 对齐）
-    var hdrH = 72;
     var tw = 80, th = 32, tg = 10;
     var tabTotalW = tw * 2 + tg;
     var tabStartX = (W - tabTotalW) / 2;
-    var tabY = 40;              // 标题(26px) + 间距
+    var tabY = 60;              // 标题(26px) + 34px 间距
 
     return {
       // 唯一组页签（居中）
