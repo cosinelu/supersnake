@@ -48,10 +48,10 @@ ok(plan[5].key === 'yellow' && plan[5].level === 5 && plan[5].sec === 90, '黄�
 ok(plan[6].key === 'teal' && plan[6].level === 7 && plan[6].sec === 135, '青：第 7 关 / 存活 135 秒');
 ok(plan[7].key === 'pink' && plan[7].order === 8 && plan[7].level === 9 && plan[7].sec === 180, '粉：第 8 色 / 第 9 关 / 存活 180 秒');
 var tr = cfg.guideTabRects({ screenW: 400, screenH: 640 });
-ok(tr.hdrItems && tr.hdrColors && tr.sideItems && tr.sideColors, 'guideTabRects 返回 顶栏+侧栏 共 4 个有效热区');
-ok(tr.sideColors.y > tr.sideItems.y, 'guideTabRects 侧栏：颜色页签在道具页签下方');
-ok(tr.contentX > tr.sideItems.x + tr.sideItems.w, 'guideTabRects contentX 在侧栏右侧（不压导航）');
-ok(tr.hdrColors.x > tr.hdrItems.x, 'guideTabRects 顶栏：颜色胶囊在道具胶囊右侧');
+ok(tr.tabItems && tr.tabColors, 'guideTabRects 返回居中页签（道具+颜色）2 个有效热区');
+ok(tr.tabColors.x > tr.tabItems.x, 'guideTabRects 颜色页签在道具页签右侧');
+var mid = 400 / 2; var tabCenter = (tr.tabItems.x + tr.tabColors.x + tr.tabColors.w) / 2;
+ok(Math.abs(tabCenter - mid) < 1, 'guideTabRects 页签组水平居中（误差<1px）', 'mid=' + mid + ' tabCenter=' + tabCenter.toFixed(1));
 
 // ---------------- 2. 关卡曲线（世界大地图） ----------------
 section('关卡曲线');

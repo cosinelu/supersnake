@@ -1687,42 +1687,42 @@
    */
   // ==================== 图鉴页面（完整重设计）====================
   //
-  // 布局结构（三段式，像真正的应用页面）：
-  //   ┌─ 顶栏（全宽）：标题居中 + 页签在右侧 ──────────────────┐
-  //   ├─ 主体：左侧导航栏（竖排）+ 右侧内容区 ─────────────────┤
-  //   └─ 底栏（全宽）：翻页 + 页码 + 返回按钮 ────────────────┘
-  //
+  // 布局结构（紧凑居中式，信息集中在页面中间）：
+  //   ┌─ 顶栏：标题居中 + 居中页签（道具 / 颜色）───────────────┐
+  //   ├─ 主体：内容区（居中，无侧边栏）──────────────────────────┤
+  //   └─ 底栏：翻页提示 + 页码 + 居中返回按钮 ──────────────────┘
 
   /** 统一计算图鉴页面的布局网格（供 drawGuide / drawGuideColors 共用）。 */
   function guideLayout(game) {
     var W = game.screenW, H = game.screenH;
-    var hdrH = 52;            // 顶栏高度
-    var ftrH = 52;            // 底栏高度
-    var hdrY = 0;             // 顶栏 Y
-    var ftrY = H - ftrH;      // 底栏 Y
-    var bodyTop = hdrY + hdrH; // 主体区域顶部
-    var bodyBtm = ftrY;       // 主体区域底部
+    var hdrH = 72;             // 顶栏高度（标题+页签两行）
+    var ftrH = 56;             // 底栏高度
+    var hdrY = 0;
+    var ftrY = H - ftrH;
+    var bodyTop = hdrY + hdrH;
+    var bodyBtm = ftrY;
     var bodyH = bodyBtm - bodyTop;
 
-    // 左侧导航栏
-    var sbW = Math.min(130, W * 0.22);  // 侧边栏宽度
-    var sbX = 16;                        // 侧边栏左边距
-    var sbPad = 10;
-    var tabW = sbW - sbPad * 2;
-    var tabH = 38;
-    var tabGap = 8;
+    // 内容区：左右留边距，居中
+    var pad = Math.min(28, W * 0.05);
+    var cx = pad;              // 内容区左边界
+    var cW = W - pad * 2;     // 内容区宽度
 
-    // 右侧内容区
-    var cx = sbX + sbW + 16;             // 内容区左边界
-    var cW = W - cx - 16;               // 内容区宽度
+    // 页签（标题下方居中）
+    var tw = 80, th = 32, tg = 10;
+    var tabTotalW = tw * 2 + tg;
+    var tabStartX = (W - tabTotalW) / 2;
+    var tabY = hdrY + 40;     // 标题下方
 
     return {
       W: W, H: H,
       hdrY: hdrY, hdrH: hdrH,
       ftrY: ftrY, ftrH: ftrH,
       bodyTop: bodyTop, bodyBtm: bodyBtm, bodyH: bodyH,
-      sbX: sbX, sbW: sbW, sbPad: sbPad, tabW: tabW, tabH: tabH, tabGap: tabGap,
-      cx: cx, cW: cW
+      cx: cx, cW: cW,
+      // 页签热区（仅一组，居中）
+      tabItems: { x: tabStartX,           y: tabY, w: tw, h: th },
+      tabColors:{ x: tabStartX + tw + tg, y: tabY, w: tw, h: th }
     };
   }
 
@@ -1733,103 +1733,54 @@
   Renderer.prototype.drawGuide = function (game) {
     var ctx = this.ctx, L = guideLayout(game);
 
-    // ════════════════ 1. 顶栏（全宽）════════════════
+    // ════════════════ 1. 顶栏（标题 + 居中页签）════════════════
     this.drawGuideHeader(game, L);
 
-    // ════════════════ 2. 左侧导航栏 ════════════════
-    this.drawGuideSidebar(game, L);
-
-    // ════════════════ 3. 内容区（按页签分发）════════════════
+    // ════════════════ 2. 内容区（按页签分发，居中无侧边栏）════════════════
     if (game.guideTab === 'colors') {
       this.drawGuideColorsContent(game, L);
     } else {
       this.drawGuideItemsContent(game, L);
     }
 
-    // ════════════════ 4. 底栏（全宽）════════════════
+    // ════════════════ 3. 底栏（翻页 + 页码 + 居中返回按钮）════════════════
     this.drawGuideFooter(game, L);
   };
 
-  // ---- 1. 顶栏：标题 + 页签胶囊（右侧）----
+  // ---- 1. 顶栏：标题居中 + 居中页签（道具 / 颜色）----
   Renderer.prototype.drawGuideHeader = function (game, L) {
     var ctx = this.ctx;
-    // 标题（全屏居中）
+    // 标题（屏幕居中）
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = 'bold 26px sans-serif';
     ctx.fillStyle = cfg.INK;
     var title = game.guideTab === 'colors' ? '颜色解锁顺序' : '道具图鉴';
-    ctx.fillText(title, L.W / 2, L.hdrY + L.hdrH / 2);
+    ctx.fillText(title, L.W / 2, L.hdrY + 26);
     ctx.restore();
 
-    // 右侧页签胶囊（顶栏内，与标题同行）
-    var tw = 72, th = 30, tg = 6;
-    var tx = L.W - 16 - tw * 2 - tg;  // 右对齐
-    var ty = L.hdrY + (L.hdrH - th) / 2;
-    [['items', '道具'], ['colors', '颜色']].forEach(function (pair) {
+    // 页签胶囊（标题下方居中，与 guideLayout.tabItems/tabColors 对齐）
+    var pairs = [['items', '道具'], ['colors', '颜色']];
+    pairs.forEach(function (pair) {
       var key = pair[0], label = pair[1];
       var active = game.guideTab === key;
+      var r = key === 'items' ? L.tabItems : L.tabColors;
       ctx.save();
-      wobblyRoundRect(ctx, tx, ty, tw, th, 8, tx * 3, ty * 7, 1.2);
+      wobblyRoundRect(ctx, r.x, r.y, r.w, r.h, 10, r.x * 3, r.y * 7, 1.2);
       ctx.fillStyle = active ? cfg.INK : '#FFFDF5';
       ctx.fill();
       if (!active) { ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.6; ctx.stroke(); }
       else { ctx.lineWidth = 2.2; ctx.stroke(); }
       ctx.fillStyle = active ? '#FFFDF5' : cfg.INK;
-      ctx.font = active ? 'bold 13px sans-serif' : '13px sans-serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(label, tx + tw / 2, ty + th / 2);
-      ctx.restore();
-      tx += tw + tg;
-    });
-  };
-
-  // ---- 2. 左侧导航栏（竖排，带背景面板）----
-  Renderer.prototype.drawGuideSidebar = function (game, L) {
-    var ctx = this.ctx;
-    // 背景面板
-    ctx.save();
-    wobblyRoundRect(ctx, L.sbX, L.bodyTop + 8, L.sbW, L.bodyH - 16, 12, L.sbX * 3, L.bodyTop * 5, 1.0);
-    ctx.fillStyle = '#FAF4E8';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(58,50,56,0.10)';
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
-    ctx.restore();
-
-    // 导航项（竖排：当前页高亮 + 左竖条）
-    var items = [
-      { key: 'items', label: '道具', icon: '📦' },
-      { key: 'colors', label: '颜色', icon: '🎨' }
-    ];
-    var iy = L.bodyTop + 24;
-    items.forEach(function (it, idx) {
-      var active = game.guideTab === it.key;
-      var ix = L.sbX + L.sbPad;
-      var iw = L.tabW, ih = L.tabH;
-      ctx.save();
-      wobblyRoundRect(ctx, ix, iy, iw, ih, 9, ix * 7, iy * 11, 1.3);
-      if (active) {
-        ctx.fillStyle = cfg.INK; ctx.fill();
-        // 左侧彩色竖条
-        ctx.fillStyle = cfg.COLORS.orange;
-        ctx.fillRect(ix + 3, iy + 6, 3, ih - 12);
-        ctx.fillStyle = '#FFFDF5';
-      } else {
-        ctx.fillStyle = '#FFFDF5'; ctx.fill();
-        ctx.strokeStyle = 'rgba(58,50,56,0.18)'; ctx.lineWidth = 1.4; ctx.stroke();
-        ctx.fillStyle = cfg.INK;
-      }
       ctx.font = active ? 'bold 14px sans-serif' : '14px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(it.label, ix + iw / 2, iy + ih / 2);
+      ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2);
       ctx.restore();
-      iy += ih + L.tabGap;
     });
   };
 
-  // ---- 3a. 道具页内容区 ----
+  // ---- 3a. 道具页内容区（无侧边栏，卡片居中）----
   Renderer.prototype.drawGuideItemsContent = function (game, L) {
     var ctx = this.ctx;
     var items = cfg.ITEM_GUIDE.slice().sort(function (a, b) {
@@ -1849,34 +1800,10 @@
     var pageItems = [];
     for (var k = startIdx; k < endIdx; k++) pageItems.push(items[k]);
 
-    // 稀有度图例行（内容区顶部）
-    ctx.save();
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.font = '11.5px sans-serif';
-    var legY = L.bodyTop + 20;
-    var chipW = 28, chipH = 14, gapX = 6, labelGap = 3;
-    var labels = [['orange', '强'], ['purple', '中'], ['blue', '弱']];
-    var lx = L.cx;
-    for (var li = 0; li < labels.length; li++) {
-      var rc = cfg.RARITY_COLORS[labels[li][0]];
-      ctx.fillStyle = rc;
-      ctx.fillRect(lx, legY - chipH / 2, chipW, chipH);
-      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.0;
-      ctx.strokeRect(lx, legY - chipH / 2, chipW, chipH);
-      ctx.fillStyle = '#FFFDF5';
-      ctx.font = 'bold 9.5px sans-serif';
-      ctx.fillText(labels[li][1], lx + chipW / 2, legY);
-      ctx.fillStyle = '#777';
-      ctx.font = '11.5px sans-serif';
-      lx += chipW + gapX + ctx.measureText('▸').width + labelGap;
-      if (li < labels.length - 1) { ctx.fillText('▸', lx - labelGap, legY); }
-    }
-    ctx.restore();
-
-    // 卡片列表
+    // 卡片列表（内容区居中，无品质图例）
     var cardW = Math.min(540, L.cW - 8);
     var cardX = L.cx + (L.cW - cardW) / 2;
-    var startY = L.bodyTop + 44;
+    var startY = L.bodyTop + 16;          // 紧贴顶栏下方
     var cardH = 78, gap = 7, iconSize = 46;
 
     for (var i = 0; i < pageItems.length; i++) {
@@ -1996,7 +1923,7 @@
     game._guidePage = 0;
   };
 
-  // ---- 4. 底栏（全宽：翻页 + 页码 + 返回按钮）----
+  // ---- 3. 底栏（翻页提示 + 页码 + 居中返回按钮）----
   Renderer.prototype.drawGuideFooter = function (game, L) {
     var ctx = this.ctx;
     var tp = game._guideTotalPages || 1, pg = game._guidePage || 0;
@@ -2013,23 +1940,25 @@
       ctx.restore();
     }
 
-    // 页码（居中偏左）
+    // 页码（左侧）
     ctx.save();
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.font = '12px sans-serif'; ctx.fillStyle = '#AAA';
-    ctx.fillText('第 ' + (pg + 1) + ' / ' + tp + ' 页', L.W / 2 - 60, fy);
+    ctx.fillText('第 ' + (pg + 1) + ' / ' + tp + ' 页', 24, fy);
     ctx.restore();
 
-    // 返回按钮（右侧对齐）
-    var btnW = 110, btnH = 36, btnX = L.W - 20 - btnW, btnY = fy - btnH / 2;
+    // 返回按钮（底部居中）
+    var btnW = 120, btnH = 38;
+    var btnX = (L.W - btnW) / 2;       // 居中
+    var btnY = fy - btnH / 2;
     ctx.save();
-    wobblyRoundRect(ctx, btnX, btnY, btnW, btnH, 10, btnX * 3, btnY * 7, 1.5);
+    wobblyRoundRect(ctx, btnX, btnY, btnW, btnH, 12, btnX * 3, btnY * 7, 1.5);
     ctx.fillStyle = cfg.PANEL; ctx.fill();
     ctx.strokeStyle = cfg.INK; ctx.lineWidth = 2.0; ctx.stroke();
     ctx.fillStyle = cfg.INK;
-    ctx.font = 'bold 14px sans-serif';
+    ctx.font = 'bold 15px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('返回', btnX + btnW / 2, fy);
+    ctx.fillText('← 返回', btnX + btnW / 2, fy);
     ctx.restore();
   };
 

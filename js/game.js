@@ -594,8 +594,8 @@
       this.addButton('multi', cx, H * 0.44 + 2 * (bh + 16), bw, bh, '多人对战');
       this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), Math.round(bw * 0.72), bh - 6, '图鉴');
     } else if (this.state === 'guide') {
-      // 返回按钮与 drawGuideFooter 自绘位置对齐：右对齐 110×36，距右边 20、底栏中部
-      this.addButton('back', W - 75, H - 26, 110, 36, '返回');
+      // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
+      this.addButton('back', W / 2, H - 28, 120, 38, '← 返回');
     } else if (this.state === 'levels') {
       var cols = 5, lw = Math.min(64, (W - 80) / cols - 10), lh = 50;
       var gridW = cols * (lw + 12) - 12;
@@ -655,12 +655,12 @@
         var b = this.uiButtons[bi];
         if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { this.onButton(b.id); return; }
       }
-      // 2) 页签切换（顶部右侧胶囊 + 左侧导航栏，二者都支持）
+      // 2) 页签切换（标题下方居中，唯一一组）
       var tr = cfg.guideTabRects(this);
       var tk = null;
-      function inRect(r, x, y) { return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
-      if (inRect(tr.hdrItems, x, y) || inRect(tr.sideItems, x, y)) tk = 'items';
-      else if (inRect(tr.hdrColors, x, y) || inRect(tr.sideColors, x, y)) tk = 'colors';
+      function inRect(r, px, py) { return r && px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h; }
+      if (inRect(tr.tabItems, x, y)) tk = 'items';
+      else if (inRect(tr.tabColors, x, y)) tk = 'colors';
       if (tk) {
         if (this.guideTab !== tk) { this.guideTab = tk; this.guidePage = 0; }
         return;
