@@ -438,6 +438,22 @@
       var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
       this.scoreChain(e, rem2, 1, 0);
       this.particles.burst(px, py, '#FFD94A', 9, 1.3);
+    } else if (b.kind === 'grab') {
+      // 多人专属「彩色星」：玩家吃到 → 当前总分立即 +20%（一次性加成，可叠加）；
+      // AI 吃到则只是把道具消耗掉（玩家失去抢夺机会）。无论谁吃，都清掉场上这颗并安排下一颗。
+      if (CS.audio) CS.audio.playSpecial();
+      this.particles.burst(px, py, '#FFD94A', 16, 1.9);
+      this.particles.ring(px, py, '#FFC83D', 1.8);
+      if (e.isPlayer) {
+        // score 在 mp.update 之后才由 game 汇总，这里取上一帧已汇总分（差一帧，可忽略）
+        var cur = (this.game.survivalScore || 0) + (this.game.elimScore || 0) + (this.game.mpBonusScore || 0);
+        var bonus = Math.max(1, Math.round(cur * cfg.GRAB_SCORE_MUL));
+        this.game.mpBonusScore = (this.game.mpBonusScore || 0) + bonus;
+        this.particles.chainText(px, py - 32, '分数 +20%！+' + bonus, 24);
+      }
+      // 消费场上这颗彩色星（collectAt 已将其移出 blocks，这里只清引用 + 排下一颗）
+      this.spawner.grabBlock = null;
+      this.spawner.grabTimer = cfg.GRAB_RESPAWN_MS;
     } else {
       if (CS.audio) CS.audio.playEat();
       e.snake.grow(b.color);

@@ -54,6 +54,19 @@
       // ① 寻食：对齐度 × 距离衰减；同色加成；「差 1~2 节即凑成 4 连消除」额外加权（更会规划消除）
       for (var i = 0; i < blocks.length; i++) {
         var b = blocks[i];
+        // 彩色星（多人专属抢夺道具）：超强吸引力，远超普通寻食，远处也来抢（仍受墙/蛇身惩罚制衡）
+        if (b.kind === cfg.GRAB_KIND) {
+          var gx = b.x - snake.x, gy = b.y - snake.y;
+          var gd = Math.sqrt(gx * gx + gy * gy);
+          if (gd > 1e-6) {
+            var galign = (gx / gd) * dx + (gy / gd) * dy;
+            if (galign > 0) {
+              var gfall = 1 - Math.min(1, gd / cfg.AI_GRAB_RANGE);
+              score += cfg.AI_GRAB_WEIGHT * galign * gfall;
+            }
+          }
+          continue;
+        }
         var bx = b.x - snake.x, by = b.y - snake.y;
         var d = Math.sqrt(bx * bx + by * by);
         if (d > range || d < 1e-6) continue;

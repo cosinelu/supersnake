@@ -23,6 +23,10 @@
     this.others = []; // 其他活蛇数组（多人模式由 multiplayer 挂活引用，刷新时同样避让）
     this.unlockedKeys = cfg.COLOR_KEYS.slice(); // 默认全部；game 会按本局解锁数覆盖
     this.specialChance = cfg.ITEM_SPECIAL_CHANCE; // 每帧由 game/mp 按存活时间更新（越后期越高）
+    // 多人专属「彩色」抢夺道具：整局恒定最多存在 1 颗；由 updateGrab 周期投放 / 计时消失
+    this.grabEnabled = false;   // 仅多人对战置 true（startMulti 设置），单/无尽不出现
+    this.grabBlock = null;      // 当前场上那颗彩色星 {x,y,kind,rarity,phase,ttl,r}；null = 暂不存在
+    this.grabTimer = cfg.GRAB_SPAWN_DELAY_MS; // 距离下次出现的倒计时（ms）
     var area = walls.W * walls.H;
     this.target = u.clamp(Math.round(area / cfg.BLOCK_AREA_DIV), cfg.BLOCKS_MIN, cfg.BLOCKS_MAX);
   }
@@ -36,15 +40,90 @@
     return 'wild';
   };
 
-  /** 每帧调用；到达刷新间隔时补足色块 */
+  /** 每帧调用；到达刷新间隔时补足色块；多人模式另行维护彩色抢夺道具 */
   Spawner.prototype.update = function (dt) {
     this.timer += dt;
-    if (this.timer < cfg.SPAWN_INTERVAL_MS) return;
-    this.timer = 0;
-    var guard = 0;
-    while (this.blocks.length < this.target && guard++ < this.target) {
-      if (!this.spawnOne()) break; // 拒绝采样失败，本轮跳过
+    if (this.timer >= cfg.SPAWN_INTERVAL_MS) {
+      this.timer = 0;
+      var guard = 0;
+      while (this.blocks.length < this.target && guard++ < this.target) {
+        if (!this.spawnOne()) break; // 拒绝采样失败，本轮跳过
+      }
     }
+    if (this.grabEnabled) this.updateGrab(dt);
+  };
+
+  /**
+   * 在世界内找一个「不压墙、不压内部障碍、离蛇/其他蛇/已有色块足够远」的安全点。
+   * 供普通色块刷新与彩色抢夺道具投放共用；找不到返回 null（调用方跳过本轮）。
+   * @param {number} minBlockDist 与已有色块最小距离（普通色块 140；抢夺道具可放宽）
+   * @returns {{x:number,y:number}|null}
+   */
+  Spawner.prototype.findSpot = function (minBlockDist) {
+    var w = this.walls, s = this.snake, m = cfg.BLOCK_EDGE_MARGIN;
+    var edgePad = cfg.WALL_THICK + cfg.BLOCK_RADIUS + 10;
+    for (var tries = 0; tries < cfg.SPAWN_TRIES; tries++) {
+      var x = m + Math.random() * (w.W - 2 * m);
+      var y = m + Math.random() * (w.H - 2 * m);
+      if (x < edgePad || x > w.W - edgePad || y < edgePad || y > w.H - edgePad) continue;
+      if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 22)) continue;       // 不压内部墙（加大余量）
+      if (s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;            // 离玩家 ≥80px
+      var nearOther = false;
+      for (var oi = 0; oi < this.others.length; oi++) {               // 多人：其他活蛇同样避让
+        if (this.others[oi].distTo(x, y) < cfg.BLOCK_SNAKE_DIST) { nearOther = true; break; }
+      }
+      if (nearOther) continue;
+      var ok = true;
+      for (var i = 0; i < this.blocks.length; i++) {
+        var d = u.dist(x, y, this.blocks[i].x, this.blocks[i].y);
+        if (d < minBlockDist) { ok = false; break; }
+      }
+      if (!ok) continue;
+      return { x: x, y: y };
+    }
+    return null;
+  };
+
+  /**
+   * 彩色抢夺道具的周期维护（仅 grabEnabled 时调用）：
+   *  - 场上已有 → 推进 ttl；到期则从色块数组移除并重置倒计时；
+   *  - 场上没有 → 倒计时归零则在本局安全点投放一颗（带较长 ttl，全场上演抢夺）。
+   */
+  Spawner.prototype.updateGrab = function (dt) {
+    if (!this.grabEnabled) return; // 仅多人对战启用；单/无尽无论如何都不投放彩色星
+    if (this.grabBlock) {
+      this.grabBlock.ttl -= dt;
+      this.grabBlock.phase += dt * 0.004;
+      if (this.grabBlock.ttl <= 0) {
+        var rest = [];
+        for (var i = 0; i < this.blocks.length; i++) {
+          if (this.blocks[i] !== this.grabBlock) rest.push(this.blocks[i]);
+        }
+        this.blocks = rest;
+        this.grabBlock = null;
+        this.grabTimer = cfg.GRAB_RESPAWN_MS;
+      }
+      return;
+    }
+    this.grabTimer -= dt;
+    if (this.grabTimer <= 0) this.spawnGrab();
+  };
+
+  /** 投放一颗彩色抢夺道具到安全点（找不到安全点则顺延到下一帧再试） */
+  Spawner.prototype.spawnGrab = function () {
+    var spot = this.findSpot(cfg.BLOCK_MIN_DIST * 0.6); // 允许略靠近其他色块，但必须安全
+    if (!spot) { this.grabTimer = 1200; return; }       // 暂无安全点，短暂后重试
+    var block = {
+      x: spot.x, y: spot.y,
+      kind: cfg.GRAB_KIND,
+      rarity: cfg.GRAB_RARITY,
+      color: null,
+      phase: Math.random() * Math.PI * 2,
+      ttl: cfg.GRAB_TTL_MS,
+      r: cfg.GRAB_RADIUS // 收集判定半径（略大于普通色块，更好抢）
+    };
+    this.blocks.push(block);
+    this.grabBlock = block;
   };
 
   /** 立即补足（开局调用一次） */
@@ -57,43 +136,25 @@
 
   /** 尝试生成一个色块，成功返回 true */
   Spawner.prototype.spawnOne = function () {
-    var w = this.walls, s = this.snake, m = cfg.BLOCK_EDGE_MARGIN;
-    for (var tries = 0; tries < cfg.SPAWN_TRIES; tries++) {
-      var x = m + Math.random() * (w.W - 2 * m);
-      var y = m + Math.random() * (w.H - 2 * m);
-      // 不压边界墙带（相机已放开余量可见，道具不能叠在上面）
-      var edgePad = cfg.WALL_THICK + cfg.BLOCK_RADIUS + 10;
-      if (x < edgePad || x > w.W - edgePad || y < edgePad || y > w.H - edgePad) continue;
-      if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 22)) continue;       // 不压内部墙（加大余量）
-      if (s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;            // 离蛇 ≥80px
-      var nearOther = false;
-      for (var oi = 0; oi < this.others.length; oi++) {               // 多人：其他活蛇同样避让
-        if (this.others[oi].distTo(x, y) < cfg.BLOCK_SNAKE_DIST) { nearOther = true; break; }
-      }
-      if (nearOther) continue;
-      var ok = true;
-      for (var i = 0; i < this.blocks.length; i++) {
-        if (u.dist(x, y, this.blocks[i].x, this.blocks[i].y) < cfg.BLOCK_MIN_DIST) { ok = false; break; }
-      }
-      if (!ok) continue;                                              // 与已有色块 ≥140px
-      // 决定类型：默认普通色块；按当前 specialChance 改为特殊道具（按权重抽取，越后期概率越高）
-      var kind = 'color';
-      if (Math.random() < this.specialChance) kind = this.randomSpecialKind();
-      // clear / clear3 携带目标颜色（消除该色）；其余特殊道具 color=null
-      var color = null;
-      if (kind === 'color' || kind === 'clear' || kind === 'clear3') {
-        color = this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)];
-      }
-      this.blocks.push({
-        x: x, y: y,
-        kind: kind,
-        color: color,
-        rarity: cfg.ITEM_RARITY[kind] || null, // 稀有度边框用（普通色块为 null）
-        phase: Math.random() * Math.PI * 2 // 脉动相位
-      });
-      return true;
+    var spot = this.findSpot(cfg.BLOCK_MIN_DIST); // 与已有色块 ≥140px 的安全点
+    if (!spot) return false;
+    var x = spot.x, y = spot.y;
+    // 决定类型：默认普通色块；按当前 specialChance 改为特殊道具（按权重抽取，越后期概率越高）
+    var kind = 'color';
+    if (Math.random() < this.specialChance) kind = this.randomSpecialKind();
+    // clear / clear3 携带目标颜色（消除该色）；其余特殊道具 color=null
+    var color = null;
+    if (kind === 'color' || kind === 'clear' || kind === 'clear3') {
+      color = this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)];
     }
-    return false;
+    this.blocks.push({
+      x: x, y: y,
+      kind: kind,
+      color: color,
+      rarity: cfg.ITEM_RARITY[kind] || null, // 稀有度边框用（普通色块为 null）
+      phase: Math.random() * Math.PI * 2 // 脉动相位
+    });
+    return true;
   };
 
   /**
@@ -105,7 +166,7 @@
     var rest = [];
     for (var i = 0; i < this.blocks.length; i++) {
       var b = this.blocks[i];
-      if (snake.overlaps(b.x, b.y, cfg.BLOCK_RADIUS)) got.push(b);
+      if (snake.overlaps(b.x, b.y, b.r || cfg.BLOCK_RADIUS)) got.push(b);
       else rest.push(b);
     }
     this.blocks = rest;

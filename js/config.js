@@ -121,6 +121,16 @@
     METEOR_RADIUS: 14,          // 移动砖块视觉半径（px）
     METEOR_SCORE: 3,            // 流星注入每节得分
 
+    // ---------- 多人专属「彩色」抢夺道具（吃到分数 +20%，全场上演抢夺）----------
+    GRAB_KIND: 'grab',          // 道具 kind（仅 spawner 在多人模式主动投放，单/无尽不出现）
+    GRAB_RARITY: 'colorful',    // 品质 = 彩色（独立于强/中/弱三档，最高优先级）
+    GRAB_SCORE_MUL: 0.20,       // 玩家吃到后：当前总分立即 +20%（一次性加成，可累计叠加）
+    GRAB_SPAWN_DELAY_MS: 18000, // 对局开始后多久首次出现（给玩家先熟悉环境）
+    GRAB_RESPAWN_MS: 32000,     // 被吃掉 / 超时消失后，隔多久再出现下一个
+    GRAB_TTL_MS: 42000,         // 单颗存活上限（没人抢到也会消失，避免播报常驻）
+    GRAB_RADIUS: 17,            // 收集判定半径（略大于普通色块 12px，更好抢）
+    GRAB_SIZE: 30,              // 地图上绘制尺寸（px，比普通色块明显大，一眼可见）
+
     // ---------- 墙壁（世界像素坐标，矩形组合）----------
     WALL_MAX_RATIO: 0.08,     // 内部墙壁总面积 ≤ 世界面积 8%
     WALL_UNIT: 48,            // 墙段基本单元边长（px），一字/L/2x2 均由整数个单元矩形组合
@@ -175,23 +185,28 @@
     AI_HEADON_PENALTY: 140,     // 头对头规避：避免冲向其他蛇头部前方（会双双淘汰）的罚分
     AI_INERTIA: 0.30,           // 惯性分：偏好保持当前朝向（防抖动，v2.9 略降以更灵活）
     AI_WANDER: 0.25,            // 随机游走噪声幅度（无威胁时小幅漂移）
+    AI_GRAB_WEIGHT: 42,         // 彩色抢夺道具吸引力（远高于普通寻食，AI 会优先去抢）
+    AI_GRAB_RANGE: 1700,        // 彩色抢夺道具感知范围（px，远大于普通寻食，远处也来抢）
     AI_NICKNAMES: [             // AI 昵称池（随机取用，场上不重复）
       '蜡笔小新', '橡皮擦', '卷卷', '小粉笔', '涂鸦侠', '彩虹糖',
       '墨墨', '皮皮', '大白', '颜料罐', '小画伯', '条条', '点点', '麻花'
     ],
 
-    // ---------- 道具稀有度（按强度分 3 档，强→弱：橙 / 紫 / 蓝）----------
+    // ---------- 道具稀有度（按强度分 4 档：彩色(抢夺) > 强 > 中 > 弱）----------
     ITEM_RARITY: {            // 每个道具类型的稀有度；普通色块(kind='color')不在其中 → 无边框（基础食物）
+      grab: 'colorful',                                         // 彩色(抢夺)：仅多人模式出现的专属抢夺道具
       wild: 'orange',  bomb: 'orange',  clear: 'orange',       // 强：万能色(桥接凑连)、炸弹(清≥2连段)、消色(清全部同色)
       meteor: 'purple', clear3: 'purple', rand3: 'purple', // 中：流星注入、后三消色、随机消3
       slow: 'blue', rand1: 'blue', rand2: 'blue'               // 弱：减速(防御)、随机消1/2
     },
-    RARITY_COLORS: { blue: '#4A7FD4', purple: '#9B5DE5', orange: '#F5A623' }, // 边框色：强→弱 橙/紫/蓝
-    RARITY_NAME:   { blue: '稀有·弱', purple: '稀有·中', orange: '稀有·强' },
-    RARITY_ORDER:  ['orange', 'purple', 'blue'],
+    // 边框色：彩色(彩虹金) > 强(橙) > 中(紫) > 弱(蓝)；colorful 在渲染层用彩虹环绘制
+    RARITY_COLORS: { blue: '#4A7FD4', purple: '#9B5DE5', orange: '#F5A623', colorful: '#FFC83D' },
+    RARITY_NAME:   { blue: '稀有·弱', purple: '稀有·中', orange: '稀有·强', colorful: '彩色·抢夺' },
+    RARITY_ORDER:  ['colorful', 'orange', 'purple', 'blue'],
 
     // ---------- 道具图鉴（主菜单「图鉴」页面展示，按稀有度由强到弱排序）----------
     ITEM_GUIDE: [
+      { kind: 'grab',    name: '彩色星',   rarity: 'colorful', desc: '多人模式专属！吃到后分数立即 +20%。出现时全场上演抢夺，屏幕与小地图都会高亮提示。', colorKey: null },
       { kind: 'bomb',    name: '炸弹',     rarity: 'blue',   desc: '瞬间清除蛇身上所有 ≥2 节的连续同色段。',                       colorKey: null },
       { kind: 'clear',   name: '消色',     rarity: 'blue',   desc: '一次性消除蛇身上全部指定颜色的节（不管在哪、连不连续都清）。', colorKey: 'red' },
       { kind: 'wild',    name: '万能色',   rarity: 'blue',   desc: '通配任意颜色，可桥接不同颜色的同色段来触发消除。',             colorKey: null },

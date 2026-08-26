@@ -4,7 +4,7 @@
 <!-- 本文件为自包含单文件版：所有 JS 已内联，双击即可离线游玩，无需联网或服务器。 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>消食蛇 · 网页版（分享版 v2.12.5）</title>
+<title>消食蛇 · 网页版（分享版 v2.13.0）</title>
 <style>
   html, body {
     margin: 0;
@@ -171,6 +171,16 @@
     METEOR_RADIUS: 14,          // 移动砖块视觉半径（px）
     METEOR_SCORE: 3,            // 流星注入每节得分
 
+    // ---------- 多人专属「彩色」抢夺道具（吃到分数 +20%，全场上演抢夺）----------
+    GRAB_KIND: 'grab',          // 道具 kind（仅 spawner 在多人模式主动投放，单/无尽不出现）
+    GRAB_RARITY: 'colorful',    // 品质 = 彩色（独立于强/中/弱三档，最高优先级）
+    GRAB_SCORE_MUL: 0.20,       // 玩家吃到后：当前总分立即 +20%（一次性加成，可累计叠加）
+    GRAB_SPAWN_DELAY_MS: 18000, // 对局开始后多久首次出现（给玩家先熟悉环境）
+    GRAB_RESPAWN_MS: 32000,     // 被吃掉 / 超时消失后，隔多久再出现下一个
+    GRAB_TTL_MS: 42000,         // 单颗存活上限（没人抢到也会消失，避免播报常驻）
+    GRAB_RADIUS: 17,            // 收集判定半径（略大于普通色块 12px，更好抢）
+    GRAB_SIZE: 30,              // 地图上绘制尺寸（px，比普通色块明显大，一眼可见）
+
     // ---------- 墙壁（世界像素坐标，矩形组合）----------
     WALL_MAX_RATIO: 0.08,     // 内部墙壁总面积 ≤ 世界面积 8%
     WALL_UNIT: 48,            // 墙段基本单元边长（px），一字/L/2x2 均由整数个单元矩形组合
@@ -225,23 +235,28 @@
     AI_HEADON_PENALTY: 140,     // 头对头规避：避免冲向其他蛇头部前方（会双双淘汰）的罚分
     AI_INERTIA: 0.30,           // 惯性分：偏好保持当前朝向（防抖动，v2.9 略降以更灵活）
     AI_WANDER: 0.25,            // 随机游走噪声幅度（无威胁时小幅漂移）
+    AI_GRAB_WEIGHT: 42,         // 彩色抢夺道具吸引力（远高于普通寻食，AI 会优先去抢）
+    AI_GRAB_RANGE: 1700,        // 彩色抢夺道具感知范围（px，远大于普通寻食，远处也来抢）
     AI_NICKNAMES: [             // AI 昵称池（随机取用，场上不重复）
       '蜡笔小新', '橡皮擦', '卷卷', '小粉笔', '涂鸦侠', '彩虹糖',
       '墨墨', '皮皮', '大白', '颜料罐', '小画伯', '条条', '点点', '麻花'
     ],
 
-    // ---------- 道具稀有度（按强度分 3 档，强→弱：橙 / 紫 / 蓝）----------
+    // ---------- 道具稀有度（按强度分 4 档：彩色(抢夺) > 强 > 中 > 弱）----------
     ITEM_RARITY: {            // 每个道具类型的稀有度；普通色块(kind='color')不在其中 → 无边框（基础食物）
+      grab: 'colorful',                                         // 彩色(抢夺)：仅多人模式出现的专属抢夺道具
       wild: 'orange',  bomb: 'orange',  clear: 'orange',       // 强：万能色(桥接凑连)、炸弹(清≥2连段)、消色(清全部同色)
       meteor: 'purple', clear3: 'purple', rand3: 'purple', // 中：流星注入、后三消色、随机消3
       slow: 'blue', rand1: 'blue', rand2: 'blue'               // 弱：减速(防御)、随机消1/2
     },
-    RARITY_COLORS: { blue: '#4A7FD4', purple: '#9B5DE5', orange: '#F5A623' }, // 边框色：强→弱 橙/紫/蓝
-    RARITY_NAME:   { blue: '稀有·弱', purple: '稀有·中', orange: '稀有·强' },
-    RARITY_ORDER:  ['orange', 'purple', 'blue'],
+    // 边框色：彩色(彩虹金) > 强(橙) > 中(紫) > 弱(蓝)；colorful 在渲染层用彩虹环绘制
+    RARITY_COLORS: { blue: '#4A7FD4', purple: '#9B5DE5', orange: '#F5A623', colorful: '#FFC83D' },
+    RARITY_NAME:   { blue: '稀有·弱', purple: '稀有·中', orange: '稀有·强', colorful: '彩色·抢夺' },
+    RARITY_ORDER:  ['colorful', 'orange', 'purple', 'blue'],
 
     // ---------- 道具图鉴（主菜单「图鉴」页面展示，按稀有度由强到弱排序）----------
     ITEM_GUIDE: [
+      { kind: 'grab',    name: '彩色星',   rarity: 'colorful', desc: '多人模式专属！吃到后分数立即 +20%。出现时全场上演抢夺，屏幕与小地图都会高亮提示。', colorKey: null },
       { kind: 'bomb',    name: '炸弹',     rarity: 'blue',   desc: '瞬间清除蛇身上所有 ≥2 节的连续同色段。',                       colorKey: null },
       { kind: 'clear',   name: '消色',     rarity: 'blue',   desc: '一次性消除蛇身上全部指定颜色的节（不管在哪、连不连续都清）。', colorKey: 'red' },
       { kind: 'wild',    name: '万能色',   rarity: 'blue',   desc: '通配任意颜色，可桥接不同颜色的同色段来触发消除。',             colorKey: null },
@@ -1110,6 +1125,10 @@
     this.others = []; // 其他活蛇数组（多人模式由 multiplayer 挂活引用，刷新时同样避让）
     this.unlockedKeys = cfg.COLOR_KEYS.slice(); // 默认全部；game 会按本局解锁数覆盖
     this.specialChance = cfg.ITEM_SPECIAL_CHANCE; // 每帧由 game/mp 按存活时间更新（越后期越高）
+    // 多人专属「彩色」抢夺道具：整局恒定最多存在 1 颗；由 updateGrab 周期投放 / 计时消失
+    this.grabEnabled = false;   // 仅多人对战置 true（startMulti 设置），单/无尽不出现
+    this.grabBlock = null;      // 当前场上那颗彩色星 {x,y,kind,rarity,phase,ttl,r}；null = 暂不存在
+    this.grabTimer = cfg.GRAB_SPAWN_DELAY_MS; // 距离下次出现的倒计时（ms）
     var area = walls.W * walls.H;
     this.target = u.clamp(Math.round(area / cfg.BLOCK_AREA_DIV), cfg.BLOCKS_MIN, cfg.BLOCKS_MAX);
   }
@@ -1123,15 +1142,90 @@
     return 'wild';
   };
 
-  /** 每帧调用；到达刷新间隔时补足色块 */
+  /** 每帧调用；到达刷新间隔时补足色块；多人模式另行维护彩色抢夺道具 */
   Spawner.prototype.update = function (dt) {
     this.timer += dt;
-    if (this.timer < cfg.SPAWN_INTERVAL_MS) return;
-    this.timer = 0;
-    var guard = 0;
-    while (this.blocks.length < this.target && guard++ < this.target) {
-      if (!this.spawnOne()) break; // 拒绝采样失败，本轮跳过
+    if (this.timer >= cfg.SPAWN_INTERVAL_MS) {
+      this.timer = 0;
+      var guard = 0;
+      while (this.blocks.length < this.target && guard++ < this.target) {
+        if (!this.spawnOne()) break; // 拒绝采样失败，本轮跳过
+      }
     }
+    if (this.grabEnabled) this.updateGrab(dt);
+  };
+
+  /**
+   * 在世界内找一个「不压墙、不压内部障碍、离蛇/其他蛇/已有色块足够远」的安全点。
+   * 供普通色块刷新与彩色抢夺道具投放共用；找不到返回 null（调用方跳过本轮）。
+   * @param {number} minBlockDist 与已有色块最小距离（普通色块 140；抢夺道具可放宽）
+   * @returns {{x:number,y:number}|null}
+   */
+  Spawner.prototype.findSpot = function (minBlockDist) {
+    var w = this.walls, s = this.snake, m = cfg.BLOCK_EDGE_MARGIN;
+    var edgePad = cfg.WALL_THICK + cfg.BLOCK_RADIUS + 10;
+    for (var tries = 0; tries < cfg.SPAWN_TRIES; tries++) {
+      var x = m + Math.random() * (w.W - 2 * m);
+      var y = m + Math.random() * (w.H - 2 * m);
+      if (x < edgePad || x > w.W - edgePad || y < edgePad || y > w.H - edgePad) continue;
+      if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 22)) continue;       // 不压内部墙（加大余量）
+      if (s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;            // 离玩家 ≥80px
+      var nearOther = false;
+      for (var oi = 0; oi < this.others.length; oi++) {               // 多人：其他活蛇同样避让
+        if (this.others[oi].distTo(x, y) < cfg.BLOCK_SNAKE_DIST) { nearOther = true; break; }
+      }
+      if (nearOther) continue;
+      var ok = true;
+      for (var i = 0; i < this.blocks.length; i++) {
+        var d = u.dist(x, y, this.blocks[i].x, this.blocks[i].y);
+        if (d < minBlockDist) { ok = false; break; }
+      }
+      if (!ok) continue;
+      return { x: x, y: y };
+    }
+    return null;
+  };
+
+  /**
+   * 彩色抢夺道具的周期维护（仅 grabEnabled 时调用）：
+   *  - 场上已有 → 推进 ttl；到期则从色块数组移除并重置倒计时；
+   *  - 场上没有 → 倒计时归零则在本局安全点投放一颗（带较长 ttl，全场上演抢夺）。
+   */
+  Spawner.prototype.updateGrab = function (dt) {
+    if (!this.grabEnabled) return; // 仅多人对战启用；单/无尽无论如何都不投放彩色星
+    if (this.grabBlock) {
+      this.grabBlock.ttl -= dt;
+      this.grabBlock.phase += dt * 0.004;
+      if (this.grabBlock.ttl <= 0) {
+        var rest = [];
+        for (var i = 0; i < this.blocks.length; i++) {
+          if (this.blocks[i] !== this.grabBlock) rest.push(this.blocks[i]);
+        }
+        this.blocks = rest;
+        this.grabBlock = null;
+        this.grabTimer = cfg.GRAB_RESPAWN_MS;
+      }
+      return;
+    }
+    this.grabTimer -= dt;
+    if (this.grabTimer <= 0) this.spawnGrab();
+  };
+
+  /** 投放一颗彩色抢夺道具到安全点（找不到安全点则顺延到下一帧再试） */
+  Spawner.prototype.spawnGrab = function () {
+    var spot = this.findSpot(cfg.BLOCK_MIN_DIST * 0.6); // 允许略靠近其他色块，但必须安全
+    if (!spot) { this.grabTimer = 1200; return; }       // 暂无安全点，短暂后重试
+    var block = {
+      x: spot.x, y: spot.y,
+      kind: cfg.GRAB_KIND,
+      rarity: cfg.GRAB_RARITY,
+      color: null,
+      phase: Math.random() * Math.PI * 2,
+      ttl: cfg.GRAB_TTL_MS,
+      r: cfg.GRAB_RADIUS // 收集判定半径（略大于普通色块，更好抢）
+    };
+    this.blocks.push(block);
+    this.grabBlock = block;
   };
 
   /** 立即补足（开局调用一次） */
@@ -1144,43 +1238,25 @@
 
   /** 尝试生成一个色块，成功返回 true */
   Spawner.prototype.spawnOne = function () {
-    var w = this.walls, s = this.snake, m = cfg.BLOCK_EDGE_MARGIN;
-    for (var tries = 0; tries < cfg.SPAWN_TRIES; tries++) {
-      var x = m + Math.random() * (w.W - 2 * m);
-      var y = m + Math.random() * (w.H - 2 * m);
-      // 不压边界墙带（相机已放开余量可见，道具不能叠在上面）
-      var edgePad = cfg.WALL_THICK + cfg.BLOCK_RADIUS + 10;
-      if (x < edgePad || x > w.W - edgePad || y < edgePad || y > w.H - edgePad) continue;
-      if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 22)) continue;       // 不压内部墙（加大余量）
-      if (s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;            // 离蛇 ≥80px
-      var nearOther = false;
-      for (var oi = 0; oi < this.others.length; oi++) {               // 多人：其他活蛇同样避让
-        if (this.others[oi].distTo(x, y) < cfg.BLOCK_SNAKE_DIST) { nearOther = true; break; }
-      }
-      if (nearOther) continue;
-      var ok = true;
-      for (var i = 0; i < this.blocks.length; i++) {
-        if (u.dist(x, y, this.blocks[i].x, this.blocks[i].y) < cfg.BLOCK_MIN_DIST) { ok = false; break; }
-      }
-      if (!ok) continue;                                              // 与已有色块 ≥140px
-      // 决定类型：默认普通色块；按当前 specialChance 改为特殊道具（按权重抽取，越后期概率越高）
-      var kind = 'color';
-      if (Math.random() < this.specialChance) kind = this.randomSpecialKind();
-      // clear / clear3 携带目标颜色（消除该色）；其余特殊道具 color=null
-      var color = null;
-      if (kind === 'color' || kind === 'clear' || kind === 'clear3') {
-        color = this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)];
-      }
-      this.blocks.push({
-        x: x, y: y,
-        kind: kind,
-        color: color,
-        rarity: cfg.ITEM_RARITY[kind] || null, // 稀有度边框用（普通色块为 null）
-        phase: Math.random() * Math.PI * 2 // 脉动相位
-      });
-      return true;
+    var spot = this.findSpot(cfg.BLOCK_MIN_DIST); // 与已有色块 ≥140px 的安全点
+    if (!spot) return false;
+    var x = spot.x, y = spot.y;
+    // 决定类型：默认普通色块；按当前 specialChance 改为特殊道具（按权重抽取，越后期概率越高）
+    var kind = 'color';
+    if (Math.random() < this.specialChance) kind = this.randomSpecialKind();
+    // clear / clear3 携带目标颜色（消除该色）；其余特殊道具 color=null
+    var color = null;
+    if (kind === 'color' || kind === 'clear' || kind === 'clear3') {
+      color = this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)];
     }
-    return false;
+    this.blocks.push({
+      x: x, y: y,
+      kind: kind,
+      color: color,
+      rarity: cfg.ITEM_RARITY[kind] || null, // 稀有度边框用（普通色块为 null）
+      phase: Math.random() * Math.PI * 2 // 脉动相位
+    });
+    return true;
   };
 
   /**
@@ -1192,7 +1268,7 @@
     var rest = [];
     for (var i = 0; i < this.blocks.length; i++) {
       var b = this.blocks[i];
-      if (snake.overlaps(b.x, b.y, cfg.BLOCK_RADIUS)) got.push(b);
+      if (snake.overlaps(b.x, b.y, b.r || cfg.BLOCK_RADIUS)) got.push(b);
       else rest.push(b);
     }
     this.blocks = rest;
@@ -1769,6 +1845,19 @@
       // ① 寻食：对齐度 × 距离衰减；同色加成；「差 1~2 节即凑成 4 连消除」额外加权（更会规划消除）
       for (var i = 0; i < blocks.length; i++) {
         var b = blocks[i];
+        // 彩色星（多人专属抢夺道具）：超强吸引力，远超普通寻食，远处也来抢（仍受墙/蛇身惩罚制衡）
+        if (b.kind === cfg.GRAB_KIND) {
+          var gx = b.x - snake.x, gy = b.y - snake.y;
+          var gd = Math.sqrt(gx * gx + gy * gy);
+          if (gd > 1e-6) {
+            var galign = (gx / gd) * dx + (gy / gd) * dy;
+            if (galign > 0) {
+              var gfall = 1 - Math.min(1, gd / cfg.AI_GRAB_RANGE);
+              score += cfg.AI_GRAB_WEIGHT * galign * gfall;
+            }
+          }
+          continue;
+        }
         var bx = b.x - snake.x, by = b.y - snake.y;
         var d = Math.sqrt(bx * bx + by * by);
         if (d > range || d < 1e-6) continue;
@@ -2276,6 +2365,22 @@
       var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
       this.scoreChain(e, rem2, 1, 0);
       this.particles.burst(px, py, '#FFD94A', 9, 1.3);
+    } else if (b.kind === 'grab') {
+      // 多人专属「彩色星」：玩家吃到 → 当前总分立即 +20%（一次性加成，可叠加）；
+      // AI 吃到则只是把道具消耗掉（玩家失去抢夺机会）。无论谁吃，都清掉场上这颗并安排下一颗。
+      if (CS.audio) CS.audio.playSpecial();
+      this.particles.burst(px, py, '#FFD94A', 16, 1.9);
+      this.particles.ring(px, py, '#FFC83D', 1.8);
+      if (e.isPlayer) {
+        // score 在 mp.update 之后才由 game 汇总，这里取上一帧已汇总分（差一帧，可忽略）
+        var cur = (this.game.survivalScore || 0) + (this.game.elimScore || 0) + (this.game.mpBonusScore || 0);
+        var bonus = Math.max(1, Math.round(cur * cfg.GRAB_SCORE_MUL));
+        this.game.mpBonusScore = (this.game.mpBonusScore || 0) + bonus;
+        this.particles.chainText(px, py - 32, '分数 +20%！+' + bonus, 24);
+      }
+      // 消费场上这颗彩色星（collectAt 已将其移出 blocks，这里只清引用 + 排下一颗）
+      this.spawner.grabBlock = null;
+      this.spawner.grabTimer = cfg.GRAB_RESPAWN_MS;
     } else {
       if (CS.audio) CS.audio.playEat();
       e.snake.grow(b.color);
@@ -2742,6 +2847,20 @@
       // 本体：彩色蜡笔砖块
       drawCrayonBlock(ctx, -size / 2, -size / 2, size, mc, seedX, seedY, { rot: 0.2, wobble: 1.0, stroke: cfg.SEG_STROKE });
 
+    } else if (b.kind === 'grab') {
+      // 彩色星（多人专属抢夺道具）：金底五角星 + 一圈彩色圆点，最醒目
+      starPath(ctx, 0, 0, size * 0.46, 0.3);
+      ctx.fillStyle = '#FFD94A'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(2, size * 0.12); ctx.stroke();
+      var gcols = ['#E8552F', '#F5A623', '#6FBF4A', '#4A7FD4', '#9B5DE5'];
+      for (var gi = 0; gi < 5; gi++) {
+        var ga = -Math.PI / 2 + gi * (Math.PI * 2 / 5);
+        ctx.beginPath();
+        ctx.arc(Math.cos(ga) * size * 0.30, Math.sin(ga) * size * 0.30, size * 0.085, 0, Math.PI * 2);
+        ctx.fillStyle = gcols[gi]; ctx.fill();
+        ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1; ctx.stroke();
+      }
+
     } else {
       // 普通色块（默认）：纯色蜡笔砖块（带描边），即游戏内最常见的色块
       drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
@@ -2749,7 +2868,17 @@
 
     // 稀有度边框：在方块外侧加一道明显加粗的彩色描边（强→弱：蓝/紫/橙），一眼可辨道具强度
     var rar = b.rarity || (b.kind && cfg.ITEM_RARITY ? cfg.ITEM_RARITY[b.kind] : null);
-    if (rar && cfg.RARITY_COLORS && cfg.RARITY_COLORS[rar]) {
+    if (rar === 'colorful') {
+      // 彩色(抢夺)品质：彩虹环（多圈叠加，最醒目）
+      var rainbow = ['#E8552F', '#F5A623', '#6FBF4A', '#4A7FD4', '#9B5DE5'];
+      for (var ri = 0; ri < rainbow.length; ri++) {
+        wobblyRoundRect(ctx, -size / 2 - 2 - ri * 2.1, -size / 2 - 2 - ri * 2.1,
+          size + 4 + ri * 4.2, size + 4 + ri * 4.2, size * 0.40, seedX + ri * 3, seedY + ri * 3, 1.15);
+        ctx.strokeStyle = rainbow[ri];
+        ctx.lineWidth = Math.max(2.2, size * 0.11);
+        ctx.stroke();
+      }
+    } else if (rar && cfg.RARITY_COLORS && cfg.RARITY_COLORS[rar]) {
       wobblyRoundRect(ctx, -size / 2 - 3, -size / 2 - 3, size + 6, size + 6, size * 0.34, seedX, seedY, 1.1);
       ctx.strokeStyle = cfg.RARITY_COLORS[rar];
       ctx.lineWidth = Math.max(3, size * 0.17);
@@ -3023,17 +3152,19 @@
       drawWallRect(ctx, r, i + 11);
     }
 
-    // 道具：普通色块 + 特殊道具（万能色/炸弹/减速）；略小、旋转 + 脉动
+    // 道具：普通色块 + 特殊道具（万能色/炸弹/减速/彩色星）；略小、旋转 + 脉动
     var bs = cfg.BLOCK_RADIUS * 2;
     for (i = 0; i < spawner.blocks.length; i++) {
       var b = spawner.blocks[i];
       if (b.x < cam.x - 40 || b.x > cam.x + vw + 40 || b.y < cam.y - 40 || b.y > cam.y + vh + 40) continue;
+      // 彩色星（多人专属）比普通色块明显更大，一眼可见
+      var bsz = (b.kind === cfg.GRAB_KIND) ? cfg.GRAB_SIZE : bs;
       var pulse = 1 + 0.09 * Math.sin(game.timeMs / 280 + b.phase);
       var seedX = Math.round(b.x / 10), seedY = Math.round(b.y / 10);
       if (b.kind && b.kind !== 'color') {
-        drawItemBlock(ctx, b, b.x, b.y, bs, seedX, seedY, (u.hash2(seedX, seedY, 7) - 0.5) * 0.55, pulse);
+        drawItemBlock(ctx, b, b.x, b.y, bsz, seedX, seedY, (u.hash2(seedX, seedY, 7) - 0.5) * 0.55, pulse);
       } else {
-        drawCrayonBlock(ctx, b.x - bs / 2, b.y - bs / 2, bs, cfg.COLORS[b.color], seedX, seedY, {
+        drawCrayonBlock(ctx, b.x - bsz / 2, b.y - bsz / 2, bsz, cfg.COLORS[b.color], seedX, seedY, {
           rot: (u.hash2(seedX, seedY, 7) - 0.5) * 0.55,
           scale: pulse,
           wobble: 1.0
@@ -3298,10 +3429,11 @@
       var r = walls.rects[i];
       ctx.fillRect(mx + r.x * scale, my + r.y * scale, Math.max(1.5, r.w * scale), Math.max(1.5, r.h * scale));
     }
-    // 色块
+    // 色块（彩色星用金色大点，普通色块用本色小点）
     for (i = 0; i < game.spawner.blocks.length; i++) {
       var b = game.spawner.blocks[i];
-      ctx.fillStyle = cfg.COLORS[b.color];
+      if (b.kind === cfg.GRAB_KIND) continue; // 彩色星单独画（带一圈圈涟漪强调）
+      ctx.fillStyle = cfg.COLORS[b.color] || '#8A8278';
       ctx.fillRect(mx + b.x * scale - 1, my + b.y * scale - 1, 2.5, 2.5);
     }
     // 视口框
@@ -3331,6 +3463,27 @@
     ctx.strokeStyle = cfg.INK;
     ctx.lineWidth = 1.2;
     ctx.stroke();
+    // 彩色星（多人专属抢夺道具）：金色大点 + 一圈圈扩散涟漪，强调位置引诱全场抢夺
+    if (game.spawner && game.spawner.grabBlock) {
+      var gb = game.spawner.grabBlock;
+      var gx = mx + gb.x * scale, gy = my + gb.y * scale;
+      var gcols = ['#E8552F', '#F5A623', '#6FBF4A', '#4A7FD4', '#9B5DE5'];
+      var gt = game.timeMs / 1000;
+      for (var gri = 0; gri < 3; gri++) {
+        var gph = (gt * 0.9 + gri / 3) % 1;          // 0→1 循环扩散
+        ctx.beginPath();
+        ctx.arc(gx, gy, 3 + gph * 24, 0, Math.PI * 2);
+        ctx.strokeStyle = gcols[gri % gcols.length];
+        ctx.globalAlpha = (1 - gph) * 0.9;
+        ctx.lineWidth = 1.7;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(gx, gy, 3.6, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFD94A'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.1; ctx.stroke();
+    }
     ctx.restore();
 
     // 外框
@@ -4114,6 +4267,47 @@
     ctx.restore();
   };
 
+  /**
+   * 多人专属「彩色星」常驻播报：只要场上还存在那颗彩色星，屏幕上方就一直显示
+   * 「彩色星出现！快去抢夺 +20% 分」（带图标 + 呼吸闪烁），引诱全场蛇去抢。
+   * 不占用底板，纯描边文字 + 内嵌小图标；自适应窄屏缩放。
+   */
+  Renderer.prototype.drawGrabBroadcast = function (game) {
+    if (game.mode !== 'multi') return;
+    var gb = game.spawner && game.spawner.grabBlock;
+    if (!gb) return;
+    var ctx = this.ctx, l = game.layout();
+    var t = game.timeMs / 1000;
+    var alpha = 0.78 + 0.22 * Math.sin(t * 4); // 呼吸闪烁（不至于太低看不清）
+    var cx = l.areaW / 2;
+    var ty = 30;
+    var txt = '彩色星出现！快去抢夺 +20% 分';
+    var fs = 18;
+    ctx.font = 'bold ' + fs + 'px sans-serif';
+    var maxW = l.areaW * 0.94;
+    while (ctx.measureText(txt).width + 64 > maxW && fs > 11) { fs--; ctx.font = 'bold ' + fs + 'px sans-serif'; }
+    var tw = ctx.measureText(txt).width;
+    var iconW = Math.min(30, fs + 12);
+    var total = iconW + 8 + tw;
+    var startX = cx - total / 2;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // 内嵌彩色星小图标（与游戏内同款渲染）
+    drawItemBlock(ctx, { kind: 'grab', rarity: 'colorful' }, startX + iconW / 2, ty, iconW, 3, 7, 0, 1 + 0.06 * Math.sin(t * 3));
+    // 文字（描边 + 填充，浅色场景可读）
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold ' + fs + 'px sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText(txt, startX + iconW + 8, ty);
+    ctx.fillStyle = '#FFFDF5';
+    ctx.fillText(txt, startX + iconW + 8, ty);
+    ctx.restore();
+  };
+
   // ---------------- 道具图鉴页面 ----------------
 
   /**
@@ -4442,6 +4636,7 @@
     if (game.state === 'play') {
       this.drawUnlockBanner(game); // 解锁提示横幅（在摇杆之上）
       this.drawItemToast(game);    // 特殊道具效果提示（屏幕空间，不遮挡地图）
+      this.drawGrabBroadcast(game); // 多人专属彩色星常驻播报（仅场上存在时显示）
       this.drawJoystick(game);
     } else if (game.state === 'clear') this.drawResult(game, true);
     else if (game.state === 'over') {
@@ -4508,6 +4703,7 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.mpBonusScore = 0;      // 多人专属「彩色星」加成（吃掉即 +20% 当前总分，可累计叠加）
     this.elimCombo = 0;     // 连击层数（v2.9）：窗口内连续触发消除 +1，分数 ×combo
     this.elimComboTimer = 0; // 连击剩余窗口（ms），每帧衰减
     this.mp = null;       // 多人对战编排器（mode==='multi' 时非空）
@@ -4609,6 +4805,7 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.mpBonusScore = 0;      // 多人专属「彩色星」加成（吃掉即 +20% 当前总分，可累计叠加）
     this.elimCombo = 0;
     this.elimComboTimer = 0;
     this.mp = null;
@@ -4664,6 +4861,7 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.mpBonusScore = 0;      // 多人专属「彩色星」加成（吃掉即 +20% 当前总分，可累计叠加）
     this.elimCombo = 0;
     this.elimComboTimer = 0;
     this.mpResult = null;
@@ -4671,6 +4869,7 @@
     this.snake.speed = cfg.SNAKE_SPEED;
     this.spawner = new Spawner(this.walls, this.snake);
     this.spawner.unlockedKeys = this.unlockedKeys;
+    this.spawner.grabEnabled = true; // 多人对战：启用「彩色星」专属抢夺道具
     // 多人色块目标密度：世界面积 / MP_BLOCK_AREA_DIV，夹取 [MP_BLOCKS_MIN, MP_BLOCKS_MAX]
     this.spawner.target = u.clamp(Math.round(m.W * m.H / cfg.MP_BLOCK_AREA_DIV), cfg.MP_BLOCKS_MIN, cfg.MP_BLOCKS_MAX);
     this.particles.clear();
@@ -4713,9 +4912,9 @@
       }
     }
 
-    // 玩家得分 = 存活分 + 消除分（消除分在 mp.resolveElim 中按连锁 + 连击倍率累计）
+    // 玩家得分 = 存活分 + 消除分 + 彩色星加成（消除分在 mp.resolveElim 中按连锁 + 连击倍率累计）
     this.elimScore = this.mp.playerEntry.elimScore;
-    this.score = this.survivalScore + this.elimScore;
+    this.score = this.survivalScore + this.elimScore + (this.mpBonusScore || 0);
 
     this.updateCamera(dt);
 

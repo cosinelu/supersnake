@@ -809,6 +809,50 @@ var botN = tb6.mp.spawnBot();
 ok(botN.snake.length() === cfg.MP_START_LENGTH && botN.snake.segPos.length === cfg.MP_START_LENGTH + 1,
   'AI 出生/重生：5 颜色节 + 1 尾巴节 = 6 节总长');
 
+// ---------------- 多人专属「彩色星」抢夺道具 ----------------
+section('多人专属彩色星抢夺道具');
+ok(typeof cfg.GRAB_KIND === 'string' && cfg.GRAB_KIND === 'grab', 'GRAB_KIND = "grab"');
+ok(cfg.RARITY_COLORS.colorful && cfg.RARITY_NAME.colorful === '彩色·抢夺', '新增彩色(抢夺)品质：边框色 + 名称');
+ok(Array.isArray(cfg.RARITY_ORDER) && cfg.RARITY_ORDER[0] === 'colorful', '彩色品质排在最前（高于强/中/弱）');
+ok(cfg.ITEM_RARITY.grab === 'colorful', 'grab 道具品质 = colorful');
+ok(cfg.ITEM_GUIDE.some(function (it) { return it.kind === 'grab' && it.rarity === 'colorful'; }), '图鉴含彩色星条目');
+
+// 单/无尽模式默认不出现彩色星（grabEnabled 关闭）
+var lvG = new CS.Game(960, 540); lvG.startLevel(1);
+ok(!lvG.spawner.grabEnabled, '单/无尽模式 spawner.grabEnabled = false（默认不投放彩色星）');
+var eb = lvG.spawner;
+eb.grabTimer = 0; eb.updateGrab(16);
+ok(!eb.grabBlock, '单/无尽模式 updateGrab 不生成彩色星');
+
+// 多人模式：spawner 投放彩色星 + 字段齐全
+var mg = new CS.Game(960, 540); mg.startMulti();
+ok(mg.spawner.grabEnabled === true, '多人对战 spawner.grabEnabled = true');
+var spb = mg.spawner;
+ok(typeof spb.findSpot === 'function', 'spawner.findSpot 方法存在');
+spb.grabBlock = null; spb.grabTimer = 0; spb.updateGrab(16);
+ok(!!spb.grabBlock && spb.grabBlock.kind === 'grab' && spb.grabBlock.rarity === 'colorful', 'updateGrab 成功投放一颗彩色星（kind/rarity 正确）');
+ok(spb.grabBlock.ttl > 0 && spb.grabBlock.r === cfg.GRAB_RADIUS, '彩色星含 ttl 倒计时与收集半径 r');
+// ttl 归零后自动移除并安排下一颗
+spb.grabBlock.ttl = 5; spb.updateGrab(16);
+ok(!spb.grabBlock && spb.grabTimer > 0, '彩色星超时（ttl≤0）自动移除并重置倒计时');
+
+// 玩家吃到彩色星：当前总分立即 +20%（可叠加）
+ok(mg.mpBonusScore === 0, '吃掉前 mpBonusScore = 0');
+mg.elimScore = 80; mg.survivalScore = 120; mg.mpBonusScore = 0; // 当前总分 = 200
+mg.mp.applyItem(mg.mp.playerEntry, { x: mg.snake.x, y: mg.snake.y, kind: 'grab', color: null });
+var expectBonus = Math.max(1, Math.round(200 * cfg.GRAB_SCORE_MUL)); // 200*0.2 = 40
+ok(mg.mpBonusScore === expectBonus, '玩家吃彩色星：总分 +' + expectBonus + '（= 200×20%）', 'mpBonusScore=' + mg.mpBonusScore);
+ok(mg.spawner.grabBlock === null && mg.spawner.grabTimer > 0, '吃掉后场上彩色星被消费并安排下一颗');
+// 叠加：再吃一次（此时含上一笔加成）应再 +20%
+var prev = mg.mpBonusScore;
+mg.mp.applyItem(mg.mp.playerEntry, { x: mg.snake.x, y: mg.snake.y, kind: 'grab', color: null });
+ok(mg.mpBonusScore > prev, '可叠加：再次吃到再次 +20%（' + prev + ' → ' + mg.mpBonusScore + '）');
+// AI 吃到：只消费道具，不加分
+var botE = mg.mp.bots[0];
+mg.mpBonusScore = 0;
+mg.mp.applyItem(botE, { x: botE.snake.x, y: botE.snake.y, kind: 'grab', color: null });
+ok(mg.mpBonusScore === 0 && mg.spawner.grabBlock === null, 'AI 吃到彩色星：仅消费道具、玩家不加分');
+
 // ---------------- 汇总 ----------------
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

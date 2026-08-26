@@ -306,6 +306,20 @@
       // 本体：彩色蜡笔砖块
       drawCrayonBlock(ctx, -size / 2, -size / 2, size, mc, seedX, seedY, { rot: 0.2, wobble: 1.0, stroke: cfg.SEG_STROKE });
 
+    } else if (b.kind === 'grab') {
+      // 彩色星（多人专属抢夺道具）：金底五角星 + 一圈彩色圆点，最醒目
+      starPath(ctx, 0, 0, size * 0.46, 0.3);
+      ctx.fillStyle = '#FFD94A'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = Math.max(2, size * 0.12); ctx.stroke();
+      var gcols = ['#E8552F', '#F5A623', '#6FBF4A', '#4A7FD4', '#9B5DE5'];
+      for (var gi = 0; gi < 5; gi++) {
+        var ga = -Math.PI / 2 + gi * (Math.PI * 2 / 5);
+        ctx.beginPath();
+        ctx.arc(Math.cos(ga) * size * 0.30, Math.sin(ga) * size * 0.30, size * 0.085, 0, Math.PI * 2);
+        ctx.fillStyle = gcols[gi]; ctx.fill();
+        ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1; ctx.stroke();
+      }
+
     } else {
       // 普通色块（默认）：纯色蜡笔砖块（带描边），即游戏内最常见的色块
       drawCrayonBlock(ctx, -size / 2, -size / 2, size, cfg.COLORS[b.color], seedX, seedY, { rot: rot, wobble: 1.0 });
@@ -313,7 +327,17 @@
 
     // 稀有度边框：在方块外侧加一道明显加粗的彩色描边（强→弱：蓝/紫/橙），一眼可辨道具强度
     var rar = b.rarity || (b.kind && cfg.ITEM_RARITY ? cfg.ITEM_RARITY[b.kind] : null);
-    if (rar && cfg.RARITY_COLORS && cfg.RARITY_COLORS[rar]) {
+    if (rar === 'colorful') {
+      // 彩色(抢夺)品质：彩虹环（多圈叠加，最醒目）
+      var rainbow = ['#E8552F', '#F5A623', '#6FBF4A', '#4A7FD4', '#9B5DE5'];
+      for (var ri = 0; ri < rainbow.length; ri++) {
+        wobblyRoundRect(ctx, -size / 2 - 2 - ri * 2.1, -size / 2 - 2 - ri * 2.1,
+          size + 4 + ri * 4.2, size + 4 + ri * 4.2, size * 0.40, seedX + ri * 3, seedY + ri * 3, 1.15);
+        ctx.strokeStyle = rainbow[ri];
+        ctx.lineWidth = Math.max(2.2, size * 0.11);
+        ctx.stroke();
+      }
+    } else if (rar && cfg.RARITY_COLORS && cfg.RARITY_COLORS[rar]) {
       wobblyRoundRect(ctx, -size / 2 - 3, -size / 2 - 3, size + 6, size + 6, size * 0.34, seedX, seedY, 1.1);
       ctx.strokeStyle = cfg.RARITY_COLORS[rar];
       ctx.lineWidth = Math.max(3, size * 0.17);
@@ -587,17 +611,19 @@
       drawWallRect(ctx, r, i + 11);
     }
 
-    // 道具：普通色块 + 特殊道具（万能色/炸弹/减速）；略小、旋转 + 脉动
+    // 道具：普通色块 + 特殊道具（万能色/炸弹/减速/彩色星）；略小、旋转 + 脉动
     var bs = cfg.BLOCK_RADIUS * 2;
     for (i = 0; i < spawner.blocks.length; i++) {
       var b = spawner.blocks[i];
       if (b.x < cam.x - 40 || b.x > cam.x + vw + 40 || b.y < cam.y - 40 || b.y > cam.y + vh + 40) continue;
+      // 彩色星（多人专属）比普通色块明显更大，一眼可见
+      var bsz = (b.kind === cfg.GRAB_KIND) ? cfg.GRAB_SIZE : bs;
       var pulse = 1 + 0.09 * Math.sin(game.timeMs / 280 + b.phase);
       var seedX = Math.round(b.x / 10), seedY = Math.round(b.y / 10);
       if (b.kind && b.kind !== 'color') {
-        drawItemBlock(ctx, b, b.x, b.y, bs, seedX, seedY, (u.hash2(seedX, seedY, 7) - 0.5) * 0.55, pulse);
+        drawItemBlock(ctx, b, b.x, b.y, bsz, seedX, seedY, (u.hash2(seedX, seedY, 7) - 0.5) * 0.55, pulse);
       } else {
-        drawCrayonBlock(ctx, b.x - bs / 2, b.y - bs / 2, bs, cfg.COLORS[b.color], seedX, seedY, {
+        drawCrayonBlock(ctx, b.x - bsz / 2, b.y - bsz / 2, bsz, cfg.COLORS[b.color], seedX, seedY, {
           rot: (u.hash2(seedX, seedY, 7) - 0.5) * 0.55,
           scale: pulse,
           wobble: 1.0
@@ -862,10 +888,11 @@
       var r = walls.rects[i];
       ctx.fillRect(mx + r.x * scale, my + r.y * scale, Math.max(1.5, r.w * scale), Math.max(1.5, r.h * scale));
     }
-    // 色块
+    // 色块（彩色星用金色大点，普通色块用本色小点）
     for (i = 0; i < game.spawner.blocks.length; i++) {
       var b = game.spawner.blocks[i];
-      ctx.fillStyle = cfg.COLORS[b.color];
+      if (b.kind === cfg.GRAB_KIND) continue; // 彩色星单独画（带一圈圈涟漪强调）
+      ctx.fillStyle = cfg.COLORS[b.color] || '#8A8278';
       ctx.fillRect(mx + b.x * scale - 1, my + b.y * scale - 1, 2.5, 2.5);
     }
     // 视口框
@@ -895,6 +922,27 @@
     ctx.strokeStyle = cfg.INK;
     ctx.lineWidth = 1.2;
     ctx.stroke();
+    // 彩色星（多人专属抢夺道具）：金色大点 + 一圈圈扩散涟漪，强调位置引诱全场抢夺
+    if (game.spawner && game.spawner.grabBlock) {
+      var gb = game.spawner.grabBlock;
+      var gx = mx + gb.x * scale, gy = my + gb.y * scale;
+      var gcols = ['#E8552F', '#F5A623', '#6FBF4A', '#4A7FD4', '#9B5DE5'];
+      var gt = game.timeMs / 1000;
+      for (var gri = 0; gri < 3; gri++) {
+        var gph = (gt * 0.9 + gri / 3) % 1;          // 0→1 循环扩散
+        ctx.beginPath();
+        ctx.arc(gx, gy, 3 + gph * 24, 0, Math.PI * 2);
+        ctx.strokeStyle = gcols[gri % gcols.length];
+        ctx.globalAlpha = (1 - gph) * 0.9;
+        ctx.lineWidth = 1.7;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(gx, gy, 3.6, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFD94A'; ctx.fill();
+      ctx.strokeStyle = cfg.INK; ctx.lineWidth = 1.1; ctx.stroke();
+    }
     ctx.restore();
 
     // 外框
@@ -1678,6 +1726,47 @@
     ctx.restore();
   };
 
+  /**
+   * 多人专属「彩色星」常驻播报：只要场上还存在那颗彩色星，屏幕上方就一直显示
+   * 「彩色星出现！快去抢夺 +20% 分」（带图标 + 呼吸闪烁），引诱全场蛇去抢。
+   * 不占用底板，纯描边文字 + 内嵌小图标；自适应窄屏缩放。
+   */
+  Renderer.prototype.drawGrabBroadcast = function (game) {
+    if (game.mode !== 'multi') return;
+    var gb = game.spawner && game.spawner.grabBlock;
+    if (!gb) return;
+    var ctx = this.ctx, l = game.layout();
+    var t = game.timeMs / 1000;
+    var alpha = 0.78 + 0.22 * Math.sin(t * 4); // 呼吸闪烁（不至于太低看不清）
+    var cx = l.areaW / 2;
+    var ty = 30;
+    var txt = '彩色星出现！快去抢夺 +20% 分';
+    var fs = 18;
+    ctx.font = 'bold ' + fs + 'px sans-serif';
+    var maxW = l.areaW * 0.94;
+    while (ctx.measureText(txt).width + 64 > maxW && fs > 11) { fs--; ctx.font = 'bold ' + fs + 'px sans-serif'; }
+    var tw = ctx.measureText(txt).width;
+    var iconW = Math.min(30, fs + 12);
+    var total = iconW + 8 + tw;
+    var startX = cx - total / 2;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // 内嵌彩色星小图标（与游戏内同款渲染）
+    drawItemBlock(ctx, { kind: 'grab', rarity: 'colorful' }, startX + iconW / 2, ty, iconW, 3, 7, 0, 1 + 0.06 * Math.sin(t * 3));
+    // 文字（描边 + 填充，浅色场景可读）
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold ' + fs + 'px sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText(txt, startX + iconW + 8, ty);
+    ctx.fillStyle = '#FFFDF5';
+    ctx.fillText(txt, startX + iconW + 8, ty);
+    ctx.restore();
+  };
+
   // ---------------- 道具图鉴页面 ----------------
 
   /**
@@ -2006,6 +2095,7 @@
     if (game.state === 'play') {
       this.drawUnlockBanner(game); // 解锁提示横幅（在摇杆之上）
       this.drawItemToast(game);    // 特殊道具效果提示（屏幕空间，不遮挡地图）
+      this.drawGrabBroadcast(game); // 多人专属彩色星常驻播报（仅场上存在时显示）
       this.drawJoystick(game);
     } else if (game.state === 'clear') this.drawResult(game, true);
     else if (game.state === 'over') {

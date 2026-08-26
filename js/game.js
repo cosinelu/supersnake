@@ -49,6 +49,7 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.mpBonusScore = 0;      // 多人专属「彩色星」加成（吃掉即 +20% 当前总分，可累计叠加）
     this.elimCombo = 0;     // 连击层数（v2.9）：窗口内连续触发消除 +1，分数 ×combo
     this.elimComboTimer = 0; // 连击剩余窗口（ms），每帧衰减
     this.mp = null;       // 多人对战编排器（mode==='multi' 时非空）
@@ -150,6 +151,7 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.mpBonusScore = 0;      // 多人专属「彩色星」加成（吃掉即 +20% 当前总分，可累计叠加）
     this.elimCombo = 0;
     this.elimComboTimer = 0;
     this.mp = null;
@@ -205,6 +207,7 @@
     this.score = 0;
     this.survivalScore = 0;
     this.elimScore = 0;
+    this.mpBonusScore = 0;      // 多人专属「彩色星」加成（吃掉即 +20% 当前总分，可累计叠加）
     this.elimCombo = 0;
     this.elimComboTimer = 0;
     this.mpResult = null;
@@ -212,6 +215,7 @@
     this.snake.speed = cfg.SNAKE_SPEED;
     this.spawner = new Spawner(this.walls, this.snake);
     this.spawner.unlockedKeys = this.unlockedKeys;
+    this.spawner.grabEnabled = true; // 多人对战：启用「彩色星」专属抢夺道具
     // 多人色块目标密度：世界面积 / MP_BLOCK_AREA_DIV，夹取 [MP_BLOCKS_MIN, MP_BLOCKS_MAX]
     this.spawner.target = u.clamp(Math.round(m.W * m.H / cfg.MP_BLOCK_AREA_DIV), cfg.MP_BLOCKS_MIN, cfg.MP_BLOCKS_MAX);
     this.particles.clear();
@@ -254,9 +258,9 @@
       }
     }
 
-    // 玩家得分 = 存活分 + 消除分（消除分在 mp.resolveElim 中按连锁 + 连击倍率累计）
+    // 玩家得分 = 存活分 + 消除分 + 彩色星加成（消除分在 mp.resolveElim 中按连锁 + 连击倍率累计）
     this.elimScore = this.mp.playerEntry.elimScore;
-    this.score = this.survivalScore + this.elimScore;
+    this.score = this.survivalScore + this.elimScore + (this.mpBonusScore || 0);
 
     this.updateCamera(dt);
 
