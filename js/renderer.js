@@ -1859,7 +1859,7 @@
 
     // 翻页箭头按钮（紧贴卡片区域左右两侧，仅多页时显示）
     if (totalPages > 1) {
-      var arrW = 44, arrH = 44, arrGap = 10;
+      var arrW = 44, arrH = 44, arrGap = 20;
       var arrY = startY + (cardH + gap) * Math.min(pageItems.length - 1, 2) + cardH / 2 - arrH / 2; // 垂直居中于卡片区域
       if (arrY < L.bodyTop + 10) arrY = L.bodyTop + 10;
       var arrLx = cardX - arrW - arrGap;     // 紧贴卡片左侧

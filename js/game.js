@@ -592,7 +592,7 @@
       this.addButton('level', cx, H * 0.44, bw, bh, '闯关模式');
       this.addButton('endless', cx, H * 0.44 + bh + 16, bw, bh, '无尽模式');
       this.addButton('multi', cx, H * 0.44 + 2 * (bh + 16), bw, bh, '多人对战');
-      this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), Math.round(bw * 0.72), bh - 6, '图鉴');
+      this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), bw, bh, '图鉴');
     } else if (this.state === 'guide') {
       // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
       this.addButton('back', W / 2, H - 28, 120, 38, '← 返回');

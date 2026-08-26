@@ -4,7 +4,7 @@
 <!-- 本文件为自包含单文件版：所有 JS 已内联，双击即可离线游玩，无需联网或服务器。 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>消食蛇 · 网页版（分享版 v2.12.4）</title>
+<title>消食蛇 · 网页版（分享版 v2.12.5）</title>
 <style>
   html, body {
     margin: 0;
@@ -4295,7 +4295,7 @@
 
     // 翻页箭头按钮（紧贴卡片区域左右两侧，仅多页时显示）
     if (totalPages > 1) {
-      var arrW = 44, arrH = 44, arrGap = 10;
+      var arrW = 44, arrH = 44, arrGap = 20;
       var arrY = startY + (cardH + gap) * Math.min(pageItems.length - 1, 2) + cardH / 2 - arrH / 2; // 垂直居中于卡片区域
       if (arrY < L.bodyTop + 10) arrY = L.bodyTop + 10;
       var arrLx = cardX - arrW - arrGap;     // 紧贴卡片左侧
@@ -5051,7 +5051,7 @@
       this.addButton('level', cx, H * 0.44, bw, bh, '闯关模式');
       this.addButton('endless', cx, H * 0.44 + bh + 16, bw, bh, '无尽模式');
       this.addButton('multi', cx, H * 0.44 + 2 * (bh + 16), bw, bh, '多人对战');
-      this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), Math.round(bw * 0.72), bh - 6, '图鉴');
+      this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), bw, bh, '图鉴');
     } else if (this.state === 'guide') {
       // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
       this.addButton('back', W / 2, H - 28, 120, 38, '← 返回');
