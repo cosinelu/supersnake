@@ -665,14 +665,11 @@
         if (this.guideTab !== tk) { this.guideTab = tk; this.guidePage = 0; }
         return;
       }
-      // 3) 道具页：点击内容区左/右半屏翻页（颜色页无分页）
+      // 3) 道具页：点击左右箭头按钮翻页（颜色页无分页）
       if (this.guideTab === 'items') {
-        var totalPg = Math.ceil(cfg.ITEM_GUIDE.length / 5);
-        if (totalPg > 1) {
-          if (x < this.screenW / 2) { if (this.guidePage > 0) this.guidePage--; }
-          else { if (this.guidePage < totalPg - 1) this.guidePage++; }
-          return;
-        }
+        function inRect(r, px, py) { return r && px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h; }
+        if (inRect(this._guideArrowLeft, x, y)) { if (this.guidePage > 0) this.guidePage--; return; }
+        if (inRect(this._guideArrowRight, x, y)) { var totalPg = Math.ceil(cfg.ITEM_GUIDE.length / 5); if (this.guidePage < totalPg - 1) this.guidePage++; return; }
       }
       return;
     }

@@ -1856,6 +1856,50 @@
     // 存储分页信息供 footer 使用
     game._guideTotalPages = totalPages;
     game._guidePage = pg;
+
+    // 翻页箭头按钮（内容区左右两侧，仅多页时显示）
+    if (totalPages > 1) {
+      var arrW = 44, arrH = 44, arrGap = 8;
+      var arrY = startY + (cardH + gap) * Math.min(pageItems.length - 1, 2) + cardH / 2 - arrH / 2; // 垂直居中于卡片区域
+      if (arrY < L.bodyTop + 10) arrY = L.bodyTop + 10;
+      var arrLx = L.cx - arrW - arrGap;
+      var arrRx = L.cx + L.cW + arrGap;
+
+      // 左箭头 ◀
+      ctx.save();
+      wobblyRoundRect(ctx, arrLx, arrY, arrW, arrH, 10, arrLx * 3, arrY * 7, 1.4);
+      ctx.fillStyle = pg > 0 ? cfg.PANEL : '#F0EDE6';
+      ctx.fill();
+      ctx.strokeStyle = pg > 0 ? cfg.INK : 'rgba(58,50,56,0.2)';
+      ctx.lineWidth = pg > 0 ? 2.0 : 1.4;
+      ctx.stroke();
+      if (pg > 0) { ctx.fillStyle = cfg.INK; ctx.font = 'bold 20px sans-serif'; }
+      else { ctx.fillStyle = 'rgba(58,50,56,0.25)'; ctx.font = '20px sans-serif'; }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('◀', arrLx + arrW / 2, arrY + arrH / 2);
+      ctx.restore();
+
+      // 右箭头 ▶
+      ctx.save();
+      wobblyRoundRect(ctx, arrRx, arrY, arrW, arrH, 10, arrRx * 3, arrY * 7, 1.4);
+      ctx.fillStyle = pg < totalPages - 1 ? cfg.PANEL : '#F0EDE6';
+      ctx.fill();
+      ctx.strokeStyle = pg < totalPages - 1 ? cfg.INK : 'rgba(58,50,56,0.2)';
+      ctx.lineWidth = pg < totalPages - 1 ? 2.0 : 1.4;
+      ctx.stroke();
+      if (pg < totalPages - 1) { ctx.fillStyle = cfg.INK; ctx.font = 'bold 20px sans-serif'; }
+      else { ctx.fillStyle = 'rgba(58,50,56,0.25)'; ctx.font = '20px sans-serif'; }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('▶', arrRx + arrW / 2, arrY + arrH / 2);
+      ctx.restore();
+
+      // 存储热区供 onTouchStart 使用
+      game._guideArrowLeft  = { x: arrLx, y: arrY, w: arrW, h: arrH };
+      game._guideArrowRight = { x: arrRx, y: arrY, w: arrW, h: arrH };
+    } else {
+      game._guideArrowLeft = null;
+      game._guideArrowRight = null;
+    }
   };
 
   // ---- 3b. 颜色解锁顺序内容区 ----
@@ -1916,29 +1960,20 @@
     game._guidePage = 0;
   };
 
-  // ---- 3. 底栏（翻页提示 + 页码 + 居中返回按钮）----
+  // ---- 3. 底栏（页码 + 居中返回按钮）----
   Renderer.prototype.drawGuideFooter = function (game, L) {
     var ctx = this.ctx;
     var tp = game._guideTotalPages || 1, pg = game._guidePage || 0;
     var fy = L.ftrY + L.ftrH / 2;
 
-    // 翻页提示（左右两侧）
+    // 页码（左侧）
     if (tp > 1) {
       ctx.save();
-      ctx.font = '12.5px sans-serif'; ctx.fillStyle = '#888';
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillText(pg > 0 ? '◀ 上一页' : '', 20, fy);
-      ctx.textAlign = 'right';
-      ctx.fillText(pg < tp - 1 ? '下一页 ▶' : '', L.W - 20, fy);
+      ctx.font = '12px sans-serif'; ctx.fillStyle = '#AAA';
+      ctx.fillText('第 ' + (pg + 1) + ' / ' + tp + ' 页', 24, fy);
       ctx.restore();
     }
-
-    // 页码（左侧）
-    ctx.save();
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.font = '12px sans-serif'; ctx.fillStyle = '#AAA';
-    ctx.fillText('第 ' + (pg + 1) + ' / ' + tp + ' 页', 24, fy);
-    ctx.restore();
 
     // 返回按钮（底部居中）
     var btnW = 120, btnH = 38;
