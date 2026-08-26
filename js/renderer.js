@@ -1857,13 +1857,16 @@
     game._guideTotalPages = totalPages;
     game._guidePage = pg;
 
-    // 翻页箭头按钮（内容区左右两侧，仅多页时显示）
+    // 翻页箭头按钮（紧贴卡片区域左右两侧，仅多页时显示）
     if (totalPages > 1) {
-      var arrW = 44, arrH = 44, arrGap = 8;
+      var arrW = 44, arrH = 44, arrGap = 10;
       var arrY = startY + (cardH + gap) * Math.min(pageItems.length - 1, 2) + cardH / 2 - arrH / 2; // 垂直居中于卡片区域
       if (arrY < L.bodyTop + 10) arrY = L.bodyTop + 10;
-      var arrLx = L.cx - arrW - arrGap;
-      var arrRx = L.cx + L.cW + arrGap;
+      var arrLx = cardX - arrW - arrGap;     // 紧贴卡片左侧
+      var arrRx = cardX + cardW + arrGap;    // 紧贴卡片右侧
+      // 钳制到屏幕可见区域内
+      if (arrLx < L.cx) arrLx = L.cx;
+      if (arrRx + arrW > L.cx + L.cW) arrRx = L.cx + L.cW - arrW;
 
       // 左箭头 ◀
       ctx.save();
