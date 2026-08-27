@@ -15,6 +15,7 @@
  * 畸形/超大消息 → error 回复并断开（1002）。
  */
 var http = require('http');
+var fs = require('fs');
 var path = require('path');
 var WebSocket = require('ws');
 
@@ -27,16 +28,45 @@ var Matchmaker = require('./matchmaker');
 
 var nextConnId = 1;
 
+// ---------------- 静态文件托管（仓库根目录；同端口出页面+ws，Windows 免 Nginx） ----------------
+var STATIC_ROOT = path.join(__dirname, '..');
+var MIME = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon', '.md': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8'
+};
+
+/** GET 静态服务：/ → index.html；路径穿越防护；仅白名单扩展名 */
+function serveStatic(req, res) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405); res.end(); return;
+  }
+  var urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (urlPath === '/') urlPath = '/index.html';
+  urlPath = path.posix.normalize(urlPath); // 先归一化（/js/../x → /x），防伪装穿越
+  // 白名单：只出页面入口与前端资源（不暴露 server/ test/ docs/ 等目录）
+  if (urlPath !== '/index.html' && urlPath.indexOf('/js/') !== 0 && urlPath !== '/favicon.ico') {
+    res.writeHead(404); res.end('not found'); return;
+  }
+  var file = path.normalize(path.join(STATIC_ROOT, urlPath));
+  if (file.indexOf(STATIC_ROOT) !== 0) { res.writeHead(403); res.end(); return; } // 防 ../ 穿越
+  var ext = path.extname(file).toLowerCase();
+  if (!MIME[ext]) { res.writeHead(404); res.end('not found'); return; }
+  fs.readFile(file, function (err, data) {
+    if (err) { res.writeHead(404); res.end('not found'); return; }
+    res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'no-cache' });
+    res.end(data);
+  });
+}
+
 /**
  * @param {object} [overrides] 覆盖 server/config 任意字段（测试用小参数/随机端口）
  * @returns {{ httpServer, wss, matchmaker, config, port:()=>number, close:fn }}
  */
 function createServer(overrides) {
   var config = Object.assign({}, baseConfig, overrides || {});
-  var httpServer = http.createServer(function (req, res) {
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('supersnake online server\n');
-  });
+  var httpServer = http.createServer(serveStatic);
   var wss = new WebSocket.Server({
     server: httpServer,
     maxPayload: config.MAX_MSG_BYTES,
