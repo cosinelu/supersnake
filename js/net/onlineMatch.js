@@ -66,7 +66,8 @@
         self.transport.joinMatch(self.nick);
       },
       queued: function (m) {
-        self.detail = '队列 ' + (m.pos || 1) + ' / ' + (m.need || '?') + '，人满即开';
+        var cur = m.size || m.pos || 1;
+        self.detail = '已就位 ' + cur + ' / ' + (m.need || '?') + '，人满即开（20 秒后 AI 补位）';
       },
       matched: function (m) { self._onMatched(m); },
       start: function () { self.status = '开局！等待首帧同步…'; },

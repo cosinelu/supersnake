@@ -16,6 +16,7 @@
 
     var game = new CS.Game(window.innerWidth, window.innerHeight);
     var renderer = new CS.Renderer(ctx, window.innerWidth, window.innerHeight);
+    root.__game = game; // 调试钩子：控制台/WebBridge 可读取对局状态（无功能影响）
 
     function resize() {
       var w = window.innerWidth, h = window.innerHeight;

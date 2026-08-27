@@ -82,12 +82,13 @@ Matchmaker.prototype._form = function (n) {
   return room;
 };
 
-/** 队列位次播报 {pos, need} */
+/** 队列位次播报 {pos, size, need}（pos=本人位次，size=当前队列人数） */
 Matchmaker.prototype._notifyQueue = function () {
-  for (var i = 0; i < this.queue.length; i++) {
+  var size = this.queue.length;
+  for (var i = 0; i < size; i++) {
     var q = this.queue[i];
     try {
-      q.send({ t: 'queued', pos: i + 1, need: this.config.ROOM_SIZE });
+      q.send({ t: 'queued', pos: i + 1, size: size, need: this.config.ROOM_SIZE });
     } catch (e) { /* 发送失败由连接层清理 */ }
   }
 };
