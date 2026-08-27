@@ -37,7 +37,11 @@ function createServer(overrides) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('supersnake online server\n');
   });
-  var wss = new WebSocket.Server({ server: httpServer, maxPayload: config.MAX_MSG_BYTES });
+  var wss = new WebSocket.Server({
+    server: httpServer,
+    maxPayload: config.MAX_MSG_BYTES,
+    perMessageDeflate: true // 快照 JSON 高重复度，deflate 压 5~10 倍（浏览器原生协商）
+  });
   var conns = {}; // connId → { id, ws, name, roomId }
 
   var matchmaker = new Matchmaker(config, {

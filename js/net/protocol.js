@@ -3,7 +3,8 @@
  * protocol.js — 联机对战协议（v3.0，两端共享：浏览器挂 CS.protocol，Node 可 require）
  *
  * 设计见 docs/architecture/01-online-multiplayer.md §5.1。
- * 消息一律 JSON 文本帧，带 t（type）字段。v1 为全量快照 + 坐标/角度量化（0.1px / 0.001rad），
+ * 消息一律 JSON 文本帧，带 t（type）字段。v1 为全量快照 + 坐标/角度量化（1px / 0.001rad）
+ * + 扁平数组 + 1 字符颜色短码，传输层叠加 permessage-deflate（见 server/index.js），
  * 后续升级二进制/增量时只改本文件。
  *
  * 快照键名采用短键以控制 JSON 体积：
@@ -60,10 +61,27 @@
   };
 
   // ---------------- 量化 ----------------
-  /** 坐标量化到 0.1px（地图 ≤4800×3200，误差肉眼不可见） */
-  function qCoord(v) { return Math.round(v * 10) / 10; }
+  /** 坐标量化到 1px（远程渲染足够；配合 permessage-deflate 控制带宽） */
+  function qCoord(v) { return Math.round(v); }
   /** 角度量化到 0.001rad（≈0.057°） */
   function qAngle(v) { return Math.round(v * 1000) / 1000; }
+
+  // ---------------- 颜色短码（1 字符，快照体积优化） ----------------
+  var COLOR_SHORT = { red: 'r', blue: 'b', green: 'g', orange: 'o', purple: 'u', yellow: 'y', teal: 't', pink: 'k', wild: 'w' };
+  var COLOR_LONG = {};
+  (function () { for (var k in COLOR_SHORT) COLOR_LONG[COLOR_SHORT[k]] = k; })();
+  function cShort(c) { return COLOR_SHORT[c] || 'r'; }
+  function cLong(s) { return COLOR_LONG[s] || 'red'; }
+  function packColors(colors) {
+    var s = '';
+    for (var i = 0; i < colors.length; i++) s += cShort(colors[i]);
+    return s;
+  }
+  function unpackColors(s) {
+    var arr = [];
+    for (var i = 0; i < s.length; i++) arr.push(cLong(s[i]));
+    return arr;
+  }
 
   // ---------------- 编解码 ----------------
   function encode(msg) { return JSON.stringify(msg); }
@@ -86,6 +104,7 @@
 
   /**
    * 序列化一条参赛蛇（Entry 或 RemoteEntry）。
+   * sg 为扁平整数数组 [x0,y0,x1,y1,...]（含尾巴节），co 为 1 字符颜色短码串。
    * @param e Entry（见 multiplayer.js）：{ id, name, isPlayer, alive, kills, elimScore,
    *          elimTotal, maxLen, bittenUntil, slowUntil, snake }
    */
@@ -93,12 +112,12 @@
     var s = e.snake;
     var sg = [];
     for (var i = 0; i < s.segPos.length; i++) {
-      sg.push([qCoord(s.segPos[i].x), qCoord(s.segPos[i].y)]);
+      sg.push(qCoord(s.segPos[i].x), qCoord(s.segPos[i].y));
     }
     return {
       id: e.id, nm: e.name, pl: e.isPlayer ? 1 : 0, al: e.alive ? 1 : 0,
       x: qCoord(s.x), y: qCoord(s.y), a: qAngle(s.angle), sp: qCoord(s.speed),
-      co: s.colors.slice(), sg: sg,
+      co: packColors(s.colors), sg: sg,
       kl: e.kills | 0, es: e.elimScore | 0, et: e.elimTotal | 0, ml: e.maxLen | 0,
       bt: e.bittenUntil | 0, sl: e.slowUntil | 0
     };
@@ -107,15 +126,15 @@
   function serBlock(b) {
     return {
       x: qCoord(b.x), y: qCoord(b.y),
-      c: b.color || null, k: b.kind || 'color', r: b.rarity || null,
-      ph: qCoord(b.phase || 0), ttl: b.ttl | 0, rr: b.rr || b.r || 0
+      c: b.color ? cShort(b.color) : null, k: b.kind || 'color', r: b.rarity || null,
+      ph: Math.round((b.phase || 0) * 100) / 100, ttl: b.ttl | 0, rr: b.rr || b.r || 0
     };
   }
 
   function serMeteor(m) {
     var tr = [];
-    for (var i = 0; i < (m.trail || []).length; i++) tr.push([qCoord(m.trail[i].x), qCoord(m.trail[i].y)]);
-    return { x: qCoord(m.x), y: qCoord(m.y), vx: qCoord(m.vx), vy: qCoord(m.vy), c: m.color, ph: qCoord(m.phase || 0), tr: tr };
+    for (var i = 0; i < (m.trail || []).length; i++) tr.push(qCoord(m.trail[i].x), qCoord(m.trail[i].y));
+    return { x: qCoord(m.x), y: qCoord(m.y), vx: qCoord(m.vx), vy: qCoord(m.vy), c: cShort(m.color), ph: Math.round((m.phase || 0) * 100) / 100, tr: tr };
   }
 
   /** 组装一帧快照 */
@@ -139,24 +158,24 @@
 
   function deSnake(d) {
     var segPos = [];
-    for (var i = 0; i < d.sg.length; i++) segPos.push({ x: d.sg[i][0], y: d.sg[i][1] });
+    for (var i = 0; i + 1 < d.sg.length; i += 2) segPos.push({ x: d.sg[i], y: d.sg[i + 1] });
     return {
       id: d.id, name: d.nm, isPlayer: !!d.pl, alive: !!d.al,
       x: d.x, y: d.y, angle: d.a, speed: d.sp,
-      colors: d.co.slice(), segPos: segPos,
+      colors: unpackColors(d.co), segPos: segPos,
       kills: d.kl, elimScore: d.es, elimTotal: d.et, maxLen: d.ml,
       bittenUntil: d.bt, slowUntil: d.sl
     };
   }
 
   function deBlock(d) {
-    return { x: d.x, y: d.y, color: d.c, kind: d.k, rarity: d.r, phase: d.ph, ttl: d.ttl, r: d.rr || 0 };
+    return { x: d.x, y: d.y, color: d.c ? cLong(d.c) : null, kind: d.k, rarity: d.r, phase: d.ph, ttl: d.ttl, r: d.rr || 0 };
   }
 
   function deMeteor(d) {
     var tr = [];
-    for (var i = 0; i < (d.tr || []).length; i++) tr.push({ x: d.tr[i][0], y: d.tr[i][1] });
-    return { x: d.x, y: d.y, vx: d.vx, vy: d.vy, color: d.c, phase: d.ph, trail: tr };
+    for (var i = 0; i + 1 < (d.tr || []).length; i += 2) tr.push({ x: d.tr[i], y: d.tr[i + 1] });
+    return { x: d.x, y: d.y, vx: d.vx, vy: d.vy, color: cLong(d.c), phase: d.ph, trail: tr };
   }
 
   CS.protocol = {

@@ -1,6 +1,6 @@
 # 联机对战 MVP · 任务拆分与计划
 
-> 状态：进行中 · M0~M3 已完成（2026-08-27）· 剩余 M4 流畅度 / M5 联机 UI / M6 部署
+> 状态：进行中 · M0~M4 主体已完成（2026-08-27）· 剩余 M4.3 事件驱动表现（并入 M5）/ M5 联机 UI / M6 部署
 > 对应设计：`docs/architecture/01-online-multiplayer.md`（下称"架构文档"）
 > 原则：每个里程碑结束都是一个**可运行、可验证**的状态；单机模式全程不许被改坏（smoke 全绿）。
 
@@ -57,10 +57,10 @@
 
 ## M4 流畅度
 
-- [ ] 4.1 `js/net/interpolation.js`：他人蛇 120ms 快照缓冲插值
-- [ ] 4.2 `js/net/prediction.js`：自己蛇本地即时模拟 + 基于 `ack` 的软校正（10%/帧收敛，无瞬移）
+- [x] 4.1 `js/net/interpolation.js`：他人蛇 120ms 快照缓冲插值（已并入 RemoteMatch.renderSample）
+- [x] 4.2 `js/net/prediction.js`：自己蛇本地即时模拟 + 软校正（10%/帧收敛无瞬移；80px 硬对齐自救；smooth.test 验证）
 - [ ] 4.3 事件驱动表现：消除/咬断/道具/播报改由服务器 `event` 触发粒子与音效
-- [ ] 4.4 快照优化：蛇身只传折线关键点 + delta（增量），带宽压到 ≤10 KB/s
+- [x] 4.4 快照优化：整型坐标 + 扁平数组 + 1字符颜色短码 + permessage-deflate，实测 ~20 KB/s（delta/二进制留作后续）
 - 验收：人工 checklist（双标签 + `clumsy`/代理加 100ms 延迟与 5% 丢包）：移动平滑、转向无回弹、消除表现与判定一致
 
 ## M5 联机 UI

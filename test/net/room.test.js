@@ -56,8 +56,9 @@ section('协议编解码');
   ok(P.decode('x'.repeat(70000)) === null, '超长消息返回 null');
 
   // 量化精度
-  ok(Math.abs(P.qCoord(123.456789) - 123.5) < 1e-9, '坐标量化到 0.1px');
+  ok(P.qCoord(123.4) === 123 && P.qCoord(123.6) === 124, '坐标量化到 1px');
   ok(Math.abs(P.qAngle(1.2345678) - 1.235) < 1e-9, '角度量化到 0.001rad');
+  ok(P.qCoord(-0.4) === 0, '坐标量化负零安全');
 
   // 快照序列化/反序列化往返（用真实对局状态）
   var r = runSeededMatch(42, 10);
@@ -68,8 +69,8 @@ section('协议编解码');
   var e0 = r.game.mp.allEntries()[0];
   ok(d0.id === e0.id && d0.name === e0.name && d0.colors.length === e0.snake.colors.length,
     'deSnake 还原 id/name/colors');
-  ok(Math.abs(d0.x - e0.snake.x) < 0.11 && Math.abs(d0.y - e0.snake.y) < 0.11,
-    '坐标往返精度损失 < 0.11px', 'dx=' + Math.abs(d0.x - e0.snake.x));
+  ok(Math.abs(d0.x - e0.snake.x) < 1.1 && Math.abs(d0.y - e0.snake.y) < 1.1,
+    '坐标往返精度损失 < 1.1px', 'dx=' + Math.abs(d0.x - e0.snake.x));
   ok(Math.abs(d0.angle - e0.snake.angle) < 0.0011, '角度往返精度损失 < 0.0011rad');
   ok(d0.segPos.length === e0.snake.segPos.length, '节心数组长度一致（含尾巴节）');
   var b0 = P.deBlock(snap.bl[0]);

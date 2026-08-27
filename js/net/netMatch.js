@@ -51,8 +51,9 @@
 
   /**
    * @param {number} [playerId] 本机玩家 Entry id（matched 消息给出）
+   * @param {object} [opts] { interpDelayMs } 传 0/false 关闭插值（默认 120ms，需 js/net/interpolation.js）
    */
-  function RemoteMatch(playerId) {
+  function RemoteMatch(playerId, opts) {
     this.playerId = playerId || 0;
     this.playerEntry = null;
     this.bots = [];          // 除本机外全部 Entry 视图
@@ -63,13 +64,21 @@
     this.tick = 0;
     this.lastAck = 0;
     this._byId = {};
+    var delay = opts && 'interpDelayMs' in opts ? opts.interpDelayMs : 120;
+    this._interp = (delay && CS.InterpBuffer) ? new CS.InterpBuffer(delay) : null;
   }
 
-  /** 应用一帧快照（protocol.snap 结构） */
-  RemoteMatch.prototype.applySnap = function (snap) {
+  /** 应用一帧快照（protocol.snap 结构）；色块/流星取最新，蛇进插值缓冲 */
+  RemoteMatch.prototype.applySnap = function (snap, nowMs) {
     this.tick = snap.tk;
     this.timeMs = snap.tm;
     this.lastAck = snap.ack;
+    this._applyLatest(snap);
+    if (this._interp) this._interp.push(snap, nowMs || Date.now(), P.deSnake);
+  };
+
+  /** 最新快照直达（M2 行为；插值关闭时渲染也用它） */
+  RemoteMatch.prototype._applyLatest = function (snap) {
     var i, d, e;
     for (i = 0; i < snap.sn.length; i++) {
       d = P.deSnake(snap.sn[i]);
@@ -85,6 +94,21 @@
     }
     this.blocks = snap.bl.map(P.deBlock);
     this.meteors = snap.mt.map(P.deMeteor);
+  };
+
+  /**
+   * 每帧渲染前调用：把「非本机」Entry 视图改写为 120ms 延迟的插值状态。
+   * 本机 Entry 不动（由 SelfPredictor 负责）；插值关闭时为空操作。
+   */
+  RemoteMatch.prototype.renderSample = function (nowMs) {
+    if (!this._interp) return;
+    var s = this._interp.sample(nowMs || Date.now());
+    if (!s) return;
+    for (var id in s) {
+      if (+id === this.playerId) continue; // 本机蛇走预测
+      var e = this._byId[id];
+      if (e) updateEntryView(e, s[id]);
+    }
   };
 
   // ---- 与 CS.Multiplayer 同构的只读接口（renderer/game 复用） ----
