@@ -49,7 +49,8 @@
     GRAB_SPAWN: 'grab_spawn', // { k, x, y }（彩色星出现，播报表+小地图涟漪）
     METEOR: 'meteor',     // { k, id, idx, color, x, y }（流星注入）
     BITE: 'bite',         // { k, id(被咬者), seg, x, y, color }
-    SELF_PULL: 'self_pull'// { k, id, x, y, color }
+    SELF_PULL: 'self_pull',// { k, id, x, y, color }
+    WALL: 'wall'          // { k, x, y, w, h }（动态墙体新增，客户端补画）
   };
   // over.reason
   var OVER_REASON = {
@@ -119,6 +120,7 @@
       x: qCoord(s.x), y: qCoord(s.y), a: qAngle(s.angle), sp: qCoord(s.speed),
       co: packColors(s.colors), sg: sg,
       kl: e.kills | 0, es: e.elimScore | 0, et: e.elimTotal | 0, ml: e.maxLen | 0,
+      sv: e.survivalScore | 0, mb: e.mpBonusScore | 0, // 生存分/彩色星加成（HUD 计分显示）
       bt: e.bittenUntil | 0, sl: e.slowUntil | 0
     };
   }
@@ -164,6 +166,7 @@
       x: d.x, y: d.y, angle: d.a, speed: d.sp,
       colors: unpackColors(d.co), segPos: segPos,
       kills: d.kl, elimScore: d.es, elimTotal: d.et, maxLen: d.ml,
+      survivalScore: d.sv, mpBonusScore: d.mb,
       bittenUntil: d.bt, slowUntil: d.sl
     };
   }

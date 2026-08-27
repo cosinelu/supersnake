@@ -65,12 +65,14 @@ Room.prototype.start = function () {
   for (var cid in this.humans) {
     players.push({ id: this.humans[cid].entry.id, name: this.humans[cid].name });
   }
+  // 初始墙体一并下发（后续新增墙体走 wall 事件增量广播）
+  var walls = this.game.walls.rects.map(function (r) { return [r.x | 0, r.y | 0, r.w | 0, r.h | 0]; });
   for (var c in this.humans) {
     var h = this.humans[c];
     h.send({
       t: P.S2C.MATCHED, roomId: this.id, playerId: h.entry.id,
       players: players, countdownMs: this.config.COUNTDOWN_MS,
-      W: this.game.W, H: this.game.H
+      W: this.game.W, H: this.game.H, walls: walls
     });
   }
 };

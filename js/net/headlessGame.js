@@ -125,7 +125,7 @@
       this.spawner.unlockedKeys = this.unlockedKeys;
     }
 
-    // 动态墙体生成（同 Game.updateWallSpawn，避让点 = 全部活蛇节）
+    // 动态墙体生成（同 Game.updateWallSpawn，避让点 = 全部活蛇节）；新增墙体逐个广播
     this.wallSpawnTimer -= dt;
     if (this.wallSpawnTimer <= 0) {
       this.wallSpawnTimer = cfg.WALL_SPAWN_INTERVAL_MS;
@@ -135,7 +135,12 @@
         var sp = live[i].segPos;
         for (var k = 0; k < sp.length; k++) pts.push(sp[k]);
       }
+      var before = this.walls.rects.length;
       this.walls.addRandomWall(pts, cfg.WALL_SPAWN_MAX);
+      for (var w = before; w < this.walls.rects.length; w++) {
+        var r = this.walls.rects[w];
+        this.onMpEvent('wall', { x: r.x | 0, y: r.y | 0, w: r.w | 0, h: r.h | 0 });
+      }
     }
 
     this.mp.update(dt);

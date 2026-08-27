@@ -41,10 +41,11 @@
     this.playerEntry = players[0];
     this.tickCount = 0;
     this._overSent = false;
+    var walls = this.game.walls.rects.map(function (r) { return [r.x | 0, r.y | 0, r.w | 0, r.h | 0]; });
     this._emit('matched', {
       roomId: 'local', playerId: this.playerEntry.id,
       players: [{ id: this.playerEntry.id, name: this.playerEntry.name }],
-      countdownMs: 0, W: this.game.W, H: this.game.H
+      countdownMs: 0, W: this.game.W, H: this.game.H, walls: walls
     });
     this._emit('start', { tick: 0 });
   };

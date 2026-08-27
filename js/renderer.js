@@ -987,7 +987,7 @@
     ctx.font = '12px sans-serif';
     ctx.globalAlpha = 0.75;
     var modeText = game.mode === 'level' ? ('闯关模式 · 第 ' + game.levelCfg.level + ' 关')
-      : (game.mode === 'multi' ? '多人对战 · 7 蛇同场' : '无尽模式');
+      : (game.mode === 'multi' ? (game.online ? '在线对战 · 真人匹配' : '多人对战 · 7 蛇同场') : '无尽模式');
     ctx.fillText(modeText, cx, 46);
     ctx.globalAlpha = 1;
 
@@ -1436,6 +1436,62 @@
     for (var i = 0; i < game.uiButtons.length; i++) this.drawButton(game.uiButtons[i]);
   };
 
+  // ---------------- 在线对战匹配界面（v3.0） ----------------
+
+  /**
+   * 匹配等待页：标题 + 昵称 + 状态行（连接/排队位次/倒计时，省略号动画）+
+   * 规则提示（掉线判负不重连）+ 取消按钮。数据全部来自 game.online（CS.OnlineMatch）。
+   */
+  Renderer.prototype.drawMatching = function (game) {
+    var ctx = this.ctx, W = this.W, H = this.H, cx = W / 2;
+    var om = game.online;
+
+    // 标题
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.font = 'bold 40px sans-serif';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText('在线对战', cx, H * 0.30);
+    ctx.fillStyle = '#4A7FD4';
+    ctx.fillText('在线对战', cx, H * 0.30);
+
+    // 昵称
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    ctx.globalAlpha = 0.75;
+    ctx.fillText('昵称：' + (om ? om.nick : '…'), cx, H * 0.30 + 40);
+    ctx.globalAlpha = 1;
+
+    // 状态行（省略号跳动）
+    var dots = ['', '.', '..', '...'][Math.floor(game.timeMs / 400) % 4];
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillStyle = '#C47F17';
+    var status = om ? om.status : '正在连接服务器…';
+    ctx.fillText(status + (/[…。！？：:]$/.test(status) ? '' : dots), cx, H * 0.48);
+
+    // 详情行（队列位次 / 对手数）
+    if (om && om.detail) {
+      ctx.font = '14px sans-serif';
+      ctx.fillStyle = cfg.INK;
+      ctx.globalAlpha = 0.8;
+      ctx.fillText(om.detail, cx, H * 0.48 + 30);
+      ctx.globalAlpha = 1;
+    }
+
+    // 规则提示
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('真人匹配 · 人满即开（不足补 AI） · 掉线直接判负，不支持重连', cx, H * 0.60);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    this.drawButtons(game); // 取消匹配
+  };
+
   // ---------------- 多人对战结算（手绘风卡片 + 逐行统计，v2.2） ----------------
 
   /**
@@ -1534,9 +1590,9 @@
     ctx.stroke();
     ctx.restore();
 
-    // ---- 标题区（按名次变化）----
-    var title = r.rank === 1 ? '冠军！' : (r.rank <= 3 ? '很棒！' : '再接再厉');
-    var titleColor = r.rank === 1 ? '#C47F17' : (r.rank <= 3 ? '#4A8C3F' : cfg.INK);
+    // ---- 标题区（按名次变化；掉线判负覆盖）----
+    var title = r.dropped ? '掉线判负' : (r.rank === 1 ? '冠军！' : (r.rank <= 3 ? '很棒！' : '再接再厉'));
+    var titleColor = r.dropped ? '#E8552F' : (r.rank === 1 ? '#C47F17' : (r.rank <= 3 ? '#4A8C3F' : cfg.INK));
     var ty = y + padV + 50;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1563,7 +1619,7 @@
     ctx.font = '12px sans-serif';
     ctx.globalAlpha = aCard * 0.65;
     ctx.fillStyle = cfg.INK;
-    ctx.fillText('多人对战 · 7 蛇同场', cx, ty + 30);
+    ctx.fillText(r.dropped ? '连接中断，不支持重连' : (r.online ? '在线对战 · 真人匹配' : '多人对战 · 7 蛇同场'), cx, ty + 30);
     ctx.globalAlpha = aCard;
 
     // ---- 统计行（每行一项，依次延迟 ~80ms 从左侧滑入）----
@@ -2089,6 +2145,7 @@
     if (game.state === 'menu') { this.drawMenu(game); return; }
     if (game.state === 'guide') { this.drawGuide(game); return; }
     if (game.state === 'levels') { this.drawLevels(game); return; }
+    if (game.state === 'matching') { this.drawMatching(game); return; }
     // play / clear / over 都先画对局场景（世界 + 相机）
     this.drawPlay(game);
     this.drawPanel(game);

@@ -53,6 +53,7 @@
     this.elimCombo = 0;     // 连击层数（v2.9）：窗口内连续触发消除 +1，分数 ×combo
     this.elimComboTimer = 0; // 连击剩余窗口（ms），每帧衰减
     this.mp = null;       // 多人对战编排器（mode==='multi' 时非空）
+    this.online = null;   // 在线对战控制器（CS.OnlineMatch，在线对局时非空，帧更新委托给它）
     this.mpResult = null; // 多人结算数据 {surviveSec, score, survivalScore, elimScore, elimTotal,
                         //   rank, kills, finalLen, maxLen, bestLen, bestScore, newBest}
     this.overAt = 0;      // 进入结算界面的时刻（timeMs，结算卡片/逐行动画计时起点）
@@ -439,6 +440,7 @@
 
     // 多人对战：蛇群推进/淘汰/补充全部由 mp 编排（含吃色与消除）
     if (this.mode === 'multi') {
+      if (this.online) { this.online.update(dt); return; } // 在线：预测+插值+快照同步
       this.updateWallSpawn(dt);
       this.updateMulti(dt);
       return;
@@ -594,10 +596,13 @@
     var W = this.screenW, H = this.screenH, cx = W / 2;
     var bw = Math.min(220, W * 0.3), bh = 54;
     if (this.state === 'menu') {
-      this.addButton('level', cx, H * 0.44, bw, bh, '闯关模式');
-      this.addButton('endless', cx, H * 0.44 + bh + 16, bw, bh, '无尽模式');
-      this.addButton('multi', cx, H * 0.44 + 2 * (bh + 16), bw, bh, '多人对战');
-      this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), bw, bh, '图鉴');
+      this.addButton('level', cx, H * 0.40, bw, bh, '闯关模式');
+      this.addButton('endless', cx, H * 0.40 + bh + 16, bw, bh, '无尽模式');
+      this.addButton('multi', cx, H * 0.40 + 2 * (bh + 16), bw, bh, '多人对战');
+      this.addButton('online', cx, H * 0.40 + 3 * (bh + 16), bw, bh, '在线对战');
+      this.addButton('guide', cx, H * 0.40 + 4 * (bh + 16), bw, bh, '图鉴');
+    } else if (this.state === 'matching') {
+      this.addButton('online_cancel', cx, H * 0.72, bw, bh, '取消匹配');
     } else if (this.state === 'guide') {
       // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
       this.addButton('back', W / 2, H - 28, 120, 38, '← 返回');
@@ -634,11 +639,14 @@
     if (id === 'level') this.setState('levels');
     else if (id === 'endless') this.startEndless();
     else if (id === 'multi') this.startMulti();
+    else if (id === 'online') this.startOnline();
+    else if (id === 'online_cancel') this.cancelOnline();
     else if (id === 'guide') { this.guidePage = 0; this.guideTab = 'items'; this.setState('guide'); }
     else if (id === 'back') this.setState('menu');
-    else if (id === 'menu') this.setState('menu');
+    else if (id === 'menu') { this._teardownOnline(); this.setState('menu'); }
     else if (id === 'retry') {
-      if (this.mode === 'level') this.startLevel(this.levelCfg.level);
+      if (this.online) this.startOnline(); // 在线结算「再来一局」→ 重新匹配
+      else if (this.mode === 'level') this.startLevel(this.levelCfg.level);
       else if (this.mode === 'multi') this.startMulti();
       else this.startEndless();
     }
@@ -647,6 +655,29 @@
       var n = parseInt(id.slice(2), 10);
       if (n >= 1 && n <= this.unlocked) this.startLevel(n);
     }
+  };
+
+  // ---------------- 在线对战（v3.0：匹配 → 联机对局，见 js/net/onlineMatch.js） ----------------
+
+  /** 进入在线匹配：mode 置 multi（渲染分支复用），状态切 matching，控制器接管后续 */
+  Game.prototype.startOnline = function () {
+    this._teardownOnline();
+    if (!CS.OnlineMatch) return; // 联机模块未加载（极端：script 缺失）→ 静默忽略
+    this.mode = 'multi';
+    this.online = new CS.OnlineMatch(this, {});
+    this.setState('matching');
+    this.online.begin();
+  };
+
+  /** 取消匹配（matching 界面按钮）：释放连接回菜单 */
+  Game.prototype.cancelOnline = function () {
+    this._teardownOnline();
+    this.setState('menu');
+  };
+
+  /** 释放在线控制器（如有）；对局结束后 online 保留供 retry 判断，这里统一清理 */
+  Game.prototype._teardownOnline = function () {
+    if (this.online) { this.online.dispose(); this.online = null; }
   };
 
   // ---------------- 触摸/鼠标入口（main.js 转发，坐标为 CSS 逻辑像素） ----------------

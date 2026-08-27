@@ -34,6 +34,7 @@
     return {
       id: d.id, name: d.name, isPlayer: d.isPlayer, alive: d.alive,
       kills: d.kills, elimScore: d.elimScore, elimTotal: d.elimTotal, maxLen: d.maxLen,
+      survivalScore: d.survivalScore || 0, mpBonusScore: d.mpBonusScore || 0,
       bittenUntil: d.bittenUntil, slowUntil: d.slowUntil,
       snake: makeSnakeView(d)
     };
@@ -43,6 +44,7 @@
   function updateEntryView(e, d) {
     e.name = d.name; e.isPlayer = d.isPlayer; e.alive = d.alive;
     e.kills = d.kills; e.elimScore = d.elimScore; e.elimTotal = d.elimTotal; e.maxLen = d.maxLen;
+    e.survivalScore = d.survivalScore || 0; e.mpBonusScore = d.mpBonusScore || 0;
     e.bittenUntil = d.bittenUntil; e.slowUntil = d.slowUntil;
     var s = e.snake;
     s.x = d.x; s.y = d.y; s.angle = d.angle; s.targetAngle = d.angle; s.speed = d.speed;

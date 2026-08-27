@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node ../test/smoke.js && node ../test/net/room.test.js && node ../test/net/integration.js && node ../test/net/smooth.test.js && node ../test/net/run-all.js"
+    "test": "node ../test/smoke.js && node ../test/net/room.test.js && node ../test/net/integration.js && node ../test/net/smooth.test.js && node ../test/net/ui.online.test.js && node ../test/net/run-all.js"
   },
   "license": "ISC",
   "type": "commonjs",
