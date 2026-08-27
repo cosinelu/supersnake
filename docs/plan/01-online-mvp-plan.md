@@ -1,6 +1,6 @@
 # 联机对战 MVP · 任务拆分与计划
 
-> 状态：进行中 · M0~M5 已完成（2026-08-27，M4.3 已并入 M5 完成）· 剩余 M6 部署上云
+> 状态：全部里程碑 M0~M6 代码完成（2026-08-27）· 剩余人工验收：双标签页走查 + 腾讯云真机部署对测
 > 对应设计：`docs/architecture/01-online-multiplayer.md`（下称"架构文档"）
 > 原则：每个里程碑结束都是一个**可运行、可验证**的状态；单机模式全程不许被改坏（smoke 全绿）。
 
@@ -74,11 +74,12 @@
 
 ## M6 部署上云
 
-- [ ] 6.1 `scripts/server-init.sh`：Node 22 + Nginx + systemd 单元 + certbot（架构文档 §8）
-- [ ] 6.2 Nginx 站点配置：`/` 静态 + `/ws` 反代（Upgrade 头、长超时）
-- [ ] 6.3 客户端 ws 地址按 `location.host` 同域自适应；单机静态版构建流程不变
-- [ ] 6.4 `test/net/load.js`：模拟 N 客户端压测，验证 2核2G ≥ 100 并发房间
-- 验收：腾讯云真机，两台不同网络设备对测一整局；压测达标
+- [x] 6.1 `scripts/server-init.sh`：Node 22 + Nginx + systemd 单元 + certbot（Ubuntu 24.04，架构文档 §8）
+- [x] 6.2 Nginx 站点配置（随 6.1 生成）：`/` 静态 + `/ws` 反代（Upgrade 头、3600s 超时）
+- [x] 6.3 客户端 ws 地址按 `location.host` 同域自适应（wsTransport 缺省 `/ws`；localStorage `crayon_snake_web_server` 可覆盖）；server/config 支持 PORT/HOST 环境变量
+- [x] 6.4 `test/net/load.js`：N 客户端压测（`node test/net/load.js 100 10`）——100 端 25 房：快照 14.9/15 Hz、线上 ~18.6 KB/s/端、无饿死
+- 附带修复：`Room.run()` 改累加器补帧（Windows 15.6ms 定时器粒度下 setInterval(33) 仅 ~21Hz，按真实流逝补步长，游戏时间=真实时间）
+- 剩余人工验收：腾讯云真机双端对测 + 真机压测复核（2核2G 目标 ≥25 房/100 端）
 
 ---
 

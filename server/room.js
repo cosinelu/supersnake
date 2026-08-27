@@ -77,11 +77,26 @@ Room.prototype.start = function () {
   }
 };
 
-/** 真实时钟循环（生产用；须在 start() 之后调用；测试直接调 step 不需要本方法） */
+/** 真实时钟循环（生产用；须在 start() 之后调用；测试直接调 step 不需要本方法）
+ *  累加器补帧：Windows 定时器粒度 15.6ms 时 setInterval(33) 实际只有 ~21Hz，
+ *  按真实流逝时间补齐固定步长，保证游戏时间 = 真实时间（Linux 1ms 粒度下等价直跑）。 */
 Room.prototype.run = function () {
   var self = this;
   if (this._timer) return;
-  this._timer = setInterval(function () { self.step(self.config.TICK_MS); }, this.config.TICK_MS);
+  var last = this.config.nowFn();
+  var acc = 0;
+  this._timer = setInterval(function () {
+    var now = self.config.nowFn();
+    acc += now - last;
+    last = now;
+    var n = 0;
+    while (acc >= self.config.TICK_MS && n < 4 && self.state !== 'over') {
+      self.step(self.config.TICK_MS);
+      acc -= self.config.TICK_MS;
+      n++;
+    }
+    if (acc >= self.config.TICK_MS) acc = 0; // 长卡顿丢弃欠账，防追帧螺旋
+  }, this.config.TICK_MS);
 };
 
 /** 便捷：start + run（单房间调试模式用） */

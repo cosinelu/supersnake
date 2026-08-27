@@ -4,8 +4,8 @@
  * 测试可通过 Object.assign({}, base, overrides) 注入小参数（短倒计时/短对局等）。
  */
 module.exports = {
-  PORT: 8090,               // ws 监听端口（生产由 Nginx /ws 反代到 127.0.0.1:8090）
-  HOST: '127.0.0.1',
+  PORT: parseInt(process.env.PORT, 10) || 8090, // ws 监听端口（生产由 Nginx /ws 反代到 127.0.0.1:8090）
+  HOST: process.env.HOST || '127.0.0.1',
 
   TICK_MS: 33,              // 房间模拟步长（30Hz 固定步长）
   SNAP_EVERY: 2,            // 每 2 tick 广播一帧快照（15Hz）
