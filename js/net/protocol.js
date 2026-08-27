@@ -80,7 +80,7 @@
   function join(name) { return { t: C2S.JOIN, ver: PROTO_VER, name: String(name || '玩家').slice(0, 12) }; }
   function cancel() { return { t: C2S.CANCEL }; }
   function input(seq, angle, boost) { return { t: C2S.INPUT, seq: seq | 0, a: qAngle(angle), bo: boost ? 1 : 0 }; }
-  function ping(ts) { return { t: C2S.PING, ts: ts | 0 }; }
+  function ping(ts) { return { t: C2S.PING, ts: ts }; }
 
   // ---------------- 快照序列化（服务器/LocalTransport 产出） ----------------
 

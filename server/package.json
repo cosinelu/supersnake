@@ -1,0 +1,15 @@
+{
+  "name": "supersnake-server",
+  "version": "0.1.0",
+  "description": "消食蛇联机对战服务器（匹配 + 房间模拟 + WebSocket）",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node ../test/smoke.js && node ../test/net/room.test.js && node ../test/net/integration.js && node ../test/net/run-all.js"
+  },
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
+}

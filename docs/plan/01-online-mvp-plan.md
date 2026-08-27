@@ -1,6 +1,6 @@
 # 联机对战 MVP · 任务拆分与计划
 
-> 状态：待评审 · 2026-08-27
+> 状态：进行中 · M0~M3 已完成（2026-08-27）· 剩余 M4 流畅度 / M5 联机 UI / M6 部署
 > 对应设计：`docs/architecture/01-online-multiplayer.md`（下称"架构文档"）
 > 原则：每个里程碑结束都是一个**可运行、可验证**的状态；单机模式全程不许被改坏（smoke 全绿）。
 
@@ -22,37 +22,37 @@
 
 ## M0 地基（纯客户端，不碰服务器）
 
-- [ ] 0.1 新建 `js/net/protocol.js`：消息类型常量、encode/decode、`snap` 的蛇/食物/道具序列化与反序列化（坐标/角度量化函数）
-- [ ] 0.2 新建 `js/net/transport.js`：接口定义（架构文档 §5.2）
-- [ ] 0.3 新建 `js/net/localTransport.js`：包装现有 `CS.Multiplayer`，输出与 `snap/event` 同构的数据流
-- [ ] 0.4 新建 `js/net/netMatch.js`：数据源抽象（本地/联机两实现），game.js 多人分支改为只读数据源
-- [ ] 0.5 `test/smoke.js` 扩充：协议编解码往返一致、量化精度损失 < 1px、LocalTransport 数据流与 multiplayer 实例状态一致
+- [x] 0.1 新建 `js/net/protocol.js`：消息类型常量、encode/decode、`snap` 的蛇/食物/道具序列化与反序列化（坐标/角度量化函数）
+- [x] 0.2 新建 `js/net/transport.js`：接口定义（架构文档 §5.2）
+- [x] 0.3 新建 `js/net/localTransport.js`：包装现有 `CS.Multiplayer`，输出与 `snap/event` 同构的数据流
+- [x] 0.4 新建 `js/net/netMatch.js`：RemoteMatch 与 Multiplayer 同构的形状模仿视图（renderer/game 零改动即可消费联机数据流）——实现时以形状模仿替代对 game.js 的侵入式改造，风险更低
+- [x] 0.5 `test/smoke.js` 扩充：协议编解码往返一致、量化精度损失 < 1px、LocalTransport 数据流与 multiplayer 实例状态一致
 - 验收：`node test/smoke.js` 全绿；单机三模式手工各玩一局无回归
 
 ## M1 无头服务端（Node，不开网络）
 
-- [ ] 1.1 `server/` 骨架：`package.json`（仅 ws 依赖）、`config.js`（含**可注入 `rng()` 随机源**，默认 `Math.random`，测试注入种子序列——联机自动测试确定性的前提）
-- [ ] 1.2 `server/headlessGame.js`：game 上下文桩 + `CS.audio` no-op 桩（字段清单见架构文档 §5.3）；房间内所有 `Math.random` 调用点（道具刷新/尸体相位等）改走注入的 `rng()`
-- [ ] 1.3 `server/room.js`：固定 33ms tick 循环、快照生成（复用 protocol 序列化）、事件收集；tick 循环支持**手动步进**（测试加速用，不等墙钟）
-- [ ] 1.4 `test/net/room.test.js`：内存中建房，4 条 AI 蛇跑满整局，断言对局能到 `over`、排行分数非负、尸体掉落数量正确；固定种子跑两次断言结果完全一致
+- [x] 1.1 `server/` 骨架：`package.json`（仅 ws 依赖）、`config.js`（含**可注入 `rng()` 随机源**，默认 `Math.random`，测试注入种子序列——联机自动测试确定性的前提）
+- [x] 1.2 `server/headlessGame.js`：game 上下文桩 + `CS.audio` no-op 桩（字段清单见架构文档 §5.3）；房间内所有 `Math.random` 调用点（道具刷新/尸体相位等）改走注入的 `rng()`
+- [x] 1.3 `server/room.js`：固定 33ms tick 循环、快照生成（复用 protocol 序列化）、事件收集；tick 循环支持**手动步进**（测试加速用，不等墙钟）
+- [x] 1.4 `test/net/room.test.js`：内存中建房，4 条 AI 蛇跑满整局，断言对局能到 `over`、排行分数非负、尸体掉落数量正确；固定种子跑两次断言结果完全一致
 - 验收：`node test/net/room.test.js` 通过；3000 tick 模拟耗时 < 3s（性能基准）；同种子双跑结果一致
 
 ## M2 联机打通
 
-- [ ] 2.1 `server/index.js`：ws 服务、连接注册、单房间直通（先进先开调试模式：连上即进房）
-- [ ] 2.2 `js/net/wsTransport.js`：连接、心跳、input 上行（30Hz 节流）、snap/event 下行
-- [ ] 2.3 房间输入接入：真人蛇的角度/boost 由 ws 输入驱动（保留最新值）
-- [ ] 2.4 客户端渲染接入：netMatch 联机数据源 = 最新快照（**暂不做插值**，先求通）
-- [ ] 2.5 `test/net/botClient.js`：**脚本化机器人客户端**——真实 ws 连接 + 种子驱动的输入序列（游走/抢食/加速等行为可配），记录收到的全部消息供断言
-- [ ] 2.6 `test/net/integration.js`：真实 ws server + 2 机器人客户端，跑完加入→输入→收快照→结束全流程；全局断言（tick 单调、ack 不超前、坐标在界内）
+- [x] 2.1 `server/index.js`：ws 服务、连接注册、单房间直通（先进先开调试模式：连上即进房）
+- [x] 2.2 `js/net/wsTransport.js`：连接、心跳、input 上行（30Hz 节流）、snap/event 下行
+- [x] 2.3 房间输入接入：真人蛇的角度/boost 由 ws 输入驱动（保留最新值）
+- [x] 2.4 客户端渲染接入：netMatch 联机数据源 = 最新快照（**暂不做插值**，先求通）
+- [x] 2.5 `test/net/botClient.js`：**脚本化机器人客户端**——真实 ws 连接 + 种子驱动的输入序列（游走/抢食/加速等行为可配），记录收到的全部消息供断言
+- [x] 2.6 `test/net/integration.js`：真实 ws server + 2 机器人客户端，跑完加入→输入→收快照→结束全流程；全局断言（tick 单调、ack 不超前、坐标在界内）
 - 验收：本地 `node server/index.js` + 两个浏览器标签互见对方蛇实时移动（允许有跳变，M4 解决）；机器人集成测试通过
 
 ## M3 匹配与对局生命周期
 
-- [ ] 3.1 `server/matchmaker.js`：队列、满 4 建房、20s 超时 AI 补位、`queued/matched/start` 流程
-- [ ] 3.2 掉线判负：ws close → 蛇死亡 → 尸体掉落 → event 广播；存活真人 ≤1 → `over`
-- [ ] 3.3 5 分钟超时按总分结算；over 后房间销毁、连接状态复位（可再次 join）
-- [ ] 3.4 `test/net/run-all.js`：**联机自动回归总入口**（架构文档 §9.2）——一条命令跑齐 5 个场景：正常 4 人局 / 中途掉线判负局 / 超时 AI 补位局 / over 后再匹配局 / 畸形消息健壮性；固定种子确定性复现；全套 ≤ 60s
+- [x] 3.1 `server/matchmaker.js`：队列、满 4 建房、20s 超时 AI 补位、`queued/matched/start` 流程
+- [x] 3.2 掉线判负：ws close → 蛇死亡 → 尸体掉落 → event 广播；存活真人 ≤1 → `over`
+- [x] 3.3 5 分钟超时按总分结算；over 后房间销毁、连接状态复位（可再次 join）
+- [x] 3.4 `test/net/run-all.js`：**联机自动回归总入口**（架构文档 §9.2）——一条命令跑齐 5 个场景：正常 4 人局 / 中途掉线判负局 / 超时 AI 补位局 / over 后再匹配局 / 畸形消息健壮性；固定种子确定性复现；全套 ≤ 60s
 - 验收：`node test/smoke.js && node test/net/run-all.js` 全绿；手工双标签页验证"关一个标签，另一个看到对方尸体+结算"
 
 ## M4 流畅度
