@@ -67,7 +67,7 @@
       var y = m + Math.random() * (w.H - 2 * m);
       if (x < edgePad || x > w.W - edgePad || y < edgePad || y > w.H - edgePad) continue;
       if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 22)) continue;       // 不压内部墙（加大余量）
-      if (s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;            // 离玩家 ≥80px
+      if (s && s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;       // 离主蛇 ≥80px（联机服务器无主蛇，靠 others 避让）
       var nearOther = false;
       for (var oi = 0; oi < this.others.length; oi++) {               // 多人：其他活蛇同样避让
         if (this.others[oi].distTo(x, y) < cfg.BLOCK_SNAKE_DIST) { nearOther = true; break; }
@@ -196,9 +196,11 @@
   /**
    * 生成一颗流星砖块：只从上下左右四个正方向之一，平行于地图边、从一侧直飞到对侧。
    * 出生在对应边缘（屏幕外一点），沿该正方向匀速直线飞向对侧边缘；
-   * 出生位置在蛇附近 ±band 的带内，保证流星会经过玩家区域、有机会命中身体注入中段。
+   * 出生位置在目标蛇附近 ±band 的带内，保证流星会经过玩家区域、有机会命中身体注入中段。
+   * @param {object} snake 目标蛇（updateMeteors 从目标列表中随机选定；联机多真人时每颗目标独立）
    */
   Spawner.prototype.spawnMeteor = function (snake) {
+    if (!snake) return; // 无存活真人目标：本周期不投放
     var W = this.walls.W, H = this.walls.H;
     var dirs = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
     var d = dirs[Math.floor(Math.random() * 4)];
@@ -225,15 +227,18 @@
 
   /**
    * 每帧更新流星：直线匀速移动（无归向）+ 碰撞检测。
-   * 命中任意身体节 → 返回注入事件 [{idx, x, y, color}]，由 game 调用 snake.insertAt 注入中段。
-   * 未命中且出界/超时则消失。
+   * 命中任意目标蛇身体节 → 返回注入事件 [{snake, idx, x, y, color}]（snake 为被命中的目标），
+   * 由调用方对该 snake 调用 insertAt 注入中段。未命中且出界/超时则消失。
+   * @param {object|object[]} snakes 目标蛇或目标蛇数组（单人传单蛇；联机传全部存活真人蛇）
    * @returns {Array} 本帧发生的注入事件
    */
-  Spawner.prototype.updateMeteors = function (dtMs, snake) {
+  Spawner.prototype.updateMeteors = function (dtMs, snakes) {
+    var list = Array.isArray(snakes) ? snakes : (snakes ? [snakes] : []);
     this.meteorTimer -= dtMs;
     if (this.meteorTimer <= 0 && this.meteors.length < cfg.METEOR_MAX) {
       this.meteorTimer = cfg.METEOR_INTERVAL_MS;
-      this.spawnMeteor(snake);
+      // 随机选一个目标投放（联机多真人：每颗流星的目标独立随机，雨露均沾）
+      this.spawnMeteor(list.length ? list[Math.floor(Math.random() * list.length)] : null);
     }
     var events = [], dt = dtMs / 1000;
     for (var i = this.meteors.length - 1; i >= 0; i--) {
@@ -242,9 +247,13 @@
       if (m.trail.length > 6) m.trail.shift();
       m.x += m.vx * dt; m.y += m.vy * dt;
       m.ttl -= dtMs;
-      var hit = snake.segIndexAt(m.x, m.y, cfg.METEOR_HIT_R);
-      if (hit >= 0) {
-        events.push({ idx: hit, x: m.x, y: m.y, color: m.color });
+      var hitSnake = null, hitIdx = -1;
+      for (var si = 0; si < list.length; si++) {
+        var h = list[si].segIndexAt(m.x, m.y, cfg.METEOR_HIT_R);
+        if (h >= 0) { hitSnake = list[si]; hitIdx = h; break; }
+      }
+      if (hitSnake) {
+        events.push({ snake: hitSnake, idx: hitIdx, x: m.x, y: m.y, color: m.color });
         this.meteors.splice(i, 1);
         continue;
       }

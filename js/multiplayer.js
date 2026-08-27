@@ -1,8 +1,9 @@
 'use strict';
 /**
- * multiplayer.js — 多人对战模式编排（玩家 1 名 + AI 蛇，DOM 无关）
+ * multiplayer.js — 多人对战模式编排（N 名真人玩家 + AI 蛇，DOM 无关）
  * 职责：
- *  - 蛇管理：玩家 1 名 + AI 蛇（v2.8.7 起**动态增长**：开局 MP_AI_START_COUNT 条（默认 3），
+ *  - 蛇管理：真人玩家 N 名（v3.0 起支持多真人，见 addPlayer；本地单机对局为 1 名）+ AI 蛇
+ *    （v2.8.7 起**动态增长**：开局 MP_AI_START_COUNT 条（默认 3），
  *    （独立 Snake 实例、昵称、基础速度档位、性格参数 greed/caution、击杀数、消除分、历史最长节数）；
  *  - 淘汰：头撞墙/边界 → 淘汰；头撞其他蛇身体节 → 淘汰（身体主人记 1 击杀）；
  *    头对头相撞 → 两条都淘汰（简单公平，不记击杀）；不做蛇身自碰（沿用现有设计）；
@@ -16,11 +17,20 @@
  *  - 尸体掉落：被淘汰蛇的颜色序列按节在原地散落成色块（每隔 MP_CORPSE_STRIDE 节掉 1 个，
  *    起点随机 → ≈50% 的节变成可吃色块），多人模式的主要资源循环；
  *  - 补充：AI 淘汰后延迟 MP_RESPAWN_MIN_MS~MP_RESPAWN_MAX_MS 在世界边缘、远离其他蛇的
- *    安全位置重生（初始 MP_START_LENGTH 节），维持编制；玩家不重生（由 game 进结算）；
+ *    安全位置重生（初始 MP_START_LENGTH 节），维持编制；真人不重生（由 game/room 结算）；
  *  - 吃色/消除：所有蛇共用同一套 grow / 4 连消除连锁逻辑（Snake 类原样复用）；
- *    连锁倍率计分与特效与单人模式一致（消除分只计入玩家成绩，AI 的 elimScore 仅供调试）；
+ *    连锁倍率计分与特效与单人模式一致（消除分计入各真人 Entry，AI 的 elimScore 仅供调试）；
  *  - 速度：所有蛇按 基础速度 + SPEED_LEN_COEF×节数 + ENDLESS_SPEEDUP_PER_SEC×存活秒 动态加速，
  *    封顶 SPEED_MAX（AI 基础速度在 MP_AI_SPEED_MIN~MAX 随机，玩家用 SNAKE_SPEED）。
+ *
+ * v3.0 联机改造（对本地单机行为完全等价）：
+ *  - players[]：真人 Entry 列表（addPlayer 加入；setup() 无真人时回退为本地单真人 game.snake）；
+ *  - liveSnakes[]：全部活蛇活引用（spawner.others 改用它，多真人时刷新避让所有真人）；
+ *  - 连击 combo / 生存分 survivalScore / 彩色星加成 mpBonusScore 下沉到 Entry
+ *    （本地单真人时由 game.updateMulti 每帧同步回 game 字段，显示与结算不变）；
+ *  - 流星砖块目标从「唯一玩家蛇」改为「全部存活真人蛇」（单人时行为不变）；
+ *  - onMpEvent(kind, data) 钩子：game 实现时接收离散事件（death/elim/bite/item/grab/toast/
+ *    self_pull），供服务器广播；本地 Game 不实现 → 零行为变化。
  */
 (function (root) {
   var CS = root.CS = root.CS || {};
@@ -30,7 +40,10 @@
 
   var nextId = 1;
 
-  /** 一条参赛蛇的档案（玩家或 AI） */
+  /** 重置 id 计数（测试用：保证同种子双跑时 id 序列一致） */
+  function resetIds() { nextId = 1; }
+
+  /** 一条参赛蛇的档案（真人玩家或 AI） */
   function Entry(snake, name, isPlayer) {
     this.id = nextId++;
     this.snake = snake;
@@ -47,10 +60,16 @@
     this.greed = 1;        // 性格：贪食权重（AI 决策用）
     this.caution = 1;      // 性格：谨慎权重（避障/避蛇距离）
     this.diedAt = 0;
+    // v3.0：计分状态下沉到 Entry（多真人各自独立计分；本地单真人由 game.updateMulti 同步回 game）
+    this.combo = 0;           // 连击层数（窗口内连续消除 +1，分数 ×combo）
+    this.comboTimer = 0;      // 连击剩余窗口（ms），每帧衰减
+    this.survivalScore = 0;   // 生存分（存活秒 × SURVIVE_SCORE_PER_SEC，死亡后冻结）
+    this.mpBonusScore = 0;    // 彩色星加成（吃到即 +20% 当前总分，可累计叠加）
   }
 
   /**
-   * @param {Game} game 宿主游戏实例（读 walls/spawner/particles/unlockedKeys/snake）
+   * @param {Game} game 宿主游戏实例（读 walls/spawner/particles/unlockedKeys/snake；
+   *   联机服务器传入 HeadlessGame 桩，字段面相同）
    */
   function Multiplayer(game) {
     this.game = game;
@@ -58,13 +77,23 @@
     this.spawner = game.spawner;
     this.particles = game.particles;
     this.timeMs = 0;
-    this.playerEntry = null;
+    this.players = [];       // 全部真人 Entry（本地模式恒为 1 名）
+    this.playerEntry = null; // 首位真人（本地模式 = 本机玩家，game.js/renderer 沿用）
     this.bots = [];          // 全部 AI Entry（含已淘汰的，死亡 FX 引用）
-    this.botSnakes = [];     // 活体 AI 蛇数组（活引用，交给 spawner.others 做刷新避让）
+    this.botSnakes = [];     // 活体 AI 蛇数组（活引用）
+    this.liveSnakes = [];    // 全部活蛇活引用（真人 + AI；spawner.others 刷新避让用）
     this.respawnQueue = [];  // [{at}] 待重生时刻表
     this.usedNames = {};     // 场上已占用昵称（防重名）
     this.respawned = 0;      // 累计重生次数（测试/统计）
   }
+
+  // ---------------- 事件钩子 ----------------
+
+  /** 离散事件钩子：game 实现 onMpEvent 时上报（服务器广播用；本地 Game 不实现则为空操作） */
+  Multiplayer.prototype.emitEv = function (kind, data) {
+    var g = this.game;
+    if (g && typeof g.onMpEvent === 'function') g.onMpEvent(kind, data);
+  };
 
   // ---------------- 编制管理 ----------------
 
@@ -80,20 +109,30 @@
     return fallback;
   };
 
-  /** 初始化：玩家 Entry（包裹 game.snake）+ 补足 AI 编制 */
+  /**
+   * 加入一名真人玩家（v3.0）：外部构造好 Snake（出生点由调用方选定）后注册。
+   * 首位真人同时成为 playerEntry（本地单机对局的"我"）。
+   */
+  Multiplayer.prototype.addPlayer = function (snake, name) {
+    var e = new Entry(snake, name || '我', true);
+    this.players.push(e);
+    this.liveSnakes.push(snake);
+    if (!this.playerEntry) this.playerEntry = e;
+    return e;
+  };
+
+  /** 初始化：真人 Entry（未 addPlayer 时回退包裹 game.snake，本地兼容）+ 补足 AI 编制 */
   Multiplayer.prototype.setup = function () {
-    this.playerEntry = new Entry(this.game.snake, '我', true);
+    if (!this.players.length) this.addPlayer(this.game.snake, '我'); // 本地单真人（原行为）
     // 开局只生成初始数量的 AI（后续随时间增长）
     var startCount = cfg.MP_AI_START_COUNT || cfg.MP_AI_COUNT;
     for (var i = 0; i < startCount; i++) this.spawnBot(0); // 早期 AI，智力普通
-    this.spawner.others = this.botSnakes; // 活引用：重生/淘汰自动反映到刷新避让
+    this.spawner.others = this.liveSnakes; // 活引用：重生/淘汰自动反映到刷新避让（含全部真人）
   };
 
-  /** 全部 Entry（玩家在前，含已淘汰） */
+  /** 全部 Entry（真人在前，含已淘汰） */
   Multiplayer.prototype.allEntries = function () {
-    var arr = [];
-    if (this.playerEntry) arr.push(this.playerEntry);
-    return arr.concat(this.bots);
+    return this.players.concat(this.bots);
   };
 
   /** 全部活蛇的 Snake 实例（AI 决策 / 出生避让用） */
@@ -101,6 +140,13 @@
     var es = this.allEntries(), arr = [];
     for (var i = 0; i < es.length; i++) if (es[i].alive) arr.push(es[i].snake);
     return arr;
+  };
+
+  /** 存活真人数量（联机房间结算判定用） */
+  Multiplayer.prototype.alivePlayerCount = function () {
+    var n = 0;
+    for (var i = 0; i < this.players.length; i++) if (this.players[i].alive) n++;
+    return n;
   };
 
   Multiplayer.prototype.aliveBotCount = function () {
@@ -193,6 +239,7 @@
 
     this.bots.push(e);
     this.botSnakes.push(snake);
+    this.liveSnakes.push(snake);
     return e;
   };
 
@@ -220,14 +267,16 @@
     return added;
   };
 
-  /** 淘汰一条蛇：掉落尸体 + 粒子闪光；AI 进入重生队列，玩家由 game 结算 */
+  /** 淘汰一条蛇：掉落尸体 + 粒子闪光；AI 进入重生队列，真人由 game/room 结算 */
   Multiplayer.prototype.kill = function (e) {
     if (!e.alive) return;
     e.alive = false;
     e.diedAt = this.timeMs;
-    this.dropCorpse(e);
+    var dropped = this.dropCorpse(e);
     this.dropDeathItems(e); // 必然掉 1 个随机道具 + 每 10 节额外掉 1 个
     this.particles.flash(e.snake.x, e.snake.y, '#FFD94A', 1.4, 3);
+    var li = this.liveSnakes.indexOf(e.snake);
+    if (li >= 0) this.liveSnakes.splice(li, 1);
     if (!e.isPlayer) {
       delete this.usedNames[e.name];
       var idx = this.botSnakes.indexOf(e.snake);
@@ -235,6 +284,7 @@
       var delay = cfg.MP_RESPAWN_MIN_MS + Math.random() * (cfg.MP_RESPAWN_MAX_MS - cfg.MP_RESPAWN_MIN_MS);
       this.respawnQueue.push({ at: this.timeMs + delay });
     }
+    this.emitEv('death', { id: e.id, isPlayer: e.isPlayer, x: e.snake.x, y: e.snake.y, drop: dropped });
   };
 
   /**
@@ -329,6 +379,7 @@
     if (!removed) return;
     this.particles.burst(removed.x, removed.y, cfg.COLORS[removed.color], 5, 0.8);
     B.bittenUntil = this.timeMs + cfg.MP_BITE_FLASH_MS;
+    this.emitEv('bite', { id: B.id, by: A.id, seg: segIdx, x: removed.x, y: removed.y, color: removed.color });
     if (B.snake.length() < cfg.MP_BITE_MIN_LENGTH) {
       dead[B.id] = { by: A }; // 保底淘汰：正常淘汰流程（尸体掉落）+ 计入 A 的击杀
       return;
@@ -347,6 +398,7 @@
 
   /**
    * 统一计分 + 特效（供 resolveElim 与 applyItem 共用）。
+   * 连击 combo 为 Entry 级状态（v3.0 下沉，多真人各自独立；窗口规则与单机一致）。
    * @param {Entry} e 被消除的蛇档案
    * @param {Array} removed 被移除节 [{color,x,y,chain}]
    * @param {number} fxBoost 特效放大（炸弹更强）
@@ -356,11 +408,12 @@
     if (!removed || !removed.length) return;
     if (CS.audio) CS.audio.playElim();
     e.elimTotal += removed.length;
-    // 连击（仅玩家计入，AI 的 elimScore 仅供调试）：窗口内连续消除 → combo 递增 → 分数成倍
+    // 连击（仅真人计分，AI 的 elimScore 仅供调试）：窗口内连续消除 → combo 递增 → 分数成倍
     var combo = 1;
     if (e.isPlayer) {
-      this.game.bumpCombo();
-      combo = Math.min(cfg.ELIM_COMBO_MAX, this.game.elimCombo);
+      e.combo = (e.comboTimer > 0) ? e.combo + 1 : 1;
+      e.comboTimer = cfg.ELIM_COMBO_WINDOW;
+      combo = Math.min(cfg.ELIM_COMBO_MAX, e.combo);
     }
     var waves = {};
     var i;
@@ -388,19 +441,20 @@
         this.particles.chainText(ccx, ccy - 46, combo + '连击 ×' + combo, 18 + combo);
       }
     }
+    this.emitEv('elim', { id: e.id, segs: removed, combo: combo, score: e.elimScore });
   };
 
   /**
-   * 拾取道具的统一处理（玩家与 AI 共用）：按 kind 触发对应效果 + 计分 + 特效。
+   * 拾取道具的统一处理（真人与 AI 共用）：按 kind 触发对应效果 + 计分 + 特效。
    * 特殊道具（wild/bomb/slow/clear/clear3/rand1-3）都会真正生效；
-   * 仅当 e 是玩家时弹出效果飘字（setItemToast），避免 AI 拾取刷屏。
+   * 真人拾取时弹出效果飘字（setItemToast，本地模式仅本机玩家可见；联机按 Entry 路由）。
    * @param {Entry} e 拾取者
    * @param {object} b 色块 {kind,color,x,y,rarity}
    */
   Multiplayer.prototype.applyItem = function (e, b) {
     var px = b.x, py = b.y;
     var isPlayer = e.isPlayer;
-    if (b.kind && b.kind !== 'color' && isPlayer) this.game.setItemToast(b.kind, b.color);
+    if (b.kind && b.kind !== 'color' && isPlayer) this.game.setItemToast(b.kind, b.color, e);
     if (b.kind === 'wild') {
       e.snake.growWild();
       if (CS.audio) CS.audio.playSpecial();
@@ -439,18 +493,19 @@
       this.scoreChain(e, rem2, 1, 0);
       this.particles.burst(px, py, '#FFD94A', 9, 1.3);
     } else if (b.kind === 'grab') {
-      // 多人专属「彩色星」：玩家吃到 → 当前总分立即 +20%（一次性加成，可叠加）；
-      // AI 吃到则只是把道具消耗掉（玩家失去抢夺机会）。无论谁吃，都清掉场上这颗并安排下一颗。
+      // 多人专属「彩色星」：真人吃到 → 自己当前总分立即 +20%（一次性加成，可叠加）；
+      // AI 吃到则只是把道具消耗掉（真人失去抢夺机会）。无论谁吃，都清掉场上这颗并安排下一颗。
       if (CS.audio) CS.audio.playSpecial();
       this.particles.burst(px, py, '#FFD94A', 16, 1.9);
       this.particles.ring(px, py, '#FFC83D', 1.8);
-      if (e.isPlayer) {
-        // score 在 mp.update 之后才由 game 汇总，这里取上一帧已汇总分（差一帧，可忽略）
-        var cur = (this.game.survivalScore || 0) + (this.game.elimScore || 0) + (this.game.mpBonusScore || 0);
-        var bonus = Math.max(1, Math.round(cur * cfg.GRAB_SCORE_MUL));
-        this.game.mpBonusScore = (this.game.mpBonusScore || 0) + bonus;
+      var bonus = 0;
+      if (isPlayer) {
+        var cur = (e.survivalScore || 0) + (e.elimScore || 0) + (e.mpBonusScore || 0);
+        bonus = Math.max(1, Math.round(cur * cfg.GRAB_SCORE_MUL));
+        e.mpBonusScore = (e.mpBonusScore || 0) + bonus;
         this.particles.chainText(px, py - 32, '分数 +20%！+' + bonus, 24);
       }
+      this.emitEv('grab', { id: e.id, isPlayer: isPlayer, bonus: bonus, x: px, y: py });
       // 消费场上这颗彩色星（collectAt 已将其移出 blocks，这里只清引用 + 排下一颗）
       this.spawner.grabBlock = null;
       this.spawner.grabTimer = cfg.GRAB_RESPAWN_MS;
@@ -460,11 +515,14 @@
       this.particles.burst(px, py, cfg.COLORS[b.color], 4);
       this.resolveElim(e);
     }
+    if (b.kind && b.kind !== 'color') {
+      this.emitEv('item', { id: e.id, kind: b.kind, color: b.color || null, x: px, y: py });
+    }
   };
 
   /**
    * 阵亡掉落道具：除身体散落色块（dropCorpse）外，必然额外掉落一个随机道具，
-   * 且玩家/任意蛇每有 10 个颜色节（不含尾巴节）再额外掉一个随机道具（长度越长奖励越多）。
+   * 且真人/任意蛇每有 10 个颜色节（不含尾巴节）再额外掉一个随机道具（长度越长奖励越多）。
    * @param {Entry} e 被淘汰的蛇
    */
   Multiplayer.prototype.dropDeathItems = function (e) {
@@ -519,7 +577,7 @@
   };
 
   /**
-   * 每帧推进（由 game.updateMulti 调用，玩家输入已由 game 写入 targetAngle）：
+   * 每帧推进（由 game.updateMulti / room.tick 调用；真人输入已写入各 snake.targetAngle）：
    *  AI 决策 → 动态速度 → 推进所有蛇 → 碰撞淘汰 → 吃色/消除 → 重生补充 → 色块刷新。
    */
   Multiplayer.prototype.update = function (dt) {
@@ -533,11 +591,21 @@
     // 随时间提升特殊道具刷新概率（越后期道具越密集）
     this.spawner.specialChance = cfg.specialChanceForElapsed(this.game.elapsed);
 
-    // AI 决策（与玩家同规则：只设目标角，转向速率由 Snake.update 钳制）
+    // AI 决策（与真人同规则：只设目标角，转向速率由 Snake.update 钳制）
     for (i = 0; i < this.bots.length; i++) {
       e = this.bots[i];
       if (!e.alive) continue;
       e.snake.setTargetAngle(CS.AI.decide(e.snake, env, e));
+    }
+
+    // 真人计分状态推进：生存分（死亡冻结）+ 连击窗口衰减
+    for (i = 0; i < this.players.length; i++) {
+      e = this.players[i];
+      if (e.alive) e.survivalScore = Math.floor(this.timeMs / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
+      if (e.comboTimer > 0) {
+        e.comboTimer -= dt;
+        if (e.comboTimer <= 0) { e.comboTimer = 0; e.combo = 0; }
+      }
     }
 
     // 动态速度（长度/时间加成，封顶 SPEED_MAX；减速道具期间 ×SLOW_FACTOR）+ 推进
@@ -554,7 +622,7 @@
     // 碰撞淘汰（墙 / 头头 / 头身）
     this.collide();
 
-    // 吃色块 + 消除（玩家优先，其后 AI；特殊道具走 applyItem 真正生效 + 玩家飘字）
+    // 吃色块 + 消除（真人优先，其后 AI；特殊道具走 applyItem 真正生效 + 真人飘字）
     for (i = 0; i < entries.length; i++) {
       e = entries[i];
       if (!e.alive) continue;
@@ -562,16 +630,28 @@
       for (var g = 0; g < got.length; g++) this.applyItem(e, got[g]);
     }
 
-    // 流星砖块：直线飞行 + 命中玩家蛇身注入中段（与单人同规则；玩家专属，AI 不受影响）
-    var mev = this.spawner.updateMeteors(dt, this.game.snake);
+    // 流星砖块：直线飞行 + 命中真人蛇身注入中段（目标 = 全部存活真人；单人时行为不变）
+    var targets = [];
+    for (i = 0; i < this.players.length; i++) {
+      if (this.players[i].alive) targets.push(this.players[i]);
+    }
+    var targetSnakes = [];
+    for (i = 0; i < targets.length; i++) targetSnakes.push(targets[i].snake);
+    var mev = this.spawner.updateMeteors(dt, targetSnakes);
     for (var mi = 0; mi < mev.length; mi++) {
       var ev = mev[mi];
-      this.game.snake.insertAt(ev.idx, ev.color);
+      var owner = null;
+      for (i = 0; i < targets.length; i++) {
+        if (targets[i].snake === ev.snake) { owner = targets[i]; break; }
+      }
+      if (!owner) continue;
+      owner.snake.insertAt(ev.idx, ev.color);
       this.particles.burst(ev.x, ev.y, cfg.COLORS[ev.color], 7, 1.3);
       if (CS.audio) CS.audio.playSpecial();
-      this.playerEntry.elimScore += cfg.METEOR_SCORE; // 记到玩家 Entry（多人对局分以 Entry 为准）
-      this.game.setItemToast('meteor', ev.color); // 流星注入飘字（仅玩家可见）
-      this.resolveElim(this.playerEntry);
+      owner.elimScore += cfg.METEOR_SCORE; // 记到被注入的真人 Entry
+      this.game.setItemToast('meteor', ev.color, owner); // 流星注入飘字（按 Entry 路由）
+      this.emitEv('meteor', { id: owner.id, idx: ev.idx, color: ev.color, x: ev.x, y: ev.y });
+      this.resolveElim(owner);
     }
 
     // AI 补充 + 稀疏刷新
@@ -581,7 +661,7 @@
 
   // ---------------- 排行榜与名次 ----------------
 
-  /** 实时排行榜：活蛇按当前节数降序（同节数玩家优先），[{name, length, isPlayer}] */
+  /** 实时排行榜：活蛇按当前节数降序（同节数真人优先），[{name, length, isPlayer}] */
   Multiplayer.prototype.leaderboard = function () {
     var es = this.allEntries();
     var arr = [];
@@ -607,4 +687,6 @@
   };
 
   CS.Multiplayer = Multiplayer;
+  CS.MultiplayerEntry = Entry;
+  CS.resetMultiplayerIds = resetIds;
 })(typeof window !== 'undefined' ? window : globalThis);

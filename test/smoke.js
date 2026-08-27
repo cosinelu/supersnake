@@ -837,21 +837,23 @@ spb.grabBlock.ttl = 5; spb.updateGrab(16);
 ok(!spb.grabBlock && spb.grabTimer > 0, '彩色星超时（ttl≤0）自动移除并重置倒计时');
 
 // 玩家吃到彩色星：当前总分立即 +20%（可叠加）
-ok(mg.mpBonusScore === 0, '吃掉前 mpBonusScore = 0');
-mg.elimScore = 80; mg.survivalScore = 120; mg.mpBonusScore = 0; // 当前总分 = 200
-mg.mp.applyItem(mg.mp.playerEntry, { x: mg.snake.x, y: mg.snake.y, kind: 'grab', color: null });
+// （v3.0 起加成计在 Entry.mpBonusScore，game.mpBonusScore 由 updateMulti 每帧同步）
+var pe0 = mg.mp.playerEntry;
+ok(pe0.mpBonusScore === 0, '吃掉前 Entry.mpBonusScore = 0');
+pe0.elimScore = 80; pe0.survivalScore = 120; pe0.mpBonusScore = 0; // 当前总分 = 200
+mg.mp.applyItem(pe0, { x: mg.snake.x, y: mg.snake.y, kind: 'grab', color: null });
 var expectBonus = Math.max(1, Math.round(200 * cfg.GRAB_SCORE_MUL)); // 200*0.2 = 40
-ok(mg.mpBonusScore === expectBonus, '玩家吃彩色星：总分 +' + expectBonus + '（= 200×20%）', 'mpBonusScore=' + mg.mpBonusScore);
+ok(pe0.mpBonusScore === expectBonus, '玩家吃彩色星：总分 +' + expectBonus + '（= 200×20%）', 'mpBonusScore=' + pe0.mpBonusScore);
 ok(mg.spawner.grabBlock === null && mg.spawner.grabTimer > 0, '吃掉后场上彩色星被消费并安排下一颗');
 // 叠加：再吃一次（此时含上一笔加成）应再 +20%
-var prev = mg.mpBonusScore;
-mg.mp.applyItem(mg.mp.playerEntry, { x: mg.snake.x, y: mg.snake.y, kind: 'grab', color: null });
-ok(mg.mpBonusScore > prev, '可叠加：再次吃到再次 +20%（' + prev + ' → ' + mg.mpBonusScore + '）');
-// AI 吃到：只消费道具，不加分
+var prev = pe0.mpBonusScore;
+mg.mp.applyItem(pe0, { x: mg.snake.x, y: mg.snake.y, kind: 'grab', color: null });
+ok(pe0.mpBonusScore > prev, '可叠加：再次吃到再次 +20%（' + prev + ' → ' + pe0.mpBonusScore + '）');
+// AI 吃到：只消费道具，真人不加分
 var botE = mg.mp.bots[0];
-mg.mpBonusScore = 0;
+pe0.mpBonusScore = 0;
 mg.mp.applyItem(botE, { x: botE.snake.x, y: botE.snake.y, kind: 'grab', color: null });
-ok(mg.mpBonusScore === 0 && mg.spawner.grabBlock === null, 'AI 吃到彩色星：仅消费道具、玩家不加分');
+ok(pe0.mpBonusScore === 0 && mg.spawner.grabBlock === null, 'AI 吃到彩色星：仅消费道具、玩家不加分');
 
 // ---------------- 汇总 ----------------
 console.log('\n========================================');

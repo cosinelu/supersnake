@@ -39,8 +39,26 @@
     return angle + (diff > 0 ? maxDelta : -maxDelta);
   }
 
+  /**
+   * 确定性伪随机序列生成器（mulberry32）。
+   * 联机自动测试用：测试前 `Math.random = makeRng(seed)` 即可让整局对局确定性复现
+   * （服务器/游戏逻辑全部走 Math.random，无需改业务代码）。
+   * @param {number} seed 任意整数种子
+   * @returns {function(): number} 返回 [0,1) 的伪随机函数
+   */
+  function makeRng(seed) {
+    var s = (seed | 0) >>> 0;
+    return function () {
+      s = (s + 0x6D2B79F5) | 0;
+      var t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
   CS.utils = {
     hash2: hash2, clamp: clamp, manhattan: manhattan,
-    dist: dist, normAngle: normAngle, turnToward: turnToward
+    dist: dist, normAngle: normAngle, turnToward: turnToward,
+    makeRng: makeRng
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -258,8 +258,9 @@
       }
     }
 
-    // 玩家得分 = 存活分 + 消除分 + 彩色星加成（消除分在 mp.resolveElim 中按连锁 + 连击倍率累计）
+    // 玩家得分 = 存活分 + 消除分 + 彩色星加成（消除分/加成在 mp 内按连锁 + 连击倍率累计到 Entry，每帧同步回 game）
     this.elimScore = this.mp.playerEntry.elimScore;
+    this.mpBonusScore = this.mp.playerEntry.mpBonusScore || 0;
     this.score = this.survivalScore + this.elimScore + (this.mpBonusScore || 0);
 
     this.updateCamera(dt);
