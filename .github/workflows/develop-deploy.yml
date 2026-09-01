@@ -49,6 +49,15 @@ jobs:
       - name: Install tccli
         run: pip install tccli
 
+      # 临时诊断：TAT 控制面是否认这台实例的 agent（排查 AgentNotInstalled）
+      - name: Diagnose TAT agent status
+        env:
+          INSTANCE_ID: ${{ vars.TAT_INSTANCE_ID }}
+        run: |
+          echo "== DescribeAutomationAgentStatus =="
+          tccli tat DescribeAutomationAgentStatus --region ap-hongkong \
+            --InstanceIds "[\"$INSTANCE_ID\"]" --output json || true
+
       - name: Deploy via TAT and verify
         env:
           INSTANCE_ID: ${{ vars.TAT_INSTANCE_ID }}
