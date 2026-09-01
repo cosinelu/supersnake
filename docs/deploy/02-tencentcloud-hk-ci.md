@@ -344,21 +344,23 @@ sudo rm -f /opt/supersnake/{official,dev}/js/__probe.js   # 务必清理
    - 提供商 URL：`https://token.actions.githubusercontent.com`
    - 客户端 ID：`sts.tencentcloudapi.com`
    - 签名公钥：访问 `https://token.actions.githubusercontent.com/.well-known/jwks`，把返回的 JWKS JSON 全文粘贴进去
-2. **建角色** `github-supersnake-deploy`（载体 = 身份提供商 github），信任策略：
+2. **建角色** `github-supersnake-deploy`（载体 = 身份提供商 github）。信任策略在
+   **角色详情页 → 信任策略 → 编辑（JSON 模式）**里整段粘贴：
 
 ```json
 {
   "version": "2.0",
   "statement": [{
     "effect": "allow",
-    "action": ["sts:AssumeRoleWithWebIdentity"],
-    "principal": { "federated": ["qcs::cam::uin/<你的UIN>:oidc-provider/github"] },
+    "action": ["name/sts:AssumeRoleWithWebIdentity"],
+    "principal": { "federated": ["qcs::cam::uin/100011909025:oidc-provider/github"] },
     "condition": {
       "string_equal": {
-        "oidc:aud": "sts.tencentcloudapi.com",
+        "oidc:iss": ["https://token.actions.githubusercontent.com"],
+        "oidc:aud": ["sts.tencentcloudapi.com"],
         "oidc:sub": [
-          "repo:cosinelu/supersnake:ref:refs/heads/develop",
-          "repo:cosinelu/supersnake:ref:refs/heads/main"
+          "repo:cosinelu@37471942/supersnake@1342904019:ref:refs/heads/develop",
+          "repo:cosinelu@37471942/supersnake@1342904019:ref:refs/heads/main"
         ]
       }
     }
@@ -366,7 +368,25 @@ sudo rm -f /opt/supersnake/{official,dev}/js/__probe.js   # 务必清理
 }
 ```
 
-> ⚠️ **`oidc:sub` 是安全命门，漏配等于向全 GitHub 开放该角色。** 两行 sub 分别对应 develop CI 与 official CI（official 手动触发时 JWT 的 sub 也是 `ref:refs/heads/main`）。
+> ⚠️ **`oidc:sub` 是安全命门，漏配等于向全 GitHub 开放该角色。** 数组语义是 OR（匹配任一即通过）。
+>
+> ⚠️ **immutable sub 格式（2026-09-01 实测踩过的坑）**：
+> GitHub 对 **2026-07-15 之后创建的仓库**改用"不可变 sub"，在 owner 和 repo 名后各附加数字 ID：
+> `repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/BRANCH`。
+> 本仓库 `2026-08-22` 创建 → owner_id=`37471942`、repo_id=`1342904019`。
+> **如果照网上教程写 `repo:cosinelu/supersnake:ref:...`（无 ID 的旧格式），
+> AssumeRoleWithWebIdentity 会一直 `UnauthorizedOperation ... has no permission`**
+> （腾讯云回显里只列出 `oidc:sub` 那条，因为 iss/aud 是在身份提供商层面单独校验的）。
+> 查自己仓库的两个 ID：
+> `gh api repos/<owner>/<repo> -q '{owner_id:.owner.id, repo_id:.id}'`。
+>
+> ⚠️ **不要用 `string_like` 做通配**：腾讯云《条件键和条件运算符》明确
+> `string_like`/`string_not_like` 的值**只支持大小写字母、数字、`-`、`_`**，
+> 不能含 `/`、`:`、`.`，更不支持 `*`。GitHub sub 全是 `:` 和 `/`，`string_like` 匹配不了。
+> 要多分支就用 `string_equal` + **数组**（如上）。
+>
+> 角色其余信息（实测）：ARN=`qcs::cam::uin/100011909025:roleName/github-supersnake-deploy`、
+> 会话最大时长 2 小时。
 
 3. **建自定义策略** `TatInvokeSupersnake` 并绑定到该角色：
 
@@ -383,7 +403,7 @@ sudo rm -f /opt/supersnake/{official,dev}/js/__probe.js   # 务必清理
 
 > 说明：TAT 的资源级授权粒度较粗，`*` 意味着这把 1 小时临时凭证可在同账号同地域实例上执行命令。个人账号可接受；将来多实例时改用 `qcs::tat:...:instance/<id>` 细化。
 
-4. 记下**角色 ARN**：`qcs::cam::uin/<你的UIN>:roleName/github-supersnake-deploy`。
+4. 记下**角色 ARN**：`qcs::cam::uin/100011909025:roleName/github-supersnake-deploy`。
 
 ### D. GitHub 仓库配置
 

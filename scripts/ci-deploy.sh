@@ -25,7 +25,7 @@ INV=$(tccli tat InvokeCommand --region "$REGION" \
   --CommandType SHELL \
   --Username ubuntu \
   --Timeout 300 \
-  --Output json)
+  --output json)
 INV_ID=$(echo "$INV" | jq -r '.Response.InvocationId')
 echo "InvocationId: $INV_ID"
 
@@ -33,7 +33,7 @@ STATUS="PENDING"
 for i in $(seq 1 60); do
   sleep 5
   STATUS=$(tccli tat DescribeInvocations --region "$REGION" \
-    --InvocationIds "[\"$INV_ID\"]" --Output json \
+    --InvocationIds "[\"$INV_ID\"]" --output json \
     | jq -r '.Response.InvocationSet[0].InvocationStatus')
   echo "[poll $i] invocation status: $STATUS"
   case "$STATUS" in
@@ -45,7 +45,7 @@ done
 # 拉取远端任务的退出码与输出（Output 为 base64；参数名若与 tccli 版本不符，以
 # `tccli tat DescribeInvocationTasks help` 输出为准修正——见部署文档验收清单）
 TASK=$(tccli tat DescribeInvocationTasks --region "$REGION" \
-  --InvocationIds "[\"$INV_ID\"]" --Output json || echo '{}')
+  --InvocationIds "[\"$INV_ID\"]" --output json || echo '{}')
 EXIT_CODE=$(echo "$TASK" | jq -r '.Response.InvocationTaskSet[0].ExitCode // "unknown"')
 echo "---- remote exit code: $EXIT_CODE ----"
 echo "$TASK" | jq -r '.Response.InvocationTaskSet[0].Output // ""' | base64 -d 2>/dev/null \
