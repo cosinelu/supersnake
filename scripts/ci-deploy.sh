@@ -57,9 +57,12 @@ for i in $(seq 1 60); do
   esac
 done
 
-# 拉取远端任务的退出码与输出（Output 为 base64）。tccli 响应同样拍平到顶层。
+# 拉取远端任务的退出码与输出。两个坑（实测）：
+#   1) DescribeInvocationTasks 用 Filters 按 invocation-id 过滤，**不是** --InvocationIds；
+#   2) HideOutput 默认 true → 不显式传 false 就拿不到命令输出（Output 为空）。
 TASK=$(tccli tat DescribeInvocationTasks --region "$REGION" \
-  --InvocationIds "[\"$INV_ID\"]" --output json || echo '{}')
+  --Filters "[{\"Name\":\"invocation-id\",\"Values\":[\"$INV_ID\"]}]" \
+  --HideOutput false --output json || echo '{}')
 echo "---- DescribeInvocationTasks 原始响应 ----"
 echo "$TASK"
 echo "------------------------------------------"
