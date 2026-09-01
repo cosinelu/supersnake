@@ -57,19 +57,21 @@ for i in $(seq 1 60); do
   esac
 done
 
-# 拉取远端任务的退出码与输出。两个坑（实测）：
+# 拉取远端任务的退出码与输出。三个坑（全部实测踩过）：
 #   1) DescribeInvocationTasks 用 Filters 按 invocation-id 过滤，**不是** --InvocationIds；
-#   2) HideOutput 默认 true → 不显式传 false 就拿不到命令输出（Output 为空）。
+#   2) HideOutput 默认 true → 不显式传 false 就拿不到命令输出；
+#   3) ExitCode/Output 在 InvocationTaskSet[0].**TaskResult** 里（嵌套一层），
+#      且 tccli 把整个响应拍平到顶层（不在 .Response 下）。
 TASK=$(tccli tat DescribeInvocationTasks --region "$REGION" \
   --Filters "[{\"Name\":\"invocation-id\",\"Values\":[\"$INV_ID\"]}]" \
   --HideOutput false --output json || echo '{}')
 echo "---- DescribeInvocationTasks 原始响应 ----"
 echo "$TASK"
 echo "------------------------------------------"
-EXIT_CODE=$(echo "$TASK" | jq -r '.InvocationTaskSet[0].ExitCode // .Response.InvocationTaskSet[0].ExitCode // "unknown"')
+EXIT_CODE=$(echo "$TASK" | jq -r '.InvocationTaskSet[0].TaskResult.ExitCode // .Response.InvocationTaskSet[0].TaskResult.ExitCode // "unknown"')
 echo "---- remote exit code: $EXIT_CODE ----"
-echo "$TASK" | jq -r '.InvocationTaskSet[0].Output // .Response.InvocationTaskSet[0].Output // ""' | base64 -d 2>/dev/null \
-  || echo "$TASK" | jq -r '.InvocationTaskSet[0].Output // .Response.InvocationTaskSet[0].Output // "no output"'
+echo "$TASK" | jq -r '.InvocationTaskSet[0].TaskResult.Output // .Response.InvocationTaskSet[0].TaskResult.Output // ""' | base64 -d 2>/dev/null \
+  || echo "$TASK" | jq -r '.InvocationTaskSet[0].TaskResult.Output // .Response.InvocationTaskSet[0].TaskResult.Output // "no output"'
 echo "------------------------------------------"
 
 # 先判远端退出码：若部署脚本内部就失败了，直接报它，
