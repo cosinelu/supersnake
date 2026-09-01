@@ -1,0 +1,65 @@
+name: develop-deploy
+
+# 测试环境部署：push develop 自动触发（也允许手动补发）
+# 链路：全量测试 → OIDC 换临时凭证 → TAT 下发 deploy-remote.sh → 公网验收
+# 设计文档：docs/deploy/02-tencentcloud-hk-ci.md
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+    branches: [develop]
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  id-token: write   # OIDC 必需
+  contents: read
+
+env:
+  ENV: dev
+  BRANCH: develop
+  # 公网验收 URL。后端 8090/8091 仅监听 127.0.0.1，公网入口统一为 nginx。
+  # 按 host 区分环境：dev-snake → 8091（测试），snake → 8090（正式）。
+  # 已上 Let's Encrypt（SAN 含两个子域名），80 会 301 跳 443，所以直接写 https。
+  PUBLIC_URL: https://dev-snake.pippocao.top/
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # 分支硬校验：测试环境只允许从 develop 部署。
+      # 为什么需要：workflow_dispatch 的 branches 只决定按钮默认分支，
+      # 点 Run 时仍可下拉选任意分支 —— 不拦就可能拿 main（或任何分支）的代码上测试环境。
+      - name: Guard branch (develop only)
+        run: |
+          if [ "$GITHUB_REF_NAME" != "develop" ]; then
+            echo "!! develop-deploy 只允许从 develop 分支触发，当前是 $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run full test suite
+        run: node test/smoke.js && cd server && npm ci && npm test
+
+      - name: OIDC auth to Tencent Cloud
+        uses: everpcpc/tencentcloud-oidc-auth@v1
+        with:
+          role-arn: ${{ vars.TENCENT_ROLE_ARN }}
+          oidc-provider-id: github
+          region: ap-hongkong
+
+      - name: Install tccli
+        run: pip install tccli
+
+      - name: Deploy via TAT and verify
+        env:
+          INSTANCE_ID: ${{ vars.TAT_INSTANCE_ID }}
+        run: bash scripts/ci-deploy.sh

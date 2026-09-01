@@ -12,6 +12,10 @@ docs/
     01-online-multiplayer.md       ← 联机对战架构设计（同步模型 / 协议 / 模块拆分 / 部署）
   plan/
     01-online-mvp-plan.md          ← 任务拆分与里程碑计划（M0~M6，含验收标准）
+  deploy/
+    01-local-windows-guide.md      ← 本地部署与试玩教程（Windows）
+    02-tencentcloud-hk-ci.md       ← GitHub CI 部署到腾讯云香港轻量（OIDC + TAT，三环境）
+    03-review-and-branching.md     ← 分支模型 + PR review 门禁（CI 检查项与人工清单）
 ```
 
 ## 约定

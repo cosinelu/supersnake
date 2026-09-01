@@ -1,0 +1,74 @@
+name: pr-review
+
+# Review 门禁：仅在 PR（→ develop / main）时运行
+# 四个 job 并行，任一红即阻断合入。设计说明见 docs/deploy/03-review-and-branching.md
+# 分支保护里把这四个 job 名勾为 required status checks
+#
+# 注意：不再在 push 时跑 —— develop 分支的 push 已由 develop-deploy 里的
+# 「Run full test suite」覆盖（smoke + server npm test），这里重复跑纯属浪费。
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+concurrency:
+  group: review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    name: syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: node --check all JS
+        run: |
+          fail=0
+          for f in $(find js server test -name '*.js' -not -path '*/node_modules/*'); do
+            node --check "$f" || { echo "syntax error: $f"; fail=1; }
+          done
+          exit $fail
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: smoke (logic assertions)
+        run: node test/smoke.js
+      - name: server test suite (room/integration/smooth/ui/run-all)
+        run: cd server && npm ci && npm test
+
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: project hygiene checks
+        run: bash scripts/check-hygiene.sh
+
+  deploy-lint:
+    name: deploy-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash syntax of deploy scripts
+        run: |
+          for f in scripts/*.sh; do bash -n "$f" || exit 1; echo "ok: $f"; done
+      - name: workflow YAML parses
+        run: |
+          python3 -c "
+          import sys, yaml, glob
+          for f in glob.glob('.github/workflows/*.yml'):
+              yaml.safe_load(open(f, encoding='utf-8'))
+              print('ok:', f)
+          "
