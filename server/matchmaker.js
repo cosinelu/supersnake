@@ -64,8 +64,28 @@ Matchmaker.prototype._tryForm = function () {
   if (this.queue.length >= this.config.ROOM_SIZE) this._form(this.config.ROOM_SIZE);
 };
 
+/**
+ * 房间内真人昵称去重：同名者依次追加 ·2 ·3 …（总长 ≤12，超出则截断基部）。
+ * 场景：同一浏览器多标签页共享 localStorage，昵称会完全相同；服务器必须保证
+ * 房间内名牌/排行榜/结算名单可区分（客户端只展示，不做去重）。
+ */
+Matchmaker.prototype._dedupeNames = function (members) {
+  var used = {};
+  for (var i = 0; i < members.length; i++) {
+    var base = String(members[i].name || '玩家');
+    var name = base;
+    for (var k = 2; used[name]; k++) {
+      var suffix = '·' + k;
+      name = base.slice(0, 12 - suffix.length) + suffix;
+    }
+    used[name] = true;
+    members[i].name = name;
+  }
+};
+
 Matchmaker.prototype._form = function (n) {
   var members = this.queue.splice(0, n);
+  this._dedupeNames(members);
   var self = this;
   var room = new Room({
     players: members,

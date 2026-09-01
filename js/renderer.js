@@ -987,7 +987,7 @@
     ctx.font = '12px sans-serif';
     ctx.globalAlpha = 0.75;
     var modeText = game.mode === 'level' ? ('闯关模式 · 第 ' + game.levelCfg.level + ' 关')
-      : (game.mode === 'multi' ? (game.online ? '在线对战 · 真人匹配' : '多人对战 · 7 蛇同场') : '无尽模式');
+      : (game.mode === 'multi' ? (game.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场') : '无尽模式');
     ctx.fillText(modeText, cx, 46);
     ctx.globalAlpha = 1;
 
@@ -1279,7 +1279,7 @@
     ctx.font = '13px sans-serif';
     ctx.globalAlpha = 0.7;
     ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.89);
-    ctx.fillText('多人对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.89 + 22);
+    ctx.fillText('AI对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.89 + 22);
     ctx.restore();
     this.drawParticles(game); // 标题消除动效的粒子（屏幕坐标，无相机变换）
     this.drawButtons(game);
@@ -1619,7 +1619,7 @@
     ctx.font = '12px sans-serif';
     ctx.globalAlpha = aCard * 0.65;
     ctx.fillStyle = cfg.INK;
-    ctx.fillText(r.dropped ? '连接中断，不支持重连' : (r.online ? '在线对战 · 真人匹配' : '多人对战 · 7 蛇同场'), cx, ty + 30);
+    ctx.fillText(r.dropped ? '连接中断，不支持重连' : (r.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场'), cx, ty + 30);
     ctx.globalAlpha = aCard;
 
     // ---- 统计行（每行一项，依次延迟 ~80ms 从左侧滑入）----
