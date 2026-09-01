@@ -395,12 +395,20 @@ sudo rm -f /opt/supersnake/{official,dev}/js/__probe.js   # 务必清理
   "version": "2.0",
   "statement": [{
     "effect": "allow",
-    "action": ["tat:InvokeCommand", "tat:DescribeInvocations", "tat:DescribeInvocationTasks"],
+    "action": ["tat:RunCommand", "tat:DescribeInvocations", "tat:DescribeInvocationTasks"],
     "resource": "*"
   }]
 }
 ```
 
+> ⚠️ **用 `tat:RunCommand` 不是 `tat:InvokeCommand`**（2026-09-01 实测踩过）：
+> - `InvokeCommand` 触发【已保存】的命令，`CommandId` 必填 —— 我们没预建命令，
+>   tccli 报 `the following arguments are required: --CommandId`（exit 252）。
+> - `RunCommand` 直接下发**临时命令**（`Content` base64 + `CommandType` + `InstanceIds`），
+>   执行完即删、不需要 CommandId。每次部署的脚本内容随 commit 变化，本就该用临时的。
+> - 结果查询（`DescribeInvocations`/`DescribeInvocationTasks`）两者通用。
+> - 若角色绑的策略里只有 `InvokeCommand`，换到凭证后调 `RunCommand` 仍会被 CAM 拒。
+>
 > 说明：TAT 的资源级授权粒度较粗，`*` 意味着这把 1 小时临时凭证可在同账号同地域实例上执行命令。个人账号可接受；将来多实例时改用 `qcs::tat:...:instance/<id>` 细化。
 
 4. 记下**角色 ARN**：`qcs::cam::uin/100011909025:roleName/github-supersnake-deploy`。

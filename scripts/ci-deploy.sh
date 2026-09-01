@@ -19,7 +19,13 @@ sed -e "s|__ENV__|$ENV|g" -e "s|__BRANCH__|$BRANCH|g" -e "s|__REF__|$REF|g" \
 CONTENT=$(base64 -w0 /tmp/deploy-remote.sh)
 
 echo "== invoking TAT on $INSTANCE_ID (env=$ENV branch=$BRANCH ref=$REF) =="
-INV=$(tccli tat InvokeCommand --region "$REGION" \
+# 用 RunCommand 而非 InvokeCommand：
+#   InvokeCommand 触发【已保存】的命令，CommandId 必填（我们没预建命令，会报
+#   "the following arguments are required: --CommandId"）。
+#   RunCommand 直接下发临时命令（Content base64 + CommandType + InstanceIds），
+#   执行完即删，不需要 CommandId —— 每次部署的脚本内容都随 commit 变化，
+#   本就不该存成固定命令。实测踩过（exit 252）。
+INV=$(tccli tat RunCommand --region "$REGION" \
   --InstanceIds "[\"$INSTANCE_ID\"]" \
   --Content "$CONTENT" \
   --CommandType SHELL \
