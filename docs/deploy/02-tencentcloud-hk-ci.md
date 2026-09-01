@@ -40,42 +40,94 @@
 | 香港机房 → 无 COS 中转 | 与国内机房方案不同，香港机 `git pull` 直连 GitHub 畅通，砍掉打包上传环节 |
 | 双端口直跑，不用 Nginx | 前端 ws 已自适应端口；单依赖零构建项目，裸跑最透明；要 HTTPS/域名时再加反代 |
 | 单 CAM 角色信任两个分支 | dev/official 同机同权，分角色收益低；official 的发布门槛由 workflow_dispatch（手动按钮）承担。将来多机器/多项目时再拆 |
-| 服务器放只读 deploy key | 仓库私有，`git fetch` 需凭证；该 key 仅存在服务器、仅本仓库、无写权限，影响面可控 |
+| 服务器用 HTTPS 匿名 clone，**不放 deploy key** | 实测仓库为**公开**（`git ls-remote https://…` 匿名成功），无需任何凭证 → 少一处密钥面。若将来改私有，再恢复只读 deploy key 方案（见 §2.A 注） |
 | official CI 仅手动触发 | 正式环境节奏完全可控，误推 main 不会直接上生产 |
 
 ---
 
 ## 2. 一次性配置（按顺序执行）
 
+> **§2.A 已于 2026-09-01 实测执行完毕**，下方保留步骤供重建/排障参考。
+> 服务器实况见 §2.0。
+
+### 2.0 服务器实况（2026-09-01 实测，重要）
+
+这台机器**不是 supersnake 专用**，上面已有在役业务，任何改动都要避开：
+
+| 在役服务 | 占用端口 | 说明 |
+|---|---|---|
+| nginx | 80、8527、8528、8529 | ufw 注释为 `home relay` |
+| frps | 7000、18527-18529 | 内网穿透服务端，**非 systemd 托管**（`systemctl is-active frps` 显示 inactive 但进程在跑） |
+| docker + containerd | — | 有容器在跑 |
+| fail2ban | — | 会自动封暴力破解 IP |
+| tat_agent | — | **active**，TAT 部署方案前提已满足 |
+
+环境事实：Ubuntu 24.04.4 LTS / 4 核 3.6G / 51G 可用 / 免密 sudo 可用 /
+git 2.43.0 预装、**Node 需自行安装**（已装 v22.23.2 + npm 10.9.8）。
+服务器 → GitHub 连通良好（api.github.com HTTPS 114ms，ssh:22 亦可达），香港机房无跨境问题。
+
+**本项目的改动边界（严格遵守）**：只新增 Node、`/opt/supersnake`、
+两个 systemd unit、两条 ufw 规则。**不碰** nginx / frps / docker 的任何配置。
+
 ### A. 服务器初始化（以 ubuntu 用户 SSH 登录执行一次）
 
 前提：本地已推好 `develop` 分支（`git push origin develop`）。
 
 ```bash
-# 上传 scripts/server-init.sh 到服务器后执行（或直接 scp 整个 scripts/ 目录）
-bash server-init.sh
+scp scripts/server-init.sh ubuntu@43.161.196.218:/tmp/
+ssh ubuntu@43.161.196.218 'bash /tmp/server-init.sh'
 ```
 
-脚本做的事（内容见 `scripts/server-init.sh`）：
-1. 检查/安装 Node 22（NodeSource apt 源，香港机直连）；
-2. 生成 `/opt/supersnake/deploy_key`（ed25519），**打印公钥**——需人工把公钥添加到
-   GitHub 仓库 Settings → Deploy keys（**不要勾选 Allow write access**）；
-3. `git clone` 双环境目录并各自 checkout 到 main / develop；
+脚本做的事（内容见 `scripts/server-init.sh`，幂等可重跑）：
+1. **端口占用前置校验**——8090/8091 若被非本项目进程占用则直接中止，保护在役服务；
+2. 检查/安装 Node 22（NodeSource apt 源，香港机直连）；
+3. `git clone` 双环境目录（**HTTPS 匿名，公开仓库无需凭证**）并各自 checkout main / develop；
 4. 双环境 `server/` 下 `npm ci --omit=dev`；
-5. 写入两个 systemd unit（见脚本内 heredoc）并 `enable --now`；
-6. 本机 curl 自检两个端口。
+5. 写入两个 systemd unit（含 `NoNewPrivileges` / `ProtectSystem=full` 等轻度沙箱，
+   因为本机还跑着其他业务）并 `enable --now`；
+6. 本机 curl 自检两个端口，失败时自动打印 journalctl 日志。
 
-> 密码只在此环节人工登录时使用，不写入任何文件/CI/文档。
+> **仓库若改为私有**：需恢复 deploy key 方案——`ssh-keygen -t ed25519` 生成密钥、
+> 公钥加到 GitHub Settings → Deploy keys（**不勾 Allow write access**）、
+> `REPO` 改回 `git@github.com:` 形式并设置 `GIT_SSH_COMMAND`。
 
-### B. 轻量服务器控制台防火墙放行端口
+> 密码只在首次建立 SSH 免密时人工使用，不写入任何文件/CI/文档。
+> 免密建立后（公钥已装入 `~/.ssh/authorized_keys`）全程走密钥，不再需要密码。
 
-轻量应用服务器有独立的「防火墙」页（不是 CVM 安全组）。放行：
+### B. 防火墙放行端口（**两层，都要放行**）
+
+这是最容易踩的坑：**轻量应用服务器有两层防火墙，缺一层就不通**。
+
+**第 1 层：服务器内的 ufw**（可由脚本/SSH 完成）
+
+```bash
+sudo ufw allow 8090/tcp comment 'supersnake official'
+sudo ufw allow 8091/tcp comment 'supersnake dev'
+```
+
+ufw 是白名单叠加，只增不改，不影响既有的 22 / 443 / 8527:8529 / 7000 规则。
+
+**第 2 层：腾讯云轻量控制台「防火墙」页**（**只能在控制台手动操作**）
+
+轻量应用服务器实例 → 防火墙（注意不是 CVM 安全组）。放行：
 
 | 端口 | 协议 | 用途 |
 |---|---|---|
 | 8090 | TCP | 正式进程（页面 + ws） |
 | 8091 | TCP | 测试进程（页面 + ws） |
-| 22 | TCP | 仅运维登录（可选：限源 IP） |
+
+**排障判据**（2026-09-01 实测踩过，记下来省时间）：
+
+| 现象 | 结论 |
+|---|---|
+| 服务器 `curl 127.0.0.1:8090` → 200，但 `curl 43.161.196.218:8090` → 失败 | 云控制台防火墙未放行（ufw 已放行时） |
+| `sudo iptables -L ufw-user-input -n \| grep 8090` 有 ACCEPT | ufw 这层没问题，问题在云控制台层 |
+| 对照：`8527` 公网通而 `8090` 不通 | 证明网络链路本身正常，纯粹是该端口未在控制台放行 |
+
+> **另一个干扰源**：若你在公司内网机器上测试，本地 IT 代理（`http_proxy`）
+> 可能返回 **502 Bad Gateway**（响应体带「8000助手」字样）而非超时。
+> 这是**代理拒绝转发境外 IP**，不是服务器故障。判断方法：改用
+> 「SSH 到服务器再 curl 自己的公网 IP」作为权威判据，可完全绕开本地代理。
 
 ### C. 腾讯云 CAM 配置 OIDC 角色
 
@@ -166,11 +218,19 @@ systemctl is-active ... && curl 127.0.0.1:<port>/     # 服务器本机自检
 
 ## 4. 验收清单（首次联调逐项确认）
 
-- [ ] `server-init.sh` 跑通，deploy key 公钥已加到 GitHub（只读）
-- [ ] `systemctl status supersnake-official supersnake-dev` 均 active
+进度标记：`[x]` 已实测通过（2026-09-01） / `[ ]` 待办
+
+- [x] `server-init.sh` 跑通（Node v22.23.2，official=main / dev=develop 双 checkout）
+- [x] 仓库为公开仓库，**无需 deploy key**（已从方案中移除）
+- [x] `systemctl is-active supersnake-official supersnake-dev` 均 active
+- [x] 服务器本机 `curl 127.0.0.1:8090 / :8091` 均 HTTP 200
+- [x] 在役服务未受影响（nginx / frps / docker / fail2ban / tat_agent 全部照旧，80、8527-8529、7000 未被占用）
+- [x] ufw 已放行 8090/8091（既有 4 组规则未改动）
+- [ ] **腾讯云轻量控制台防火墙放行 8090/8091**（只能手动，当前卡在这里）
 - [ ] 浏览器开 `http://43.161.196.218:8090/` 与 `:8091/` 均见主菜单
 - [ ] 两个环境各双开标签页进「在线对战」，能匹配进同一对局
-- [ ] CAM 角色配置完成，`TENCENT_ROLE_ARN` / `TAT_INSTANCE_ID` 两个 Variables 已填
+- [ ] `gh auth login` 完成，`TENCENT_ROLE_ARN` / `TAT_INSTANCE_ID` 两个 Variables 已填
+- [ ] CAM 角色（OIDC 身份提供商 + 信任策略 + TAT 策略）配置完成
 - [ ] push 一个 develop 提交 → Actions 全绿 → `:8091` 页面出现新改动
 - [ ] 手动 Run official workflow → Actions 全绿 → `:8090` 页面出现新改动
 - [ ] 首次运行若 `ci-deploy.sh` 中 tccli 参数报错（如 `DescribeInvocationTasks` 的参数名），按报错提示修正后重跑——TAT CLI 参数以 `tccli tat DescribeInvocationTasks help` 输出为准
@@ -182,7 +242,10 @@ systemctl is-active ... && curl 127.0.0.1:<port>/     # 服务器本机自检
 | 项 | 现状 | 计划 |
 |---|---|---|
 | 部署重启杀在线玩家 | 「掉线判负」规则下，restart 瞬间在线玩家被判负 | TODO：server 增加 drain 接口（停止接新匹配，房间清零或超时后重启），official 部署脚本接入 |
-| SSH 密码登录 | 当前密码认证开放（密码已出现在聊天记录中） | 建议：配置 SSH 密钥后 `PasswordAuthentication no`；CI 不依赖 SSH，关闭密码不影响部署 |
-| 无 HTTPS/域名 | 裸 IP + 端口访问 | 后续有域名需求时加 Nginx/Caddy 反代 + wss |
-| 版本可见性 | 验收靠肉眼比对页面改动 | TODO：server 增加 `/version` 端点返回 git SHA，CI 验收直接比对 |
+| SSH 密码登录 | 已建立密钥免密登录（`id_ed25519`）；密码认证仍开放，且密码曾出现在聊天记录中 | **建议尽快** `PasswordAuthentication no`——免密已通，CI 也不依赖 SSH，关闭无影响。另建议改掉该密码 |
+| 无 HTTPS/域名 | 裸 IP + 端口访问 | 见下方「微信小游戏 phase2」——届时必须补 |
+| **微信小游戏 phase2** | ufw 里已预留 `443/tcp # wechat game (phase2)`，但当前无域名无证书 | 微信小游戏**强制 wss**，不接受裸 http/ws。届时需：域名 + 证书 + nginx 443 反代到 8090。`wsTransport.js` 已支持 `wss://` 自适应（`location.protocol === 'https:'` 分支），**前端零改动** |
+| nginx 反代未启用 | 本机 nginx 已在役（服务 8527-8529），但 supersnake 走直连 8090/8091 | 当前直连便于定位问题；接入 443 时再加 server 段。**改动在役 nginx 配置前需明确确认** |
+| 版本可见性 | 验收靠肉眼比对页面改动 | TODO：server 增加 `/version` 端点返回 git SHA，CI 验收直接比对（也能让 `ci-deploy.sh` 的验收从「HTTP 200」升级为「SHA 匹配」） |
 | tccli 细节 | `DescribeInvocationTasks` 参数名以首联实测为准 | 已在验收清单中标注 |
+| frps 非 systemd 托管 | `systemctl is-active frps` = inactive 但 7000 端口有 frps 进程 | 与本项目无关，仅记录以免日后误判「服务挂了」 |
