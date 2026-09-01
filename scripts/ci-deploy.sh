@@ -31,8 +31,16 @@ INV=$(tccli tat RunCommand --region "$REGION" \
   --CommandType SHELL \
   --Username ubuntu \
   --Timeout 300 \
-  --output json)
-INV_ID=$(echo "$INV" | jq -r '.Response.InvocationId')
+  --output json) || { echo "!! RunCommand 调用本身失败（tccli 非零退出）"; exit 1; }
+echo "---- RunCommand 原始响应 ----"
+echo "$INV"
+echo "----------------------------"
+INV_ID=$(echo "$INV" | jq -r '.Response.InvocationId // empty')
+if [ -z "$INV_ID" ] || [ "$INV_ID" = "null" ]; then
+  echo "!! RunCommand 未返回 InvocationId，调用未真正下发。完整响应见上方。"
+  echo "   常见原因：CAM 策略缺 tat:RunCommand、实例 agent 离线、参数被服务端拒。"
+  exit 1
+fi
 echo "InvocationId: $INV_ID"
 
 STATUS="PENDING"
