@@ -598,7 +598,7 @@
     if (this.state === 'menu') {
       this.addButton('level', cx, H * 0.40, bw, bh, '闯关模式');
       this.addButton('endless', cx, H * 0.40 + bh + 16, bw, bh, '无尽模式');
-      this.addButton('multi', cx, H * 0.40 + 2 * (bh + 16), bw, bh, '多人对战');
+      this.addButton('multi', cx, H * 0.40 + 2 * (bh + 16), bw, bh, 'AI对战');
       this.addButton('online', cx, H * 0.40 + 3 * (bh + 16), bw, bh, '在线对战');
       this.addButton('guide', cx, H * 0.40 + 4 * (bh + 16), bw, bh, '图鉴');
     } else if (this.state === 'matching') {

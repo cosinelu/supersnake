@@ -115,6 +115,7 @@
    */
   Multiplayer.prototype.addPlayer = function (snake, name) {
     var e = new Entry(snake, name || '我', true);
+    this.usedNames[e.name] = true; // 真人昵称整局保留：AI 不复用（kill 只释放 AI 名）
     this.players.push(e);
     this.liveSnakes.push(snake);
     if (!this.playerEntry) this.playerEntry = e;

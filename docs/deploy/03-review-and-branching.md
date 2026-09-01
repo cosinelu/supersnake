@@ -9,26 +9,28 @@
 
 ## 1. 分支模型
 
-**两分支模型**（明确决策：不设 feature 分支）：
+> 最高准则以 `docs/README.md` 第 1 节为准，本节是实现细节。
 
 ```
-本地开发 ──直推──> develop ──push 钩子自动部署──> 测试环境 https://dev-snake.pippocao.top
-                     │
-                     └──PR（CI 绿 + 人工 review）──> main ──手动按钮──> 正式环境 https://snake.pippocao.top
+feature/* ──┐（可选：较大改动临时分支，合完即删）
+            ├──合入──> develop ──push 钩子自动部署──> 测试环境 https://dev-snake.pippocao.top
+本地直推 ───┘              │
+                          └──PR（CI 绿 + 人工 review）──> main ──手动按钮──> 正式环境 https://snake.pippocao.top
 ```
 
 | 分支 | 角色 | 进入方式 | 部署 |
 |---|---|---|---|
-| `develop` | 日常开发分支，随时可能不稳 | **直接 push**（无需 PR） | push 后**自动**部署测试环境（8091） |
+| `develop` | 唯一开发集成分支，随时可能不稳 | **直接 push**（无需 PR），或 feature 合入 | push 后**自动**部署测试环境（8091） |
+| `feature/*` | 可选临时分支（较大改动/多轮迭代） | 从 develop 切出，完成后合回 develop | 不直接部署 |
 | `main` | 与正式环境一致 | **PR 合入**（CI 绿 + 人工 review） | **手动** Run workflow 部署正式环境（8090） |
 
-**为什么不要 feature 分支**：单人项目，开 feature 分支再 PR 到 develop 只是给自己
-加仪式感——develop 本身就是「随时可能不稳」的集成分支，测试环境挂了也不影响正式。
-真正需要门禁的位置只有一处：**develop → main**。把闸门集中在这一处，
-既不牺牲安全，也不制造无意义流程。
+**合入 main = 阶段性版本**：必须同时升版本号（根 README 标题行为真源）并打同名 tag，
+详见 `docs/README.md` §1.2。
 
-需要多人协作或做长周期大改造时，再按需临时开 feature 分支即可，CI 无需改动
-（`pr-review.yml` 对所有 PR 与 push 都生效）。
+**为什么门禁集中在 develop → main**：develop 是「随时可能不稳」的集成分支，
+测试环境挂了也不影响正式；真正需要门禁的位置只有 main。把闸门集中在这一处，
+既不牺牲安全，也不制造无意义流程。小改动直推 develop 即可；
+较大改动开 `feature/*` 合入 develop，保留变更叙事。
 
 **当前状态：`develop` 与 `main` 均已就绪**，两个部署 workflow 已配好并指向对应域名。
 
