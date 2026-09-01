@@ -1,0 +1,51 @@
+name: official-deploy
+
+# 正式环境部署：仅手动触发（Run workflow，main 分支）——发布节奏完全可控
+# 链路：全量测试 → OIDC 换临时凭证 → TAT 下发 deploy-remote.sh → 公网验收
+# 设计文档：docs/deploy/02-tencentcloud-hk-ci.md
+# 注意：部署会重启服务，当前「掉线判负」规则下在线玩家会被终止对局（drain 机制见文档 TODO）
+
+on:
+  workflow_dispatch:
+    branches: [main]
+
+concurrency:
+  group: deploy-official
+  cancel-in-progress: false
+
+permissions:
+  id-token: write   # OIDC 必需
+  contents: read
+
+env:
+  ENV: official
+  BRANCH: main
+  PUBLIC_URL: http://43.161.196.218:8090/
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run full test suite
+        run: node test/smoke.js && cd server && npm ci && npm test
+
+      - name: OIDC auth to Tencent Cloud
+        uses: everpcpc/tencentcloud-oidc-auth@v1
+        with:
+          role-arn: ${{ vars.TENCENT_ROLE_ARN }}
+          oidc-provider-id: github
+          region: ap-hongkong
+
+      - name: Install tccli
+        run: pip install tccli
+
+      - name: Deploy via TAT and verify
+        env:
+          INSTANCE_ID: ${{ vars.TAT_INSTANCE_ID }}
+        run: bash scripts/ci-deploy.sh
