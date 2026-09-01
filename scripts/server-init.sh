@@ -68,7 +68,9 @@ Type=simple
 User=ubuntu
 WorkingDirectory=$dir
 Environment=PORT=$port
-Environment=HOST=0.0.0.0
+# 只听本机：公网唯一入口是 nginx:80 反代（见 scripts/nginx-setup.sh）。
+# 纵深防御——即使 ufw 规则被误改，后端也不会直接暴露。
+Environment=HOST=127.0.0.1
 Environment=NODE_ENV=production
 ExecStart=/usr/bin/node server/index.js
 Restart=always

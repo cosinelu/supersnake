@@ -20,7 +20,10 @@ permissions:
 env:
   ENV: official
   BRANCH: main
-  PUBLIC_URL: http://43.161.196.218:8090/
+  # 公网验收：后端已改为仅监听 127.0.0.1，公网入口统一为 nginx:80。
+  # 纯 IP 访问由 nginx 兜底路由到正式环境（8090）。
+  # 有域名后改为 http://snake.<你的域名>/ 。
+  PUBLIC_URL: http://43.161.196.218/
 
 jobs:
   test-and-deploy:
