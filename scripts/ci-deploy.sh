@@ -35,10 +35,11 @@ INV=$(tccli tat RunCommand --region "$REGION" \
 echo "---- RunCommand 原始响应 ----"
 echo "$INV"
 echo "----------------------------"
-INV_ID=$(echo "$INV" | jq -r '.Response.InvocationId // empty')
+# 注意：tccli 把响应拍平到顶层（{"CommandId":...,"InvocationId":...}），
+# 不在 .Response 下 —— 与腾讯云 API 文档的嵌套结构不同。实测踩过（误判为失败）。
+INV_ID=$(echo "$INV" | jq -r '.InvocationId // .Response.InvocationId // empty')
 if [ -z "$INV_ID" ] || [ "$INV_ID" = "null" ]; then
   echo "!! RunCommand 未返回 InvocationId，调用未真正下发。完整响应见上方。"
-  echo "   常见原因：CAM 策略缺 tat:RunCommand、实例 agent 离线、参数被服务端拒。"
   exit 1
 fi
 echo "InvocationId: $INV_ID"
@@ -48,7 +49,7 @@ for i in $(seq 1 60); do
   sleep 5
   STATUS=$(tccli tat DescribeInvocations --region "$REGION" \
     --InvocationIds "[\"$INV_ID\"]" --output json \
-    | jq -r '.Response.InvocationSet[0].InvocationStatus')
+    | jq -r '.InvocationSet[0].InvocationStatus // .Response.InvocationSet[0].InvocationStatus // "UNKNOWN"')
   echo "[poll $i] invocation status: $STATUS"
   case "$STATUS" in
     PENDING|DELIVERING|DELIVER_DELAYED|RUNNING) ;;
@@ -56,14 +57,16 @@ for i in $(seq 1 60); do
   esac
 done
 
-# 拉取远端任务的退出码与输出（Output 为 base64；参数名若与 tccli 版本不符，以
-# `tccli tat DescribeInvocationTasks help` 输出为准修正——见部署文档验收清单）
+# 拉取远端任务的退出码与输出（Output 为 base64）。tccli 响应同样拍平到顶层。
 TASK=$(tccli tat DescribeInvocationTasks --region "$REGION" \
   --InvocationIds "[\"$INV_ID\"]" --output json || echo '{}')
-EXIT_CODE=$(echo "$TASK" | jq -r '.Response.InvocationTaskSet[0].ExitCode // "unknown"')
+echo "---- DescribeInvocationTasks 原始响应 ----"
+echo "$TASK"
+echo "------------------------------------------"
+EXIT_CODE=$(echo "$TASK" | jq -r '.InvocationTaskSet[0].ExitCode // .Response.InvocationTaskSet[0].ExitCode // "unknown"')
 echo "---- remote exit code: $EXIT_CODE ----"
-echo "$TASK" | jq -r '.Response.InvocationTaskSet[0].Output // ""' | base64 -d 2>/dev/null \
-  || echo "$TASK" | jq -r '.Response.InvocationTaskSet[0].Output // "no output"'
+echo "$TASK" | jq -r '.InvocationTaskSet[0].Output // .Response.InvocationTaskSet[0].Output // ""' | base64 -d 2>/dev/null \
+  || echo "$TASK" | jq -r '.InvocationTaskSet[0].Output // .Response.InvocationTaskSet[0].Output // "no output"'
 echo "------------------------------------------"
 
 # 先判远端退出码：若部署脚本内部就失败了，直接报它，
