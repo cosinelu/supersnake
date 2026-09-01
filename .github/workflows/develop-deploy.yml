@@ -30,6 +30,16 @@ jobs:
   test-and-deploy:
     runs-on: ubuntu-latest
     steps:
+      # 分支硬校验：测试环境只允许从 develop 部署。
+      # 为什么需要：workflow_dispatch 的 branches 只决定按钮默认分支，
+      # 点 Run 时仍可下拉选任意分支 —— 不拦就可能拿 main（或任何分支）的代码上测试环境。
+      - name: Guard branch (develop only)
+        run: |
+          if [ "$GITHUB_REF_NAME" != "develop" ]; then
+            echo "!! develop-deploy 只允许从 develop 分支触发，当前是 $GITHUB_REF_NAME"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
