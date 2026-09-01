@@ -9,26 +9,38 @@
 
 ## 1. 分支模型
 
+**两分支模型**（明确决策：不设 feature 分支）：
+
 ```
-feature/xxx ──PR──> develop ──自动部署──> 测试环境 :8091
-                       │
-                       └──PR（人工 review）──> main ──手动按钮──> 正式环境 :8090
+本地开发 ──直推──> develop ──push 钩子自动部署──> 测试环境 https://dev-snake.pippocao.top
+                     │
+                     └──PR（CI 绿 + 人工 review）──> main ──手动按钮──> 正式环境 https://snake.pippocao.top
 ```
 
 | 分支 | 角色 | 进入方式 | 部署 |
 |---|---|---|---|
-| `feature/*` | 单个功能/修复 | 本地开 | 不部署 |
-| `develop` | 集成分支，随时可能不稳 | PR 合入（CI 必须绿） | push 后自动部署 `:8091` |
-| `main` | 与正式环境一致 | PR 合入（CI 绿 + 人工 review） | 手动 Run workflow 部署 `:8090` |
+| `develop` | 日常开发分支，随时可能不稳 | **直接 push**（无需 PR） | push 后**自动**部署测试环境（8091） |
+| `main` | 与正式环境一致 | **PR 合入**（CI 绿 + 人工 review） | **手动** Run workflow 部署正式环境（8090） |
 
-**当前状态：仓库只有 `main`，`develop` 尚未创建**——这是部署方案的前置条件（见第 5 节）。
+**为什么不要 feature 分支**：单人项目，开 feature 分支再 PR 到 develop 只是给自己
+加仪式感——develop 本身就是「随时可能不稳」的集成分支，测试环境挂了也不影响正式。
+真正需要门禁的位置只有一处：**develop → main**。把闸门集中在这一处，
+既不牺牲安全，也不制造无意义流程。
 
-### 单人项目为什么还要 PR
+需要多人协作或做长周期大改造时，再按需临时开 feature 分支即可，CI 无需改动
+（`pr-review.yml` 对所有 PR 与 push 都生效）。
+
+**当前状态：`develop` 与 `main` 均已就绪**，两个部署 workflow 已配好并指向对应域名。
+
+### 单人项目为什么 develop → main 还要走 PR
 
 不是为了「让别人审」，而是为了三件事：
 ①**留下变更叙事**（几个月后回看，PR 描述比 commit message 完整）；
 ②**给 CI 一个拦截点**（PR 上 CI 红了就合不进去，比推完再发现问题便宜）；
 ③**diff 集中审视**——写的时候是逐文件的，审的时候是整体的，视角不同，能捞出不同的问题。
+
+而 develop 不走 PR，是因为它的错误成本极低（测试环境坏了就坏了），
+而流程摩擦成本每天都在付。
 
 ---
 
@@ -100,31 +112,43 @@ feature/xxx ──PR──> develop ──自动部署──> 测试环境 :8091
 ```
 本地写码
   │
-  ├─ 机器闸①：PR 上 CI（syntax/test/hygiene/deploy-lint）——红则合不进
+  ├─ 直接 push develop（无 PR 门禁——错误成本低，流程摩擦成本高）
+  │     └─ push 触发 CI：syntax/test/hygiene/deploy-lint 跑一遍
   │
-  ├─ 人工闸：按清单审 diff——过则合入 develop
+  ├─ 自动部署测试环境 https://dev-snake.pippocao.top
+  │     └─ CI 自动验收：页面内容 + wss 握手 101
   │
-  ├─ 自动部署测试环境 :8091 ——真机试玩（机器与人都替代不了的一步）
+  ├─ 真机试玩（机器与人都替代不了的一步）
   │
-  ├─ 机器闸②：develop → main 的 PR 再跑一遍 CI
+  ├─ 机器闸：develop → main 的 PR 上跑 CI（四个 job，红则合不进）
   │
-  └─ 手动按钮 → 正式环境 :8090
+  ├─ 人工闸：按第 3 节清单审 diff
+  │
+  └─ 手动按钮 → 正式环境 https://snake.pippocao.top
+        └─ CI 自动验收：页面内容 + wss 握手 101
 ```
 
 关键设计：**测试环境试玩是不可跳过的一环**。这个项目大量价值在「手感」上——转向是否跟手、消除特效是否明显、AI 是否够聪明——这些没有任何自动测试能覆盖，只能真机玩。CI 的作用是保证「不会因为低级错误浪费你试玩的时间」。
+
+另一个设计取舍：**门禁强度与错误成本匹配**。develop 无 PR 门禁但有 CI；
+main 有 PR + CI + 人工 review + 手动触发四重。把严格度放在真正要紧的地方。
 
 ---
 
 ## 5. 落地步骤（按顺序）
 
-- [ ] 1. 建 `develop` 分支：`git checkout -b develop && git push -u origin develop`
-- [ ] 2. 推送本次新增文件（workflows / scripts / docs）到 `develop`
-- [ ] 3. GitHub 仓库 Settings → Branches → 给 `main` 加保护规则：
+- [x] 1. 建 `develop` 分支：`git checkout -b develop && git push -u origin develop`
+- [x] 2. 推送新增文件（workflows / scripts / docs）到 `develop`
+- [x] 3. `pr-review.yml` 四个 job 实测全绿
+- [ ] 4. GitHub 仓库 Settings → Branches → 给 **`main`** 加保护规则：
       - Require a pull request before merging
       - Require status checks to pass：勾选 `syntax` / `test` / `hygiene` / `deploy-lint`
-      - （单人项目可不勾 Require approvals，避免自己批不了自己的 PR）
-- [ ] 4. 同样给 `develop` 加保护（只勾 status checks，允许自己直推可选）
-- [ ] 5. 开一个测试 PR 验证四个 check 都跑起来且能拦住故意引入的错误
+      - （单人项目不勾 Require approvals，避免自己批不了自己的 PR）
+      - **`develop` 不加 PR 保护**（按两分支模型，允许直推）；可选只勾 status checks
+- [ ] 5. 开一个测试 PR（develop → main）验证四个 check 都跑起来且能拦住故意引入的错误
+
+> 第 4 步**需要仓库 admin 权限**，当前 gh token `permissions.admin = false`
+> （API 返回 404 而非 403——GitHub 惯例用 404 防资源探测），只能手动在网页配置。
 
 ---
 

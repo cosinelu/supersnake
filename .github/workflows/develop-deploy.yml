@@ -21,11 +21,10 @@ permissions:
 env:
   ENV: dev
   BRANCH: develop
-  # 公网验收 URL。后端 8090/8091 已改为仅监听 127.0.0.1，公网入口统一为 nginx:80。
-  # 无域名阶段：测试环境在 80 上无法与正式区分 → 留空，由服务器内部自检兜底
-  #             （deploy-remote.sh 已 curl 127.0.0.1:8091）。
-  # 有域名后：填 http://dev-snake.<你的域名>/ 即可恢复端到端公网验收。
-  PUBLIC_URL: ""
+  # 公网验收 URL。后端 8090/8091 仅监听 127.0.0.1，公网入口统一为 nginx。
+  # 按 host 区分环境：dev-snake → 8091（测试），snake → 8090（正式）。
+  # 已上 Let's Encrypt（SAN 含两个子域名），80 会 301 跳 443，所以直接写 https。
+  PUBLIC_URL: https://dev-snake.pippocao.top/
 
 jobs:
   test-and-deploy:

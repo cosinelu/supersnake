@@ -20,10 +20,10 @@ permissions:
 env:
   ENV: official
   BRANCH: main
-  # 公网验收：后端已改为仅监听 127.0.0.1，公网入口统一为 nginx:80。
-  # 纯 IP 访问由 nginx 兜底路由到正式环境（8090）。
-  # 有域名后改为 http://snake.<你的域名>/ 。
-  PUBLIC_URL: http://43.161.196.218/
+  # 公网验收：后端仅监听 127.0.0.1，公网入口统一为 nginx。
+  # 按 host 区分环境：snake → 8090（正式）。裸 IP 也兜底到正式，但用域名更精确。
+  # 已上 Let's Encrypt（SAN 含两个子域名），80 会 301 跳 443，所以直接写 https。
+  PUBLIC_URL: https://snake.pippocao.top/
 
 jobs:
   test-and-deploy:

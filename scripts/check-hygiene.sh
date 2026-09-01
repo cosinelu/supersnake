@@ -75,14 +75,18 @@ else
   done
 fi
 
-# ---------- 5. 代码里不硬编码服务器 IP ----------
-# 依据：服务器地址只应出现在 workflow 与文档；代码硬编码会让本地/测试/正式串台
-IP_HIT=$(grep -rnE '43\.161\.196\.218' js/ server/ test/ 2>/dev/null || true)
-if [ -z "$IP_HIT" ]; then
-  ok "js/ server/ test/ 无硬编码服务器 IP"
+# ---------- 5. 代码里不硬编码服务器地址（IP 或域名）----------
+# 依据：服务器地址只应出现在 workflow 与文档；代码硬编码会让本地/测试/正式串台。
+# 域名同理——前端 ws 地址必须走 wsTransport.js 的 location.host 自适应逻辑，
+# 一旦写死 snake.pippocao.top，本地开发和测试环境就都连到正式服了。
+# 例外：test/wss-verify.js 是手动排障工具，域名只出现在注释的示例用法里，URL 由 argv 传入。
+ADDR_HIT=$(grep -rnE '43\.161\.196\.218|[a-z-]*\.?pippocao\.top' js/ server/ test/ 2>/dev/null \
+  | grep -v '^test/wss-verify\.js:.*//' || true)
+if [ -z "$ADDR_HIT" ]; then
+  ok "js/ server/ test/ 无硬编码服务器地址（IP / 域名）"
 else
-  bad "代码中出现硬编码服务器 IP（应只存在于 workflow 与文档）："
-  printf '%s\n' "$IP_HIT" | sed 's/^/       /'
+  bad "代码中出现硬编码服务器地址（应只存在于 workflow 与文档）："
+  printf '%s\n' "$ADDR_HIT" | sed 's/^/       /'
 fi
 
 # ---------- 6. 不出现疑似密钥/密码字面量 ----------

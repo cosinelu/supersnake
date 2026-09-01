@@ -62,8 +62,32 @@ fi
 # 端到端验收：从公网拉页面（比 ExitCode 更硬的证据——服务真的活着）
 if [ -n "$PUBLIC_URL" ]; then
   sleep 3
-  curl -fsS --max-time 15 "$PUBLIC_URL" > /dev/null
-  echo "== e2e OK: $PUBLIC_URL serving =="
+
+  # 1) 页面可达 + 内容抽检。只看 200 不够：nginx 兜错 server 块也会给 200
+  #    （实测过所有子域名都落到 default 欢迎页的情况），所以必须校验标题。
+  BODY=$(curl -fsS --max-time 15 "$PUBLIC_URL")
+  echo "$BODY" | grep -q '消食蛇' || {
+    echo "!! e2e 失败：$PUBLIC_URL 返回 200 但内容不是消食蛇页面（可能被 nginx 兜到了默认站点）"
+    echo "$BODY" | head -20
+    exit 1
+  }
+  echo "== e2e OK: $PUBLIC_URL 页面内容校验通过 =="
+
+  # 2) WebSocket 握手。联机对战的命门，静态页 200 完全不能代表 ws 通。
+  #    注意：/ws 必须走 HTTP/1.1——HTTP/2 里 Connection/Upgrade 头非法会被丢弃，
+  #    请求退化成普通 GET /ws，被服务端静态白名单拒成 404（实测踩过这个假象）。
+  WS_URL="${PUBLIC_URL%/}/ws"
+  WS_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --http1.1 \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+    "$WS_URL" || true)
+  if [ "$WS_CODE" = "101" ]; then
+    echo "== e2e OK: WebSocket 握手 101（$WS_URL）=="
+  else
+    echo "!! e2e 失败：WebSocket 握手返回 $WS_CODE（期望 101），$WS_URL"
+    echo "   排查方向：nginx 的 location /ws 是否转发了 Upgrade/Connection 头"
+    exit 1
+  fi
 else
   echo "== e2e 跳过：PUBLIC_URL 未设置（由远端 curl 127.0.0.1:PORT 自检兜底）=="
 fi
