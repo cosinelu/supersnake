@@ -29,8 +29,17 @@
 | WebSocket | `ws://127.0.0.1:8090/ws` | `wss://dev-snake.pippocao.top/ws` | `wss://snake.pippocao.top/ws` |
 | 部署方式 | 手动 | push develop 自动 | GitHub 页面手动 Run workflow |
 
-服务器：云轻量应用服务器（香港 `ap-hongkong`，免备案），实例 ID **`ins-8l4bb18g`**
-（注意：本实例元数据返回的是 `ins-` 前缀而非文档常见的 `lhins-`，TAT 调用直接用它）。
+服务器：云轻量应用服务器（香港 `ap-hongkong`，免备案），实例 ID **`lhins-m24kcgen`**。
+
+> ⚠️ **实例 ID 的坑（2026-09-01 实测踩过，导致 TAT `AgentNotInstalled`）**：
+> 这台是**轻量应用服务器（Lighthouse）**，在 TAT 控制面里的实例 ID 是 **`lhins-` 前缀**
+> （控制台实例详情页可见）。但 SSH 进机器读元数据
+> `http://metadata.tencentyun.com/latest/meta-data/instance-id` 返回的是 **`ins-8l4bb18g`**
+> （CVM 风格 ID）——两者**不一样**，TAT 只认 `lhins-` 那个。
+> 用 `ins-` 调 `RunCommand` 会报
+> `ResourceUnavailable.AgentNotInstalled: instance ins-xxx does not have agent installed or does not exist`
+> ——这报错极具误导性，真实原因是**实例 ID 错了，TAT 找不到这台机器**，不是 agent 没装。
+> **正确取法：看轻量控制台实例详情页的"实例 ID"，不要信机器内的元数据。**
 
 裸 IP `http://43.161.196.218/` 仍可用，兜底路由到**正式环境**，但不做 https 跳转
 （证书 SAN 不含 IP，跳过去浏览器会报证书不匹配）。
@@ -420,9 +429,10 @@ Settings → Secrets and variables → Actions → **Variables**（不是 Secret
 | 变量名 | 值 | 状态 |
 |---|---|---|
 | `TENCENT_ROLE_ARN` | 上一步的角色 ARN | ⬜ 待填（CAM 配完才有） |
-| `TAT_INSTANCE_ID` | `ins-8l4bb18g` | ✅ 已填 |
+| `TAT_INSTANCE_ID` | `lhins-m24kcgen` | ✅ 已填 |
 
-> 实例 ID 在轻量服务器控制台实例详情页可见。注意本实例是 `ins-` 前缀而非 `lhins-`。
+> 实例 ID 在**轻量应用服务器控制台 → 实例详情页**可见（`lhins-` 前缀）。
+> **不要**用机器内 `metadata.tencentyun.com/latest/meta-data/instance-id` 返回的 `ins-` 值——那是 CVM 风格 ID，TAT 不认。
 > `PUBLIC_URL` 不走 Variables，直接写在两个 workflow 的 `env:` 里（明文域名，无需保密）。
 
 ---
@@ -470,7 +480,7 @@ systemctl is-active ... && curl 127.0.0.1:<port>/     # 服务器本机自检
 - [x] `sites-available/default` 未被抢占（其他 Host 仍返回 nginx 欢迎页）
 - [x] 在役服务未受影响（nginx relay 8527-8529 / frps / docker / fail2ban / tat_agent 全部照旧）
 - [x] ufw 放行 80 + 443，收回 8090/8091（既有规则未改动）
-- [x] `TAT_INSTANCE_ID` = `ins-8l4bb18g` 已填入 GitHub Variables
+- [x] `TAT_INSTANCE_ID` = `lhins-m24kcgen` 已填入 GitHub Variables（曾误用元数据的 `ins-8l4bb18g`，已修正）
 - [x] `pr-review` workflow 全绿（syntax / test / hygiene / deploy-lint 四个 job 均通过）
 - [x] **云轻量控制台防火墙放行 TCP 80 + 443**（实测公网自访问 200，卡点已解除）
 - [x] **域名接入**：`snake.pippocao.top` / `dev-snake.pippocao.top`（通配符 DNS，无需新增记录）
