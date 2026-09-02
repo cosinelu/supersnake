@@ -695,18 +695,45 @@
     var bw = Math.min(220, W * 0.3), bh = 54;
     var i;
     if (this.state === 'menu') {
-      // 标题画在 H*0.22（52px 字），按钮组从标题下方开始，底部留安全区。
-      // 极端矮屏（如 320x240）连压缩到下限都放不下 → 进一步收缩标题预留，
-      // 保证按钮永远可点（宁可标题被按钮压近，也不能有按钮点不到）。
+      // 主菜单按钮：可用区 = 标题/蛇动画之下 ~ 底部信息之上（不侵占它们，见 docs/design §3.8.2）
+      //   蛇动画轨道 y = H*0.22 + 52*0.95（renderer.drawTitleFx）
+      //   副标题     y = H*0.35        底部两行信息 y = H*0.89 / +22
+      // 横屏矮屏单列必然放不下 5 个 → 改**两列**（左 3 右 2），而不是继续压缩纵向，
+      // 否则按钮会盖住动画与文字（v3.0.3 的做法只治症）。
       var ids = ['level', 'endless', 'multi', 'online', 'guide'];
       var labels = ['闯关模式', '无尽模式', 'AI对战', '在线对战', '图鉴'];
-      var bottom = H - 14 - inset.bottom;
-      var top = H * 0.22 + 46;
-      var minNeed = ids.length * 34 + (ids.length - 1) * 6; // 下限总高
-      if (bottom - top < minNeed) top = Math.max(inset.top + 8, bottom - minNeed);
-      var st = this.solveButtonStack(ids.length, top, bottom);
-      for (i = 0; i < ids.length; i++) {
-        this.addButton(ids[i], cx, st.firstCy + i * st.step, bw, st.bh, labels[i]);
+      var top = Math.max(H * 0.35 + 16, H * 0.22 + 52 * 0.95 + 20); // 让开副标题与蛇动画
+      var bottom = H * 0.89 - 14 - inset.bottom;                     // 让开底部两行信息
+      // 极端矮屏（如 320x240）连两列都放不下 → 放宽到整屏可用区（此时宁可与文字靠近，
+      // 也必须保证按钮可点、不出屏；顺序：先保可点，再保美观）。
+      var minTwoCol = Math.ceil(ids.length / 2) * 38 + (Math.ceil(ids.length / 2) - 1) * 8;
+      if (bottom - top < minTwoCol) {
+        top = Math.max(inset.top + 8, H * 0.22 + 30);
+        bottom = H - 10 - inset.bottom;
+      }
+      var needOne = ids.length * bh + (ids.length - 1) * 16;
+      var twoCol = (bottom - top) < needOne;                         // 单列放不下 → 两列
+
+      if (twoCol) {
+        var leftN = Math.ceil(ids.length / 2);                       // 左 3 右 2
+        var colGap = 24;
+        var cw2 = Math.min(bw, (W - colGap - 40) / 2);
+        var st2 = this.solveButtonStack(leftN, top, bottom, { bh: bh, gap: 14, minBh: 38, minGap: 8 });
+        var lx = cx - cw2 / 2 - colGap / 2, rx = cx + cw2 / 2 + colGap / 2;
+        for (i = 0; i < ids.length; i++) {
+          var inLeft = i < leftN;
+          var idxInCol = inLeft ? i : i - leftN;
+          // 右列比左列少 1 个时，整列垂直居中对齐左列（观感更稳）
+          var colCount = inLeft ? leftN : (ids.length - leftN);
+          var offs = (leftN - colCount) * st2.step / 2;
+          this.addButton(ids[i], inLeft ? lx : rx,
+            st2.firstCy + idxInCol * st2.step + offs, cw2, st2.bh, labels[i]);
+        }
+      } else {
+        var st = this.solveButtonStack(ids.length, top, bottom);
+        for (i = 0; i < ids.length; i++) {
+          this.addButton(ids[i], cx, st.firstCy + i * st.step, bw, st.bh, labels[i]);
+        }
       }
     } else if (this.state === 'matching') {
       this.addButton('online_cancel', cx, Math.min(H * 0.72, H - 40 - inset.bottom), bw, bh, '取消匹配');
@@ -738,9 +765,11 @@
       this.addButton('menu', cx, cs.firstCy + (hasNext ? cs.step : 0), bw, cs.bh, '返回菜单');
     } else if (this.state === 'over') {
       if (this.mode === 'multi') {
-        // 多人结算：手绘卡片下方并排放置（renderer 的卡片自适应停在按钮上方）
-        var bw2 = Math.min(170, W * 0.24), bh2 = 50;
-        var by2 = Math.min(H * 0.87, H - bh2 / 2 - 16 - inset.bottom);
+        // 多人结算：按钮并排贴底，把上方空间尽量让给记分牌卡片
+        // （renderer.drawMultiResult 按 btnTop 反推卡片高度；矮屏靠这里贴底才够放两列卡片）
+        var bh2 = H < 460 ? 42 : 50;                       // 矮屏按钮略矮，多让 8px 给卡片
+        var bw2 = Math.min(170, W * 0.24);
+        var by2 = H - bh2 / 2 - 10 - inset.bottom;         // 贴底（原 H*0.87 在矮屏会占太多）
         this.addButton('retry', cx - bw2 / 2 - 14, by2, bw2, bh2, '再来一局');
         this.addButton('menu', cx + bw2 / 2 + 14, by2, bw2, bh2, '返回菜单');
       } else {

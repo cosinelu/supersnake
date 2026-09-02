@@ -1765,20 +1765,34 @@
       { icon: 'snake', label: '最终节数',     value: r.finalLen + ' 节',     color: '#6FBF4A' }
     ];
 
-    // 卡片几何：内容优先，小屏压缩行距；卡片整体停在按钮上方
-    var rowH = 34, padV = 18, titleH = 96, footH = 30;
-    var cw = Math.min(440, W * 0.62);
-    var ch = padV * 2 + titleH + rows.length * rowH + footH;
+    // 卡片几何：矮屏（手机横屏）改**两列统计**，卡片变宽变矮；否则单列 8 行。
+    // 原实现单列压到 rowH 下限 24px 后卡片仍需 354px，而横屏只有 360~390px → 照样超出
+    // （见 docs/design §3.8.2）。正解是利用富余的横向空间。
+    var padV = 18, titleH = 96, footH = 30;
     var btnTop = H;
     for (var bi = 0; bi < game.uiButtons.length; bi++) btnTop = Math.min(btnTop, game.uiButtons[bi].y);
-    var maxCh = btnTop - 20 - 16;
-    if (ch > maxCh) {
-      rowH = Math.max(24, (maxCh - padV * 2 - titleH - footH) / rows.length);
-      ch = padV * 2 + titleH + rows.length * rowH + footH;
+    var roomH = btnTop - 20 - 12;                 // 卡片可用高度（须停在按钮上方，留 20px 间隙）
+    var oneColNeed = padV * 2 + titleH + rows.length * 34 + footH;
+    var twoCol = oneColNeed > roomH;              // 单列放不下 → 两列
+    var perCol = twoCol ? Math.ceil(rows.length / 2) : rows.length;
+
+    var rowH = 34;
+    var cw = twoCol ? Math.min(560, W * 0.86) : Math.min(440, W * 0.62);
+    var ch = padV * 2 + titleH + perCol * rowH + footH;
+    if (ch > roomH) {                             // 两列仍不够 → 压行高
+      rowH = Math.max(22, (roomH - padV * 2 - titleH - footH) / perCol);
+      ch = padV * 2 + titleH + perCol * rowH + footH;
+    }
+    if (ch > roomH) {                             // 极端矮屏（如 320x240）→ 压缩标题区与内边距
+      padV = 8; footH = 18;
+      titleH = Math.max(46, roomH - padV * 2 - perCol * rowH - footH);
+      ch = padV * 2 + titleH + perCol * rowH + footH;
     }
     var cx = W / 2;
     var x = cx - cw / 2;
-    var y = Math.max(12, (btnTop - 20 - ch) / 2);
+    // 垂直居中于「卡片可用区」，并硬性钳制底边不越过按钮上方 12px（极端矮屏兜底）
+    var y = Math.max(6, (btnTop - 20 - ch) / 2);
+    if (y + ch > btnTop - 12) y = Math.max(4, btnTop - 12 - ch);
 
     // ---- 卡片底板（280ms 淡入 + 轻微上移）----
     var aCard = u.clamp(t / 280, 0, 1);
@@ -1812,7 +1826,7 @@
     // ---- 标题区（按名次变化；掉线判负覆盖）----
     var title = r.dropped ? '掉线判负' : (r.rank === 1 ? '冠军！' : (r.rank <= 3 ? '很棒！' : '再接再厉'));
     var titleColor = r.dropped ? '#E8552F' : (r.rank === 1 ? '#C47F17' : (r.rank <= 3 ? '#4A8C3F' : cfg.INK));
-    var ty = y + padV + 50;
+    var ty = y + padV + Math.min(50, titleH * 0.52); // 标题基线随 titleH 收缩（极端矮屏）
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     if (r.rank === 1) {
@@ -1841,12 +1855,16 @@
     ctx.fillText(r.dropped ? '连接中断，不支持重连' : (r.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场'), cx, ty + 30);
     ctx.globalAlpha = aCard;
 
-    // ---- 统计行（每行一项，依次延迟 ~80ms 从左侧滑入）----
+    // ---- 统计行（依次延迟 ~80ms 从左侧滑入；两列时左右并排）----
     var y0 = y + padV + titleH;
+    var colW = twoCol ? cw / 2 : cw;
     for (var ri = 0; ri < rows.length; ri++) {
       var p = u.clamp((t - 260 - ri * 80) / 160, 0, 1);
       if (p <= 0) continue;
-      var ry = y0 + ri * rowH + rowH / 2;
+      var inRight = twoCol && ri >= perCol;
+      var idxInCol = inRight ? ri - perCol : ri;
+      var colX = x + (inRight ? colW : 0);        // 该列左边界
+      var ry = y0 + idxInCol * rowH + rowH / 2;
       var slide = (1 - p) * 22;
       ctx.save();
       ctx.globalAlpha = p * aCard;
@@ -1854,19 +1872,33 @@
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 5]);
       ctx.beginPath();
-      ctx.moveTo(x + 22, y0 + ri * rowH);
-      ctx.lineTo(x + cw - 22, y0 + ri * rowH);
+      ctx.moveTo(colX + (inRight ? 10 : 22), y0 + idxInCol * rowH);
+      ctx.lineTo(colX + colW - (inRight ? 22 : 10), y0 + idxInCol * rowH);
       ctx.stroke();
       ctx.setLineDash([]);
-      drawStatIcon(ctx, rows[ri].icon, x + 44 - slide, ry, 20);
+      drawStatIcon(ctx, rows[ri].icon, colX + (twoCol ? 26 : 44) - slide, ry, twoCol ? 17 : 20);
       ctx.textAlign = 'left';
-      ctx.font = '14px sans-serif';
+      ctx.font = (twoCol ? '12px' : '14px') + ' sans-serif';
       ctx.fillStyle = cfg.INK;
-      ctx.fillText(rows[ri].label, x + 68 - slide, ry);
+      ctx.fillText(rows[ri].label, colX + (twoCol ? 42 : 68) - slide, ry);
       ctx.textAlign = 'right';
-      ctx.font = 'bold 16px sans-serif';
+      ctx.font = 'bold ' + (twoCol ? '14px' : '16px') + ' sans-serif';
       ctx.fillStyle = rows[ri].color;
-      ctx.fillText(rows[ri].value, x + cw - 30 - slide, ry);
+      ctx.fillText(rows[ri].value, colX + colW - (twoCol ? 16 : 30) - slide, ry);
+      ctx.restore();
+    }
+    // 两列时中间加一道竖向虚线分隔（手绘感，区分左右两组）
+    if (twoCol) {
+      ctx.save();
+      ctx.globalAlpha = aCard * 0.18;
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x + colW, y0 + 4);
+      ctx.lineTo(x + colW, y0 + perCol * rowH - 4);
+      ctx.stroke();
+      ctx.setLineDash([]);
       ctx.restore();
     }
 

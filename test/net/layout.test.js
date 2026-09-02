@@ -243,8 +243,98 @@ function t6() {
   ok(isFinite(st2.firstCy), 'solveButtonStack：n=0 不崩');
 }
 
-console.log('横竖屏自适应布局回归（v3.0.2 / v3.0.3）');
-t1(); t2(); t3(); t4(); t5(); t6();
+// ---------------- T7 横屏改横向布局（v3.0.4）----------------
+/**
+ * §3.8.1 只做纵向压缩，治症不治本：压缩后按钮虽在屏内，却盖住了标题下的蛇动画、
+ * 副标题与底部信息；结算卡片压到行高下限仍超出 360~390px 的横屏。
+ * 正解是利用富余的横向空间 —— 菜单两列、记分牌统计两列。
+ */
+function t7() {
+  section('T7 横屏横向布局（菜单两列 / 记分牌两列）');
+
+  // --- 菜单：横屏应两列，且不侵占蛇动画 / 副标题 / 底部信息 ---
+  [[844, 390, 'iPhone横屏'], [800, 360, 'Android横屏'],
+   [667, 375, 'SE横屏'], [740, 360, '小屏横屏']].forEach(function (c) {
+    var W = c[0], H = c[1], name = c[2];
+    var g = new CS.Game(W, H);
+    g.setState('menu');
+    var bs = g.uiButtons;
+    var xs = {};
+    bs.forEach(function (b) { xs[Math.round(b.x)] = 1; });
+    ok(Object.keys(xs).length === 2, name + '：菜单为两列（实际 ' +
+      Object.keys(xs).length + ' 列）');
+    ok(bs.length === 5, name + '：仍是 5 个按钮（不隐藏功能）');
+
+    var top = Math.min.apply(null, bs.map(function (b) { return b.y; }));
+    var bot = Math.max.apply(null, bs.map(function (b) { return b.y + b.h; }));
+    // 关键：让开蛇动画（renderer.drawTitleFx 的 laneY）、副标题与底部信息
+    var animY = H * 0.22 + 52 * 0.95, subY = H * 0.35, footY = H * 0.89;
+    ok(top > animY, name + '：不遮挡标题下的蛇动画（顶 ' + Math.round(top) +
+      ' > 动画 ' + Math.round(animY) + '）');
+    ok(top > subY, name + '：不遮挡副标题（' + Math.round(top) + ' > ' + Math.round(subY) + '）');
+    ok(bot < footY, name + '：不遮挡底部信息（底 ' + Math.round(bot) +
+      ' < ' + Math.round(footY) + '）');
+    ok(bs[0].h >= 42, name + '：两列后按钮回到可读高度（' + Math.round(bs[0].h) + ' ≥ 42）');
+  });
+
+  // 桌面 / 竖屏保持单列 54px（无回归）
+  [[1280, 720, '桌面'], [390, 844, '竖屏'], [1920, 1080, '大屏']].forEach(function (c) {
+    var g = new CS.Game(c[0], c[1]);
+    g.setState('menu');
+    var xs = {};
+    g.uiButtons.forEach(function (b) { xs[Math.round(b.x)] = 1; });
+    ok(Object.keys(xs).length === 1, c[2] + '：保持单列（无回归）');
+    ok(g.uiButtons[0].h === 54, c[2] + '：按钮保持 54px', '实际 ' + g.uiButtons[0].h);
+  });
+
+  // --- 结算记分牌：卡片必须完整在屏且不压按钮 ---
+  // 复算 drawMultiResult 的几何（与实现同一公式；改实现时须同步这里）
+  function cardGeom(g, W, H) {
+    var rows = 8, padV = 18, titleH = 96, footH = 30;
+    var btnTop = H;
+    g.uiButtons.forEach(function (b) { btnTop = Math.min(btnTop, b.y); });
+    var roomH = btnTop - 20 - 12;
+    var twoCol = (padV * 2 + titleH + rows * 34 + footH) > roomH;
+    var perCol = twoCol ? Math.ceil(rows / 2) : rows;
+    var rowH = 34;
+    var cw = twoCol ? Math.min(560, W * 0.86) : Math.min(440, W * 0.62);
+    var ch = padV * 2 + titleH + perCol * rowH + footH;
+    if (ch > roomH) {
+      rowH = Math.max(22, (roomH - padV * 2 - titleH - footH) / perCol);
+      ch = padV * 2 + titleH + perCol * rowH + footH;
+    }
+    if (ch > roomH) {
+      padV = 8; footH = 18;
+      titleH = Math.max(46, roomH - padV * 2 - perCol * rowH - footH);
+      ch = padV * 2 + titleH + perCol * rowH + footH;
+    }
+    var y = Math.max(6, (btnTop - 20 - ch) / 2);
+    if (y + ch > btnTop - 12) y = Math.max(4, btnTop - 12 - ch);
+    return { x: W / 2 - cw / 2, y: y, w: cw, h: ch, twoCol: twoCol, btnTop: btnTop };
+  }
+
+  [[844, 390, 'iPhone横屏', true], [800, 360, 'Android横屏', true],
+   [667, 375, 'SE横屏', true], [390, 844, '竖屏', false], [1280, 720, '桌面', false],
+   [1920, 1080, '大屏', false], [320, 240, '极小', true]].forEach(function (c) {
+    var W = c[0], H = c[1], name = c[2], expectTwo = c[3];
+    var g = new CS.Game(W, H);
+    g.mode = 'multi';
+    g.setState('over');
+    var m = cardGeom(g, W, H);
+    ok(m.twoCol === expectTwo, name + '：记分牌' + (expectTwo ? '两列' : '单列') +
+      '（实际' + (m.twoCol ? '两列' : '单列') + '）');
+    ok(m.y >= 0 && m.y + m.h <= H, name + '：卡片纵向在屏内（' +
+      Math.round(m.y) + '~' + Math.round(m.y + m.h) + ' / ' + H + '）',
+      '底边 ' + Math.round(m.y + m.h) + ' 超出 ' + H);
+    ok(m.x >= 0 && m.x + m.w <= W, name + '：卡片横向在屏内（宽 ' + Math.round(m.w) + '）');
+    ok(m.y + m.h <= m.btnTop - 8, name + '：卡片不压按钮（距 ' +
+      Math.round(m.btnTop - (m.y + m.h)) + 'px）',
+      '压了 ' + Math.round(m.y + m.h - (m.btnTop - 8)) + 'px');
+  });
+}
+
+console.log('横竖屏自适应布局回归（v3.0.2 / v3.0.3 / v3.0.4）');
+t1(); t2(); t3(); t4(); t5(); t6(); t7();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');
