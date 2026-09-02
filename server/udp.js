@@ -259,9 +259,11 @@ UdpEndpoint.prototype.listen = function (cb) {
   this._rateTimer = setInterval(function () { self._sweep(); }, 10000);
   if (this._rateTimer.unref) this._rateTimer.unref();
   // 注意用 != null 而非 ||：UDP_PORT=0 是「随机空闲端口」的合法值（测试用），
-  // 写成 `|| 8091` 会把 0 吞掉，导致并发测试抢占同一端口。
+  // 写成 `|| 8092` 会把 0 吞掉，导致并发测试抢占同一端口。
   var bindPort = this.config.UDP_PORT != null ? this.config.UDP_PORT : 8092;
-  this.sock.bind(bindPort, this.config.HOST, function () {
+  // UDP 绑定地址独立于 HOST：ws 有 nginx 反代所以绑回环即可，UDP 必须直面公网
+  var bindHost = this.config.UDP_HOST || '0.0.0.0';
+  this.sock.bind(bindPort, bindHost, function () {
     if (cb) cb();
   });
 };

@@ -25,6 +25,11 @@ module.exports = {
   // ---------------- UDP 传输层（v3.1，设计见 docs/architecture/02-udp-transport.md） ----------------
   UDP_ENABLED: process.env.UDP_ENABLED !== '0', // 总开关：关掉即回到纯 TCP（回滚点）
   UDP_PORT: parseInt(process.env.UDP_PORT, 10) || 8092,
+  // UDP 绑定地址**独立于 HOST**：ws 走 nginx 反代所以只需绑 127.0.0.1，
+  // 但 UDP 没有反代（nginx stream 模块虽可转发 udp，但多一跳且掩盖源地址，
+  // 会破坏「地址跟随」赖以工作的真实 IP:Port），必须直接监听公网。
+  // 默认 0.0.0.0；本地开发/测试可用 UDP_HOST=127.0.0.1 收窄。
+  UDP_HOST: process.env.UDP_HOST || '0.0.0.0',
   UDP_DUP: 3,               // 冗余副本份数（1 = 关闭冗余）。副本在帧内按时间均分打散：
                             // 丢包按时间段发生，同一毫秒连发的副本会同生共死，
                             // 3000 帧实测「x3 同时发」与「x1」结果完全相同。

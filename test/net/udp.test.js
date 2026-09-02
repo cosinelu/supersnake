@@ -90,7 +90,7 @@ function t3() {
 function t4(done) {
   section('T4 端到端收发（真实 socket）');
   var got = [];
-  var cfg = Object.assign({}, baseConfig, { UDP_PORT: 0, HOST: '127.0.0.1', UDP_DUP: 3 });
+  var cfg = Object.assign({}, baseConfig, { UDP_PORT: 0, HOST: '127.0.0.1', UDP_HOST: '127.0.0.1', UDP_DUP: 3 });
   var ep = new UdpEndpoint(cfg, {
     onInput: function (connId, inp) { got.push({ connId: connId, inp: inp }); }
   });
