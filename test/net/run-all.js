@@ -10,6 +10,7 @@
  *   S3 补位局：仅 2 客户端，等待超时后 AI 补位开局
  *   S4 重排局：over 后同一连接再次 join 进入新房间
  *   S5 健壮性：畸形/超大/未知类型消息不崩服务器，正常客户端仍可匹配
+ *   S6 单人局：仅 1 客户端，超时后 AI 补位开局，且不会开局即结算（MIN_HUMANS=1）
  *
  * 每个场景使用独立服务器实例（随机端口 + 缩小的时间参数），全套目标 ≤ 60s。
  */
@@ -265,6 +266,37 @@ function scenarioRobust() {
   });
 }
 
+// ---------------- S6 单人局（MIN_HUMANS=1：一个人也能开局） ----------------
+function scenarioSoloFill() {
+  section('S6 单人局：1 人超时 AI 补位开局');
+  // MIN_HUMANS 显式传 1，与 server/config.js 生产值一致；不依赖 testConfig 默认
+  return startServer({ MIN_HUMANS: 1, MATCH_MAX_MS: 8000 }).then(function (srv) {
+    return connectBots(srv, ['独行侠']).then(function (bots) {
+      var solo = bots[0];
+      return solo.waitFor(function (x) { return x.matched; }, 10000, '单人超时 matched').then(function () {
+        ok(solo.matched.players.length === 1, 'matched 仅 1 名真人（其余 AI 补位）',
+          '实际 ' + solo.matched.players.length + ' 人');
+        return solo.waitFor(function (x) { return x.started && x.snaps.length >= 3; }, 8000, '开局并出快照');
+      }).then(function () {
+        ok(true, '单人成功开局（started + 收到快照）');
+        var n = solo.snaps[0].sn.length;
+        ok(n >= 1 + cfg.MP_AI_START_COUNT, '首帧快照含 AI 补位（共 ' + n + ' 条蛇）');
+        // 关键回归：单人局不能因「存活真人 ≤1」而开局即结算（room.js 的 totalHumans 特判）
+        ok(!solo.over, '开局后未立即结算（单真人局阈值特判生效）',
+          solo.over ? 'reason=' + solo.over.reason : '');
+        // 本机蛇在快照中存在且存活
+        var me = solo.snaps[0].sn.filter(function (s) { return s.id === solo.playerId; })[0];
+        ok(me && me.al === 1, '快照中本机蛇存在且存活');
+        assertSnapHealth(solo, '独行侠');
+        solo.close();
+        return new Promise(function (r) { srv.close(r); });
+      });
+    });
+  }).catch(function (e) {
+    ok(false, 'S6 场景异常', e.message);
+  });
+}
+
 // ---------------- 主流程 ----------------
 function main() {
   var t0 = Date.now();
@@ -272,6 +304,7 @@ function main() {
   scenarioNormal()
     .then(scenarioDrop)
     .then(scenarioBotFill)
+    .then(scenarioSoloFill)
     .then(scenarioRejoin)
     .then(scenarioRobust)
     .then(function () {

@@ -11,7 +11,7 @@ module.exports = {
   SNAP_EVERY: 2,            // 每 2 tick 广播一帧快照（15Hz）
 
   ROOM_SIZE: 4,             // 满编真人即开
-  MIN_HUMANS: 2,            // 超时补位开局的最少真人数（其余由 AI 补位热闹）
+  MIN_HUMANS: 1,            // 超时补位开局的最少真人数（=1：单人也能开局，其余由 AI 补位）
   MATCH_TIMEOUT_MS: 20000,  // 匹配等待上限：超时以现有真人 + AI 补位开局
   COUNTDOWN_MS: 3000,       // matched → start 倒计时
   MATCH_MAX_MS: 5 * 60 * 1000, // 对局上限，到点按总分结算
