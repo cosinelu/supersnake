@@ -18,6 +18,14 @@
     var renderer = new CS.Renderer(ctx, window.innerWidth, window.innerHeight);
     root.__game = game; // 调试钩子：控制台/WebBridge 可读取对局状态（无功能影响）
 
+    // 全局重排订阅（docs/design §3.8.3-D）：各界面各自失效缓存并重算。
+    // game.resize() 内部会 emit，这里订阅的是"除 game 之外"的参与者。
+    if (CS.layoutBus) {
+      CS.layoutBus.on('relayout', function (m) {
+        renderer.resize(m.W, m.H);
+      });
+    }
+
     function resize() {
       // 移动端优先用 visualViewport：地址栏收起/展开时 innerHeight 未必及时更新
       var vv = window.visualViewport;
@@ -29,8 +37,10 @@
       canvas.style.width = w + 'px';
       canvas.style.height = h + 'px';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 之后全部用逻辑像素绘制
+      // game.resize 内部会 emit relayout，renderer 通过订阅收到，无需在此重复调用。
+      // 若 layoutBus 不可用（极老浏览器/裁剪构建），退回直接调用。
       game.resize(w, h);
-      renderer.resize(w, h);
+      if (!CS.layoutBus) renderer.resize(w, h);
     }
     window.addEventListener('resize', resize);
     // 横竖屏切换：orientationchange 触发时尺寸常还没更新，延迟再量一次

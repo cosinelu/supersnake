@@ -2,3 +2,6 @@ node_modules/
 .DS_Store
 .tmp/
 .workbuddy/
+
+# 截图验证临时目录（本地布局复验用，不入库）
+.shots/

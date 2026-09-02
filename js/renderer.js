@@ -551,6 +551,16 @@
   Renderer.prototype.resize = function (w, h) {
     this.W = w;
     this.H = h;
+    this.applyRelayout();
+  };
+
+  /**
+   * 响应重排：清空与尺寸/朝向相关的缓存（layoutBus relayout 的订阅入口）。
+   * 标题动效状态里存着轨道坐标与蛇身位置，旋转后必须重建，
+   * 否则蛇会从旧朝向的位置"飘"到新位置（docs/design §3.8.3-D）。
+   */
+  Renderer.prototype.applyRelayout = function () {
+    this.titleFx = null;
   };
 
   Renderer.prototype.drawBackground = function () {
@@ -1201,16 +1211,28 @@
   };
 
   /**
-   * 竖屏 HUD：顶部横条。
-   * 横向分三栏（分数区 / 中部信息 / 小地图），并把「已解锁颜色」压成单行 8 格，
-   * 排行榜改为紧凑两列。目标是在 ≤200px 高度内放下关键信息，可玩区占满宽度。
+   * 竖屏 HUD：顶部横条（v3.0.5 三行流式，见 docs/design §3.8.3-C）。
+   *
+   * 旧实现是**固定三栏**（左 132px + 中 + 右 96px）：390px 宽下中栏只剩 122px，
+   * 而「已解锁颜色」单行 8 格需 168px → 溢出并与排行榜叠在一起。
+   * 现改为三行，每行的 x 起点都由**剩余可用宽度**推导，并按优先级丢弃低价值内容。
+   *
+   * 行 1：模式 + 大号分数 + 目标/最佳（右端固定正方形小地图，跨全部行）
+   * 行 2：已解锁颜色格 + 速度
+   * 行 3：排行榜（横排，放不下则换行，最多 2 行）
    */
   Renderer.prototype.drawPanelPortrait = function (game, l) {
     var ctx = this.ctx;
     var pw = l.panelW, ph = l.panelH;
     var inset = game.safeInsets ? game.safeInsets() : { top: 0, left: 0, right: 0, bottom: 0 };
-    var top = inset.top;                       // 刘海避让
-    var padL = 14 + inset.left, padR = 14 + inset.right;
+    // 三行按面板实际高度铺开（不是从顶部堆到 76px 就不管了 —— 那会让下方一大片空着，
+    // 且第 1 行贴顶被裁）。上下各留 pad，行距由剩余高度均分。
+    var padT = 10 + inset.top, padB = 10;
+    var top = padT;
+    // 右边距要给 wobblyRoundRect 的手绘抖动留余量（它会向外溢出 2~3px），否则边框被裁
+    var padL = 12 + inset.left, padR = 16 + inset.right;
+    var bodyH = Math.max(40, ph - padT - padB);
+    var i;
 
     ctx.save();
     // 面板底 + 底部手绘分隔线（横屏是左侧竖线，这里改成下边横线）
@@ -1220,7 +1242,7 @@
     ctx.lineWidth = 2;
     ctx.beginPath();
     var seg = 12;
-    for (var i = 0; i <= seg; i++) {
+    for (i = 0; i <= seg; i++) {
       var lx = pw * i / seg;
       var ly = ph + (u.hash2(i, 7, 3) - 0.5) * 5;
       if (i === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
@@ -1229,106 +1251,139 @@
 
     ctx.fillStyle = cfg.INK;
     ctx.textBaseline = 'middle';
-
-    // ---- 左栏：标题 + 模式 + 分数 ----
     ctx.textAlign = 'left';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.fillText('消食蛇', padL, top + 16);
-    ctx.font = '11px sans-serif';
-    ctx.globalAlpha = 0.75;
+
+    // ---- 右端：小地图（drawMinimap 的第 4 参是**宽度**，高度按地图宽高比派生，不是正方形）----
+    var mapRatio = game.walls ? (game.walls.H / game.walls.W) : 0.66;
+    var mapW = Math.min(pw * 0.30, 120);
+    if (mapW * mapRatio > bodyH) mapW = bodyH / mapRatio;   // 高度不够 → 反推宽度
+    var mapH = mapW * mapRatio;
+    var mapX = pw - padR - mapW;
+    var showMap = mapW >= 44 && mapX > pw * 0.45;   // 太窄就不画，让位给文字
+    if (showMap) {
+      this.drawMinimap(game, mapX, padT + (bodyH - mapH) / 2, mapW);
+    } else {
+      mapX = pw - padR;                                // 无小地图时正文可用到右边距
+    }
+    var textR = mapX - 10;                             // 文本区右边界
+    var availW = textR - padL;
+
+    // 三行的基线：按内容实际高度分配（行 1 有 24px 大号分数，需要最多空间）。
+    // 用固定的"内容高度"而非均分 —— 均分会让行 1 顶边贴到面板上沿。
+    var H1 = 26, H2 = 18, H3 = 32;                     // 各行实际占用高度
+    var slack = Math.max(0, bodyH - (H1 + H2 + H3)) / 3; // 富余高度均分为行间距
+    var y1 = padT + H1 / 2 + slack * 0.4;
+    var y2 = y1 + H1 / 2 + slack * 0.8 + H2 / 2;
+    var y3base = y2 + H2 / 2 + slack * 0.8 + 6;
+    ctx.font = 'bold 12px sans-serif';
     var modeText = game.mode === 'level' ? ('闯关 · 第 ' + game.levelCfg.level + ' 关')
       : (game.mode === 'multi' ? (game.online ? '在线对战' : 'AI对战') : '无尽模式');
-    ctx.fillText(modeText, padL, top + 34);
+    ctx.globalAlpha = 0.8;
+    ctx.fillText(modeText, padL, y1);
+    var xCur = padL + ctx.measureText(modeText).width + 14;
     ctx.globalAlpha = 1;
-    ctx.font = 'bold 26px sans-serif';
-    ctx.fillText(String(game.score), padL, top + 60);
-    ctx.font = '10px sans-serif';
-    ctx.globalAlpha = 0.6;
-    ctx.fillText('存活 ' + game.survivalScore + ' · 消除 ' + game.elimScore, padL, top + 80);
+
+    // 大号分数紧跟模式之后
+    ctx.font = 'bold 24px sans-serif';
+    var scoreStr = String(game.score);
+    ctx.fillText(scoreStr, xCur, y1 + 2);
+    xCur += ctx.measureText(scoreStr).width + 12;
+
+    // 目标 / 最高分：剩余宽度够才画（低优先级）
+    ctx.font = 'bold 11px sans-serif';
+    var infoText = game.mode === 'level' ? ('目标 ' + game.levelCfg.targetScore)
+      : (game.mode === 'multi'
+        ? ('最佳 ' + Math.max(game.mpBest.len, game.snake ? game.snake.length() : 0) + '节')
+        : ('最高 ' + Math.max(game.best, game.score)));
+    ctx.globalAlpha = 0.7;
+    if (xCur + ctx.measureText(infoText).width <= textR) ctx.fillText(infoText, xCur, y1 + 4);
+    ctx.globalAlpha = 1;
+
+    // 闯关模式：进度条画在行 2 位置，颜色格顺延到行 3（进度条比颜色格更关键）
+    if (game.mode === 'level') {
+      var barW = Math.min(availW, 190), barH = 8, bx = padL, by = y2 - 4;
+      var prog = u.clamp(game.score / game.levelCfg.targetScore, 0, 1);
+      wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
+      ctx.fillStyle = 'rgba(58,50,56,0.12)';
+      ctx.fill();
+      if (prog > 0.02) {
+        wobblyRoundRect(ctx, bx, by, Math.max(8, barW * prog), barH, 4, 9, 3, 0.8);
+        ctx.fillStyle = cfg.COLORS.green;
+        ctx.fill();
+      }
+      wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
+      ctx.strokeStyle = cfg.INK;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.fillStyle = cfg.INK;
+      y2 = y3base;                 // 颜色格挪到行 3，避免与进度条叠在一起
+      y3base = y3base + 20;
+    }
+
+    // ---- 行 2：已解锁颜色格（按剩余宽度决定格数）+ 速度 ----
     var spd = Math.round(game.currentSpeed());
     var slow = (game.slowUntil && game.timeMs < game.slowUntil);
+    var spdText = '速度 ' + spd + (slow ? ' (减速)' : '');
+    ctx.font = '10px sans-serif';
+    var spdW = ctx.measureText(spdText).width;
+    var sw = 15, gap = 4;
+    // 颜色格能画几个：留出速度文字的位置（速度优先级高于颜色格）
+    var gridRoom = availW - spdW - 12;
+    var maxCells = Math.max(0, Math.floor((gridRoom + gap) / (sw + gap)));
+    var cells = Math.min(cfg.MAX_COLORS, maxCells);
+    var gx = padL;
+    for (i = 0; i < cells; i++) {
+      var bx2 = gx + i * (sw + gap);
+      if (i < game.unlockedCount) {
+        drawCrayonBlock(ctx, bx2, y2 - sw / 2, sw, cfg.COLORS[cfg.COLOR_KEYS[i]], 30 + i, 4, {
+          rot: (u.hash2(i, 5, 2) - 0.5) * 0.3, wobble: 0.9
+        });
+      } else {
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        wobblyRoundRect(ctx, bx2, y2 - sw / 2, sw, sw, sw * 0.28, 30 + i, 4, 0.9);
+        ctx.fillStyle = '#CFC8BC';
+        ctx.fill();
+        ctx.strokeStyle = cfg.INK;
+        ctx.lineWidth = 1.1;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    // 速度：贴文本区右侧
+    ctx.textAlign = 'right';
+    ctx.globalAlpha = 0.7;
     ctx.fillStyle = slow ? '#2EC4B6' : cfg.INK;
-    ctx.fillText('速度 ' + spd + (slow ? ' (减速)' : ''), padL, top + 95);
+    ctx.fillText(spdText, textR, y2);
     ctx.fillStyle = cfg.INK;
     ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
 
-    // ---- 右栏：小地图（正方形，贴右边）----
-    var mapSize = Math.min(ph - top - 16, 96);
-    var mapX = pw - padR - mapSize;
-    var mapY = top + 8;
-    this.drawMinimap(game, mapX, mapY, mapSize);
-
-    // ---- 中栏：目标/最高分 + 已解锁颜色（单行）+ 排行榜（紧凑）----
-    var midX = padL + 132;
-    var midW = mapX - 12 - midX;
-    if (midW > 90) {
-      ctx.textAlign = 'left';
-      ctx.font = 'bold 12px sans-serif';
-      if (game.mode === 'level') {
-        ctx.fillText('目标 ' + game.levelCfg.targetScore, midX, top + 16);
-        var barW = Math.min(midW, 150), barH = 8, by = top + 28;
-        var prog = u.clamp(game.score / game.levelCfg.targetScore, 0, 1);
-        wobblyRoundRect(ctx, midX, by, barW, barH, 4, 9, 3, 0.8);
-        ctx.fillStyle = 'rgba(58,50,56,0.12)';
-        ctx.fill();
-        if (prog > 0.02) {
-          wobblyRoundRect(ctx, midX, by, Math.max(8, barW * prog), barH, 4, 9, 3, 0.8);
-          ctx.fillStyle = cfg.COLORS.green;
-          ctx.fill();
+    // ---- 行 3：排行榜横排（多人模式），空间不足自动少画 ----
+    if (game.mode === 'multi' && game.mp) {
+      var lb = game.mp.leaderboard().slice(0, 4);
+      var y3 = Math.max(y2 + 18, y3base);
+      var lineH = 14;
+      var col = 0, rowIdx = 0;
+      var xr = padL;
+      for (var li = 0; li < lb.length; li++) {
+        var row = lb[li];
+        var nm = row.name.length > 4 ? row.name.slice(0, 4) : row.name;
+        var txt = (li + 1) + '.' + nm + ' ' + row.length;
+        ctx.font = (row.isPlayer ? 'bold ' : '') + '10px sans-serif';
+        var tw = ctx.measureText(txt).width;
+        if (xr + tw > textR) {                 // 本行放不下 → 换行
+          rowIdx++;
+          if (y3 + rowIdx * lineH > ph - 6) break;   // 面板放不下更多行 → 丢弃剩余
+          xr = padL;
         }
-        wobblyRoundRect(ctx, midX, by, barW, barH, 4, 9, 3, 0.8);
-        ctx.strokeStyle = cfg.INK;
-        ctx.lineWidth = 1.4;
-        ctx.stroke();
-        ctx.fillStyle = cfg.INK;
-      } else if (game.mode === 'multi') {
-        ctx.fillText('最佳 ' + Math.max(game.mpBest.len, game.snake.length()) + '节 · ' +
-          Math.max(game.mpBest.score, game.score) + '分', midX, top + 16);
-      } else {
-        ctx.fillText('最高 ' + Math.max(game.best, game.score), midX, top + 16);
+        ctx.globalAlpha = row.isPlayer ? 1 : 0.75;
+        ctx.fillStyle = row.isPlayer ? '#C47F17' : cfg.INK;
+        ctx.fillText(txt, xr, y3 + rowIdx * lineH);
+        xr += tw + 12;
+        ctx.globalAlpha = 1;
       }
-
-      // 已解锁颜色：单行 8 格（竖屏横向空间足够）
-      var sw = 16, gap = 5;
-      var sy = top + 44;
-      for (i = 0; i < cfg.MAX_COLORS; i++) {
-        var bx2 = midX + i * (sw + gap);
-        if (bx2 + sw > mapX - 8) break;        // 空间不足则截断，不与小地图重叠
-        if (i < game.unlockedCount) {
-          drawCrayonBlock(ctx, bx2, sy, sw, cfg.COLORS[cfg.COLOR_KEYS[i]], 30 + i, 4, {
-            rot: (u.hash2(i, 5, 2) - 0.5) * 0.3, wobble: 0.9
-          });
-        } else {
-          ctx.save();
-          ctx.globalAlpha = 0.45;
-          wobblyRoundRect(ctx, bx2, sy, sw, sw, sw * 0.28, 30 + i, 4, 0.9);
-          ctx.fillStyle = '#CFC8BC';
-          ctx.fill();
-          ctx.strokeStyle = cfg.INK;
-          ctx.lineWidth = 1.1;
-          ctx.stroke();
-          ctx.restore();
-        }
-      }
-
-      // 排行榜：竖屏用两列紧凑排布，最多 4 行
-      if (game.mode === 'multi' && game.mp) {
-        var lb = game.mp.leaderboard().slice(0, 4);
-        ctx.font = '10px sans-serif';
-        var rowH = 13, ry = top + 74;
-        for (var li = 0; li < lb.length; li++) {
-          var row = lb[li];
-          var colX = midX + (li % 2) * (midW / 2);
-          var rowY = ry + Math.floor(li / 2) * rowH;
-          ctx.globalAlpha = row.isPlayer ? 1 : 0.8;
-          ctx.fillStyle = row.isPlayer ? '#C47F17' : cfg.INK;
-          ctx.font = (row.isPlayer ? 'bold ' : '') + '10px sans-serif';
-          var nm = row.name.length > 5 ? row.name.slice(0, 5) : row.name;
-          ctx.fillText((li + 1) + '.' + nm + ' ' + row.length + '节', colX, rowY);
-          ctx.globalAlpha = 1;
-        }
-        ctx.fillStyle = cfg.INK;
-      }
+      ctx.fillStyle = cfg.INK;
     }
     ctx.restore();
   };
@@ -1410,8 +1465,12 @@
   Renderer.prototype.drawMenu = function (game) {
     var ctx = this.ctx;
     this.drawOverlay(0.0); // 主菜单直接用纸面
-    var cx = this.W / 2;
-    var ty = this.H * 0.22; // 标题基线 Y
+    // 坐标全部取自 game.menuLayout()：它是菜单布局的唯一权威源。
+    // 横屏矮屏返回 split=true（左品牌 / 右按钮），此时 cx 是**品牌区中心**而非屏幕中心，
+    // 于是标题与按钮不会争夺同一块空间（docs/design §3.8.3-A）。
+    var ml = game.menuLayout();
+    var cx = ml.brandCx;
+    var ty = ml.titleY; // 标题基线 Y
 
     // ---- 标题「消食蛇」美术设计 ----
     // 设计意图：每个字用不同颜色（红=消除、绿=吃、蓝=蛇身），
@@ -1420,7 +1479,7 @@
     ctx.save();
     var titleChars = ['消', '食', '蛇'];
     var titleColors = [cfg.COLORS.red, cfg.COLORS.green, cfg.COLORS.blue]; // 红(消) 绿(食) 蓝(蛇)
-    var fontSize = 52;
+    var fontSize = ml.titleSize;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = 'bold ' + fontSize + 'px sans-serif';
@@ -1483,25 +1542,63 @@
     }
 
     // 标题下方「色块滑动 → 触发消除」循环动效（多色轮播 + 随机效果）
-    this.drawTitleFx(game);
+    // 极端小屏（menuLayout.showAnim=false）时跳过：纯装饰，优先保证按钮可点
+    if (ml.showAnim !== false) this.drawTitleFx(game);
 
     ctx.restore();
     // ---- 标题结束 ----
 
-    // 副标题：四个起始色块做装饰（保留原有设计，位置随标题下移）
+    // 副标题 + 底部统计：宽度受限时自动降级（竖屏 390px 曾把「别撞墙」截掉）
     ctx.save();
     ctx.fillStyle = cfg.INK;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '15px sans-serif';
-    ctx.fillText('自由游动 · 吃色补头 · 四连消除 · 别撞墙', cx, this.H * 0.35);
-    ctx.font = '13px sans-serif';
+    var maxW = ml.brandW - (ml.split ? 16 : 44);   // 非分栏时是整屏宽，需留左右各 22px 边距
+    if (ml.showSub !== false) {                    // 极端小屏副标题让位给按钮
+      this._fitText(ctx, ['自由游动 · 吃色补头 · 四连消除 · 别撞墙',
+        '自由游动 · 吃色补头 · 四连消除',
+        '吃色补头 · 四连消除'], cx, ml.subY, maxW, 15, 11);
+    }
     ctx.globalAlpha = 0.7;
-    ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.89);
-    ctx.fillText('AI对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.89 + 22);
+    if (ml.showStat !== false) {   // 极端小屏统计让位给按钮（见 game.menuLayout）
+      this._fitText(ctx, ['无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10',
+        '最高分 ' + game.best + ' · 已解锁 ' + game.unlocked + '/10'],
+        ml.statCx, ml.statY, maxW, 13, 10);
+      this._fitText(ctx, ['AI对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分',
+        'AI最佳 ' + game.mpBest.len + ' 节 · ' + game.mpBest.score + ' 分'],
+        ml.statCx, ml.statY + ml.statLine, maxW, 13, 10);
+    }
     ctx.restore();
     this.drawParticles(game); // 标题消除动效的粒子（屏幕坐标，无相机变换）
     this.drawButtons(game);
+  };
+
+  /**
+   * 在限定宽度内画一行文本：先按候选文案由长到短挑第一个放得下的，
+   * 都放不下再缩字号（到 minPx 为止）。避免出现被右边缘裁断的文字。
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {string[]} candidates 候选文案，按信息量从多到少排列
+   * @param {number} cx 居中 x
+   * @param {number} y 基线 y
+   * @param {number} maxW 可用宽度
+   * @param {number} px 理想字号
+   * @param {number} minPx 最小字号
+   */
+  Renderer.prototype._fitText = function (ctx, candidates, cx, y, maxW, px, minPx) {
+    for (var i = 0; i < candidates.length; i++) {
+      ctx.font = px + 'px sans-serif';
+      if (ctx.measureText(candidates[i]).width <= maxW) {
+        ctx.fillText(candidates[i], cx, y);
+        return;
+      }
+    }
+    // 所有候选都超宽 → 用最短的那条缩字号
+    var s = candidates[candidates.length - 1];
+    for (var size = px; size >= minPx; size--) {
+      ctx.font = size + 'px sans-serif';
+      if (ctx.measureText(s).width <= maxW) break;
+    }
+    ctx.fillText(s, cx, y);
   };
 
   /**
@@ -1532,12 +1629,15 @@
     if (dt > 80) dt = 80; // 切后台回来防跳帧
     fx.bob += dt;
 
-    var cx = this.W / 2;
-    var ty = this.H * 0.22;
-    var fontSize = 52;
-    var laneY = ty + fontSize * 0.95;             // 标题与副标题之间的一条轨道
+    // 坐标跟随品牌区（横屏分栏时品牌区在左半边，动画必须一起过去，
+    // 否则蛇会画到按钮区上面 —— 这正是之前"副标题与动画糊成一团"的一半原因）
+    var ml = game.menuLayout();
+    var cx = ml.brandCx;
+    var ty = ml.titleY;
+    var fontSize = ml.titleSize;
+    var laneY = ml.animY;                          // 标题与副标题之间的一条轨道
     var SEG = 24, BLK = 20, MAXLEN = 14;
-    var headX = cx - Math.min(this.W * 0.16, 130); // 蛇头在偏左（朝左走），蛇身向右铺开
+    var headX = cx - Math.min(ml.brandW * 0.28, 130); // 蛇头在偏左（朝左走），蛇身向右铺开
     var walkSpeed = 175;                           // 砖块从左侧流入、向右被吃（视觉上=蛇向左走）
 
     // 1) 出块：COLOR_KEYS 顺序轮一遍（红→蓝→绿→…→粉→红…），每色喂 4 块凑 4 连
@@ -1768,16 +1868,22 @@
     // 卡片几何：矮屏（手机横屏）改**两列统计**，卡片变宽变矮；否则单列 8 行。
     // 原实现单列压到 rowH 下限 24px 后卡片仍需 354px，而横屏只有 360~390px → 照样超出
     // （见 docs/design §3.8.2）。正解是利用富余的横向空间。
+    //
+    // v3.0.5（方案 A）：宽度与水平中心一律取自**视口矩形**，不再用整屏 W/2。
+    // 横屏时视口已排除右侧 HUD 面板，竖屏时排除顶部 HUD 高度，
+    // 于是卡片结构上不可能压到面板（此前 844×390 压 18px、800×360 压 32px）。
+    var lay = game.layout();
+    var vX = lay.viewX, vW = lay.viewW, vY = lay.viewY, vH = lay.viewH;
     var padV = 18, titleH = 96, footH = 30;
-    var btnTop = H;
+    var btnTop = vY + vH;
     for (var bi = 0; bi < game.uiButtons.length; bi++) btnTop = Math.min(btnTop, game.uiButtons[bi].y);
-    var roomH = btnTop - 20 - 12;                 // 卡片可用高度（须停在按钮上方，留 20px 间隙）
+    var roomH = btnTop - 20 - 12 - vY;            // 卡片可用高度（视口顶到按钮上方）
     var oneColNeed = padV * 2 + titleH + rows.length * 34 + footH;
     var twoCol = oneColNeed > roomH;              // 单列放不下 → 两列
     var perCol = twoCol ? Math.ceil(rows.length / 2) : rows.length;
 
     var rowH = 34;
-    var cw = twoCol ? Math.min(560, W * 0.86) : Math.min(440, W * 0.62);
+    var cw = twoCol ? Math.min(560, vW * 0.94) : Math.min(440, vW * 0.82);
     var ch = padV * 2 + titleH + perCol * rowH + footH;
     if (ch > roomH) {                             // 两列仍不够 → 压行高
       rowH = Math.max(22, (roomH - padV * 2 - titleH - footH) / perCol);
@@ -1788,11 +1894,11 @@
       titleH = Math.max(46, roomH - padV * 2 - perCol * rowH - footH);
       ch = padV * 2 + titleH + perCol * rowH + footH;
     }
-    var cx = W / 2;
+    var cx = vX + vW / 2;                         // 视口中心，而非屏幕中心
     var x = cx - cw / 2;
     // 垂直居中于「卡片可用区」，并硬性钳制底边不越过按钮上方 12px（极端矮屏兜底）
-    var y = Math.max(6, (btnTop - 20 - ch) / 2);
-    if (y + ch > btnTop - 12) y = Math.max(4, btnTop - 12 - ch);
+    var y = Math.max(vY + 6, vY + (btnTop - vY - 20 - ch) / 2);
+    if (y + ch > btnTop - 12) y = Math.max(vY + 4, btnTop - 12 - ch);
 
     // ---- 卡片底板（280ms 淡入 + 轻微上移）----
     var aCard = u.clamp(t / 280, 0, 1);

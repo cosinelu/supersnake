@@ -13,7 +13,7 @@
 var path = require('path');
 var JS = path.join(__dirname, '..', '..', 'js');
 ['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'joystick',
-  'ai', 'multiplayer', 'game'].forEach(function (f) { require(path.join(JS, f + '.js')); });
+  'layoutBus', 'ai', 'multiplayer', 'renderer', 'game'].forEach(function (f) { require(path.join(JS, f + '.js')); });
 
 var CS = globalThis.CS;
 
@@ -219,13 +219,16 @@ function t6() {
       detail.slice(0, 4).join(' '));
   });
 
-  // 菜单按钮：矮屏应压缩、桌面应保持原尺寸（无回归）
+  // 菜单按钮：矮屏走左右分栏后**不再需要压缩**（v3.0.5 方案 A），桌面保持原尺寸
   var gShort = new CS.Game(800, 360);
   gShort.setState('menu');
   var bsShort = gShort.uiButtons;
   ok(bsShort.length === 5, '菜单仍有 5 个按钮（矮屏不隐藏功能）', '实际 ' + bsShort.length);
-  ok(bsShort[0].h < 54, '矮屏按钮高度被压缩（' + Math.round(bsShort[0].h) + ' < 54）');
-  ok(bsShort[0].h >= 34, '压缩不低于可点下限 34px（' + Math.round(bsShort[0].h) + '）');
+  // 旧断言是「矮屏按钮必须被压缩」，那是 v3.0.3 纵向压缩方案的产物。
+  // 方案 A 把按钮挪到右半区独占纵向空间后，54px 原始高度放得下 —— 不压缩才是对的。
+  ok(bsShort[0].h >= 44, '矮屏分栏后按钮仍够大（' + Math.round(bsShort[0].h) + ' ≥ 44）',
+    '实际 ' + Math.round(bsShort[0].h));
+  ok(bsShort[0].h >= 34, '不低于可点下限 34px（' + Math.round(bsShort[0].h) + '）');
 
   var gDesk = new CS.Game(1280, 720);
   gDesk.setState('menu');
@@ -250,31 +253,44 @@ function t6() {
  * 正解是利用富余的横向空间 —— 菜单两列、记分牌统计两列。
  */
 function t7() {
-  section('T7 横屏横向布局（菜单两列 / 记分牌两列）');
+  section('T7 横屏横向布局（菜单左右分栏 / 记分牌两列）');
 
-  // --- 菜单：横屏应两列，且不侵占蛇动画 / 副标题 / 底部信息 ---
+  // --- 菜单：横屏走左右分栏，按钮区与品牌区必须完全分离 ---
+  // v3.0.5：判据从「两列 + 让开固定比例坐标」改为「与 menuLayout() 各分区不相交」。
+  // 旧断言硬编码 H*0.22 / H*0.35 / H*0.89，与实现脱钩 —— 实现一改就全错。
   [[844, 390, 'iPhone横屏'], [800, 360, 'Android横屏'],
    [667, 375, 'SE横屏'], [740, 360, '小屏横屏']].forEach(function (c) {
     var W = c[0], H = c[1], name = c[2];
     var g = new CS.Game(W, H);
     g.setState('menu');
     var bs = g.uiButtons;
-    var xs = {};
-    bs.forEach(function (b) { xs[Math.round(b.x)] = 1; });
-    ok(Object.keys(xs).length === 2, name + '：菜单为两列（实际 ' +
-      Object.keys(xs).length + ' 列）');
+    var ml = g.menuLayout();
+    ok(ml.split === true, name + '：横屏矮屏启用左右分栏');
     ok(bs.length === 5, name + '：仍是 5 个按钮（不隐藏功能）');
 
-    var top = Math.min.apply(null, bs.map(function (b) { return b.y; }));
+    var left = Math.min.apply(null, bs.map(function (b) { return b.x; }));
     var bot = Math.max.apply(null, bs.map(function (b) { return b.y + b.h; }));
-    // 关键：让开蛇动画（renderer.drawTitleFx 的 laneY）、副标题与底部信息
-    var animY = H * 0.22 + 52 * 0.95, subY = H * 0.35, footY = H * 0.89;
-    ok(top > animY, name + '：不遮挡标题下的蛇动画（顶 ' + Math.round(top) +
-      ' > 动画 ' + Math.round(animY) + '）');
-    ok(top > subY, name + '：不遮挡副标题（' + Math.round(top) + ' > ' + Math.round(subY) + '）');
-    ok(bot < footY, name + '：不遮挡底部信息（底 ' + Math.round(bot) +
-      ' < ' + Math.round(footY) + '）');
-    ok(bs[0].h >= 42, name + '：两列后按钮回到可读高度（' + Math.round(bs[0].h) + ' ≥ 42）');
+    var top = Math.min.apply(null, bs.map(function (b) { return b.y; }));
+    // 核心不变量：按钮区整体位于品牌区右侧 ⇒ 纵向如何排都不可能遮挡品牌内容
+    ok(left >= ml.brandX + ml.brandW, name + '：按钮区在品牌区右侧（' +
+      Math.round(left) + ' ≥ ' + Math.round(ml.brandX + ml.brandW) + '）',
+      '重叠 ' + Math.round(ml.brandX + ml.brandW - left) + 'px');
+    ok(top >= 0 && bot <= H, name + '：按钮组纵向在屏内（' +
+      Math.round(top) + '~' + Math.round(bot) + ' / ' + H + '）');
+    ok(bs[0].h >= 42, name + '：分栏后按钮回到可读高度（' + Math.round(bs[0].h) + ' ≥ 42）');
+
+    // 品牌区内部各层不重叠（标题 / 蛇动画轨道 / 副标题 / 统计）
+    var tBot = ml.titleY + ml.titleSize / 2;
+    var aTop = ml.animY - 30, aBot = ml.animY + 17;   // 轨道实际占用，见 game.menuLayout
+    var sTop = ml.subY - 9, sBot = ml.subY + 9;
+    var stTop = ml.statY - 9, stBot = ml.statY + ml.statLine + 9;
+    ok(aTop >= tBot - 1, name + '：蛇动画不撞标题（' + Math.round(aTop) +
+      ' ≥ ' + Math.round(tBot) + '）', '重叠 ' + Math.round(tBot - aTop) + 'px');
+    ok(sTop >= aBot, name + '：副标题不撞蛇动画（' + Math.round(sTop) +
+      ' ≥ ' + Math.round(aBot) + '）', '重叠 ' + Math.round(aBot - sTop) + 'px');
+    ok(stTop >= sBot, name + '：统计不撞副标题（' + Math.round(stTop) +
+      ' ≥ ' + Math.round(sBot) + '）', '重叠 ' + Math.round(sBot - stTop) + 'px');
+    ok(stBot <= H, name + '：统计文字在屏内（底 ' + Math.round(stBot) + ' ≤ ' + H + '）');
   });
 
   // 桌面 / 竖屏保持单列 54px（无回归）
@@ -287,54 +303,302 @@ function t7() {
     ok(g.uiButtons[0].h === 54, c[2] + '：按钮保持 54px', '实际 ' + g.uiButtons[0].h);
   });
 
-  // --- 结算记分牌：卡片必须完整在屏且不压按钮 ---
-  // 复算 drawMultiResult 的几何（与实现同一公式；改实现时须同步这里）
+  // --- 结算记分牌：卡片必须完整在屏、不压按钮、不压 HUD 面板 ---
+  // v3.0.5：改为**拦截真实绘制**取几何，不再复刻公式。
+  // 复刻公式的做法在这次改动中已经脱钩过一次（实现改成视口驱动、测试还在用 W/2），
+  // 拦截法让测试自动跟随实现，避免"测试绿但实现错"。
+  //
+  // 注意：drawMultiResult 第一件事是 drawOverlay(0.6) 画**全屏**遮罩，
+  // 若把它算进 bbox，卡片宽度会变成整屏宽。所以这里按「路径批次」分段记录，
+  // 取第一个非全屏的批次 —— 那就是卡片底板。
   function cardGeom(g, W, H) {
-    var rows = 8, padV = 18, titleH = 96, footH = 30;
+    var batches = [];
+    var cur = null;
+    function flush() {
+      if (cur && cur.maxX > cur.minX) batches.push(cur);
+      cur = null;
+    }
+    function track(x, y) {
+      if (typeof x !== 'number' || typeof y !== 'number') return;
+      if (!cur) cur = { minX: x, minY: y, maxX: x, maxY: y };
+      if (x < cur.minX) cur.minX = x;
+      if (y < cur.minY) cur.minY = y;
+      if (x > cur.maxX) cur.maxX = x;
+      if (y > cur.maxY) cur.maxY = y;
+    }
+    function nop() {}
+    var stub = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: function () { flush(); },
+      closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      measureText: function (s) { return { width: String(s).length * 7 }; },
+      fillText: nop, strokeText: nop, arc: nop, ellipse: nop,
+      moveTo: track, lineTo: track,
+      quadraticCurveTo: function (a, b, c, d) { track(c, d); },
+      bezierCurveTo: function (a, b, c, d, e, f) { track(e, f); },
+      rect: function (x, y, w, h) { track(x, y); track(x + w, y + h); },
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: W, height: H }
+    };
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = stub; r.W = W; r.H = H;
+    CS.Renderer.prototype.drawMultiResult.call(r, g);
+    flush();
+    // 取第一个「不是全屏」的批次作为卡片（全屏遮罩宽度 ≈ W）
+    var card = null;
+    for (var i = 0; i < batches.length; i++) {
+      var b = batches[i];
+      if (b.maxX - b.minX < W * 0.99) { card = b; break; }
+    }
+    if (!card) card = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     var btnTop = H;
-    g.uiButtons.forEach(function (b) { btnTop = Math.min(btnTop, b.y); });
-    var roomH = btnTop - 20 - 12;
-    var twoCol = (padV * 2 + titleH + rows * 34 + footH) > roomH;
-    var perCol = twoCol ? Math.ceil(rows / 2) : rows;
-    var rowH = 34;
-    var cw = twoCol ? Math.min(560, W * 0.86) : Math.min(440, W * 0.62);
-    var ch = padV * 2 + titleH + perCol * rowH + footH;
-    if (ch > roomH) {
-      rowH = Math.max(22, (roomH - padV * 2 - titleH - footH) / perCol);
-      ch = padV * 2 + titleH + perCol * rowH + footH;
-    }
-    if (ch > roomH) {
-      padV = 8; footH = 18;
-      titleH = Math.max(46, roomH - padV * 2 - perCol * rowH - footH);
-      ch = padV * 2 + titleH + perCol * rowH + footH;
-    }
-    var y = Math.max(6, (btnTop - 20 - ch) / 2);
-    if (y + ch > btnTop - 12) y = Math.max(4, btnTop - 12 - ch);
-    return { x: W / 2 - cw / 2, y: y, w: cw, h: ch, twoCol: twoCol, btnTop: btnTop };
+    g.uiButtons.forEach(function (b2) { btnTop = Math.min(btnTop, b2.y); });
+    var lay = g.layout();
+    return {
+      x: card.minX, y: card.minY,
+      w: card.maxX - card.minX, h: card.maxY - card.minY,
+      btnTop: btnTop, portrait: lay.portrait, viewR: lay.viewX + lay.viewW
+    };
   }
 
-  [[844, 390, 'iPhone横屏', true], [800, 360, 'Android横屏', true],
-   [667, 375, 'SE横屏', true], [390, 844, '竖屏', false], [1280, 720, '桌面', false],
-   [1920, 1080, '大屏', false], [320, 240, '极小', true]].forEach(function (c) {
-    var W = c[0], H = c[1], name = c[2], expectTwo = c[3];
+  [[844, 390, 'iPhone横屏'], [800, 360, 'Android横屏'],
+   [667, 375, 'SE横屏'], [390, 844, '竖屏'], [1280, 720, '桌面'],
+   [1920, 1080, '大屏'], [320, 240, '极小']].forEach(function (c) {
+    var W = c[0], H = c[1], name = c[2];
     var g = new CS.Game(W, H);
     g.mode = 'multi';
+    g.startMulti();
+    g.mpResult = {
+      surviveSec: 187, score: 4820, survivalScore: 187, elimScore: 4633,
+      elimTotal: 96, rank: 2, kills: 3, finalLen: 41, maxLen: 47,
+      bestLen: 47, bestScore: 4820, newBest: true
+    };
+    g.overAt = 0; g.timeMs = 5000;
     g.setState('over');
     var m = cardGeom(g, W, H);
-    ok(m.twoCol === expectTwo, name + '：记分牌' + (expectTwo ? '两列' : '单列') +
-      '（实际' + (m.twoCol ? '两列' : '单列') + '）');
-    ok(m.y >= 0 && m.y + m.h <= H, name + '：卡片纵向在屏内（' +
+    ok(m.y >= -1 && m.y + m.h <= H + 1, name + '：卡片纵向在屏内（' +
       Math.round(m.y) + '~' + Math.round(m.y + m.h) + ' / ' + H + '）',
       '底边 ' + Math.round(m.y + m.h) + ' 超出 ' + H);
-    ok(m.x >= 0 && m.x + m.w <= W, name + '：卡片横向在屏内（宽 ' + Math.round(m.w) + '）');
-    ok(m.y + m.h <= m.btnTop - 8, name + '：卡片不压按钮（距 ' +
+    ok(m.x >= -1 && m.x + m.w <= W + 1, name + '：卡片横向在屏内（宽 ' + Math.round(m.w) + '）');
+    ok(m.y + m.h <= m.btnTop - 6, name + '：卡片不压按钮（距 ' +
       Math.round(m.btnTop - (m.y + m.h)) + 'px）',
-      '压了 ' + Math.round(m.y + m.h - (m.btnTop - 8)) + 'px');
+      '压了 ' + Math.round(m.y + m.h - (m.btnTop - 6)) + 'px');
+    // 本轮新增的核心不变量：横屏时卡片不得越过视口右边界（= HUD 面板左沿）
+    if (!m.portrait) {
+      ok(m.x + m.w <= m.viewR + 1, name + '：卡片不压 HUD 面板（右 ' +
+        Math.round(m.x + m.w) + ' ≤ 视口 ' + Math.round(m.viewR) + '）',
+        '压了 ' + Math.round(m.x + m.w - m.viewR) + 'px');
+    }
   });
 }
 
-console.log('横竖屏自适应布局回归（v3.0.2 / v3.0.3 / v3.0.4）');
-t1(); t2(); t3(); t4(); t5(); t6(); t7();
+/**
+ * T8 全局重叠矩阵（v3.0.5 的核心不变量）。
+ *
+ * 前几轮 617 项断言全绿、真实截图却是坏的 —— 根因就是断言口径只有「在屏内」，
+ * 遮挡类缺陷全部漏过（按钮盖住蛇动画、卡片盖住 HUD）。
+ * 本组把判据升级为**任意两个 UI 元素矩形不相交**，并覆盖每个界面 × 每个尺寸。
+ */
+function t8() {
+  section('T8 互不重叠矩阵（替代「在屏内」口径）');
+
+  /** 两矩形是否相交（容差 1px，避免浮点与描边误判） */
+  function hit(a, b) {
+    var tol = 1;
+    return !(a.x + a.w - tol <= b.x || b.x + b.w - tol <= a.x ||
+             a.y + a.h - tol <= b.y || b.y + b.h - tol <= a.y);
+  }
+
+  var SIZES = [[844, 390, 'iPhone横'], [800, 360, 'Android横'], [667, 375, 'SE横'],
+               [390, 844, 'iPhone竖'], [360, 800, 'Android竖'],
+               [1280, 720, '桌面'], [1920, 1080, '大屏'],
+               [320, 240, '极小横'], [240, 320, '极小竖']];
+
+  // --- 8.1 任意界面：按钮两两不重叠 ---
+  var STATES = ['menu', 'levels', 'guide', 'matching', 'clear', 'over'];
+  SIZES.forEach(function (c) {
+    var W = c[0], H = c[1], nm = c[2];
+    var overlaps = 0, outs = 0;
+    STATES.forEach(function (st) {
+      var g = new CS.Game(W, H);
+      g.levelCfg = { level: 3, targetScore: 100 };
+      g.mode = 'level';
+      g.setState(st);
+      var bs = g.uiButtons;
+      for (var i = 0; i < bs.length; i++) {
+        if (bs[i].x < -1 || bs[i].y < -1 ||
+            bs[i].x + bs[i].w > W + 1 || bs[i].y + bs[i].h > H + 1) outs++;
+        for (var j = i + 1; j < bs.length; j++) if (hit(bs[i], bs[j])) overlaps++;
+      }
+    });
+    ok(overlaps === 0, nm + ' ' + W + 'x' + H + '：所有界面按钮两两不重叠',
+      '发现 ' + overlaps + ' 对重叠');
+    ok(outs === 0, nm + ' ' + W + 'x' + H + '：所有界面按钮均在屏内',
+      '发现 ' + outs + ' 个越界');
+  });
+
+  // --- 8.2 菜单：按钮组不与品牌区各层重叠 ---
+  SIZES.forEach(function (c) {
+    var W = c[0], H = c[1], nm = c[2];
+    var g = new CS.Game(W, H);
+    g.setState('menu');
+    var ml = g.menuLayout();
+    var bs = g.uiButtons;
+    var bx = Math.min.apply(null, bs.map(function (b) { return b.x; }));
+    var by = Math.min.apply(null, bs.map(function (b) { return b.y; }));
+    var bx2 = Math.max.apply(null, bs.map(function (b) { return b.x + b.w; }));
+    var by2 = Math.max.apply(null, bs.map(function (b) { return b.y + b.h; }));
+    var btnBox = { x: bx, y: by, w: bx2 - bx, h: by2 - by };
+    // 品牌区各层的包围盒（与 game.menuLayout / renderer.drawMenu 的实际占用一致）
+    var layers = [
+      { name: '标题', x: ml.brandCx - ml.brandW / 2, y: ml.titleY - ml.titleSize / 2,
+        w: ml.brandW, h: ml.titleSize }
+    ];
+    // 蛇动画 / 副标题 / 统计在极端小屏会按优先级主动让位，此时不参与判定
+    if (ml.showAnim !== false) {
+      layers.push({ name: '蛇动画', x: ml.brandCx - ml.brandW / 2, y: ml.animY - 30,
+        w: ml.brandW, h: 47 });
+    }
+    if (ml.showSub !== false) {
+      layers.push({ name: '副标题', x: ml.brandCx - ml.brandW / 2, y: ml.subY - 9,
+        w: ml.brandW, h: 18 });
+    }
+    if (ml.showStat !== false) {
+      layers.push({ name: '底部统计', x: ml.brandCx - ml.brandW / 2, y: ml.statY - 9,
+        w: ml.brandW, h: ml.statLine + 18 });
+    }
+    var bad = [];
+    layers.forEach(function (L) { if (hit(btnBox, L)) bad.push(L.name); });
+    ok(bad.length === 0, nm + ' ' + W + 'x' + H + '：菜单按钮不遮挡品牌区任何一层',
+      '遮挡了 ' + bad.join('/'));
+  });
+
+  // --- 8.3 视口与面板：恰好铺满且互不重叠（既有不变量，纳入矩阵一并守护）---
+  SIZES.forEach(function (c) {
+    var W = c[0], H = c[1], nm = c[2];
+    var g = new CS.Game(W, H);
+    var l = g.layout();
+    var view = { x: l.viewX, y: l.viewY, w: l.viewW, h: l.viewH };
+    var panel = { x: l.panelX, y: l.panelY, w: l.panelW, h: l.panelH };
+    ok(!hit(view, panel), nm + ' ' + W + 'x' + H + '：视口与 HUD 面板不重叠');
+    var covered = view.w * view.h + panel.w * panel.h;
+    ok(Math.abs(covered - W * H) < W * H * 0.02,
+      nm + ' ' + W + 'x' + H + '：视口 + 面板铺满屏幕（覆盖 ' +
+      Math.round(covered / (W * H) * 100) + '%）');
+  });
+
+  // --- 8.4 摇杆底座落在视口内、不被面板压住 ---
+  SIZES.forEach(function (c) {
+    var W = c[0], H = c[1], nm = c[2];
+    var g = new CS.Game(W, H);
+    var l = g.layout();
+    var j = g.joystick;
+    var jb = { x: j.baseX - j.radius, y: j.baseY - j.radius, w: j.radius * 2, h: j.radius * 2 };
+    var panel = { x: l.panelX, y: l.panelY, w: l.panelW, h: l.panelH };
+    ok(!hit(jb, panel), nm + ' ' + W + 'x' + H + '：摇杆不被 HUD 面板压住');
+    ok(jb.x >= -1 && jb.y >= -1 && jb.x + jb.w <= W + 1 && jb.y + jb.h <= H + 1,
+      nm + ' ' + W + 'x' + H + '：摇杆完整在屏内');
+  });
+}
+
+/**
+ * T9 layoutBus 全局重排派发（v3.0.5）。
+ * 用户明确要求「横竖屏转换要有重新 layout 的全局派发，各界面分别处理」。
+ * 这里验证：事件能派发、订阅者能收到、Game 的缓存确实失效并重算。
+ */
+function t9() {
+  section('T9 layoutBus 全局重排派发');
+
+  ok(typeof CS.LayoutBus === 'function', 'LayoutBus 构造函数存在');
+  ok(CS.layoutBus instanceof CS.LayoutBus, 'CS.layoutBus 是全局单例');
+
+  var bus = new CS.LayoutBus();
+  var got = [];
+  var un = bus.on('relayout', function (m) { got.push(m); });
+  bus.relayout(844, 390);
+  ok(got.length === 1, '订阅者收到 relayout 事件');
+  ok(got[0].portrait === false && got[0].short === true,
+    '横屏矮屏 metrics 正确（portrait=false, short=true）',
+    JSON.stringify(got[0]));
+  bus.relayout(390, 844);
+  ok(got.length === 2 && got[1].portrait === true && got[1].short === false,
+    '竖屏 metrics 正确（portrait=true, short=false）');
+  un();
+  bus.relayout(800, 360);
+  ok(got.length === 2, '取消订阅后不再收到事件');
+
+  // 单个订阅者抛异常不影响其它订阅者（布局是表现层，不该让整局黑屏）
+  var bus2 = new CS.LayoutBus();
+  var okCalled = false;
+  bus2.on('relayout', function () { throw new Error('故意失败'); });
+  bus2.on('relayout', function () { okCalled = true; });
+  bus2.relayout(844, 390);
+  ok(okCalled === true, '某订阅者抛异常时其余订阅者仍被调用');
+
+  // Game.resize 必须清缓存 + 重建按钮 + 重新钳制相机
+  var g = new CS.Game(844, 390);
+  g.setState('menu');
+  var l1 = g.layout();
+  ok(g.layout() === l1, 'layout() 有缓存（同尺寸返回同一对象）');
+  var before = g.uiButtons.length;
+  var mlBefore = g.menuLayout().split;
+  g.resize(390, 844);
+  var l2 = g.layout();
+  ok(l2 !== l1, 'resize 后 layout 缓存已失效');
+  ok(l2.portrait === true, 'resize 后布局切到竖屏');
+  ok(g.uiButtons.length === before, 'resize 后按钮已重建且数量不变');
+  ok(mlBefore === true && g.menuLayout().split === false,
+    '菜单分栏状态随朝向切换（横屏分栏 → 竖屏单列）');
+
+  // 相机在新视口下不越界
+  var g2 = new CS.Game(844, 390);
+  g2.startMulti();
+  g2.camera.x = 9999; g2.camera.y = 9999;   // 故意放到越界位置
+  g2.resize(390, 844);
+  var l3 = g2.layout();
+  ok(g2.camera.x <= g2.walls.W + 40 && g2.camera.y <= g2.walls.H + 40,
+    'resize 后相机被重新钳制（' + Math.round(g2.camera.x) + ',' +
+    Math.round(g2.camera.y) + '）');
+
+  // invalidateLayout 单独可用（供订阅者手动调用）
+  var g3 = new CS.Game(844, 390);
+  var a = g3.layout();
+  g3.invalidateLayout();
+  ok(g3.layout() !== a, 'invalidateLayout 能单独清缓存');
+
+  // Renderer 也是订阅者：旋转后必须清掉标题动效状态（否则蛇从旧位置飘过去）
+  ok(typeof CS.Renderer.prototype.applyRelayout === 'function',
+    'Renderer.applyRelayout 存在（relayout 订阅入口）');
+  var rr = Object.create(CS.Renderer.prototype);
+  rr.ctx = null; rr.W = 844; rr.H = 390;
+  rr.titleFx = { segs: ['red'], lastMs: 0 };
+  rr.resize(390, 844);
+  ok(rr.titleFx === null, 'Renderer.resize 清空标题动效状态');
+  ok(rr.W === 390 && rr.H === 844, 'Renderer.resize 更新尺寸');
+
+  // 端到端：一次 relayout 派发让 game 与 renderer 同时更新（模拟 main.js 的接线）
+  var bus3 = new CS.LayoutBus();
+  var gE = new CS.Game(844, 390);
+  var rE = Object.create(CS.Renderer.prototype);
+  rE.ctx = null; rE.W = 844; rE.H = 390; rE.titleFx = { x: 1 };
+  bus3.on('relayout', function (m) { rE.resize(m.W, m.H); });
+  gE.setState('menu');
+  var splitBefore = gE.menuLayout().split;
+  gE.screenW = 390; gE.screenH = 844;
+  gE.applyRelayout();
+  bus3.relayout(390, 844);
+  ok(splitBefore === true && gE.menuLayout().split === false,
+    '端到端：Game 随 relayout 从分栏切回单列');
+  ok(rE.W === 390 && rE.titleFx === null,
+    '端到端：Renderer 随同一次 relayout 更新并清缓存');
+}
+
+console.log('横竖屏自适应布局回归（v3.0.2 ~ v3.0.5）');
+t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

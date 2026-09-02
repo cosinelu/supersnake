@@ -90,16 +90,33 @@
    *            panelX:number, panelY:number, panelW:number, panelH:number, areaW:number}}
    */
   Game.prototype.layout = function () {
+    // 缓存：layout() 每帧被渲染层调用多次（世界/面板/摇杆/结算各一次）。
+    // 缓存键包含屏幕尺寸，尺寸一变自然失效；layoutBus 的 relayout 也会显式清空。
     var W = this.screenW, H = this.screenH;
+    var c = this._layoutCache;
+    if (c && c.W === W && c.H === H) return c.val;
+    var val = this._computeLayout(W, H);
+    this._layoutCache = { W: W, H: H, val: val };
+    return val;
+  };
+
+  /** 清空布局缓存（layoutBus relayout 时调用） */
+  Game.prototype.invalidateLayout = function () {
+    this._layoutCache = null;
+  };
+
+  /** @private 实际的布局计算（不带缓存） */
+  Game.prototype._computeLayout = function (W, H) {
     // 竖屏判定：高明显大于宽。用 1.05 而非 1.0 留一点余量，避免接近正方时反复抖动。
     var portrait = H > W * 1.05;
+    var short = H < (CS.LAYOUT_SHORT_H || 460);   // 矮屏（手机横屏）
 
     if (portrait) {
       // 顶部横条：占屏高的一小部分，夹在 [132, 200]，保证可玩区仍是主体
       var panelH = Math.round(u.clamp(H * 0.20, 132, 200));
       if (panelH > H * 0.34) panelH = Math.round(H * 0.34); // 极端矮屏兜底
       return {
-        portrait: true,
+        portrait: true, short: short,
         viewX: 0, viewY: panelH, viewW: W, viewH: Math.max(120, H - panelH),
         panelX: 0, panelY: 0, panelW: W, panelH: panelH,
         areaW: W
@@ -110,7 +127,7 @@
     if (W < 560) panelW = Math.round(u.clamp(W * 0.24, 110, 148)); // 窄屏压缩面板
     var areaW = Math.max(120, W - panelW);
     return {
-      portrait: false,
+      portrait: false, short: short,
       viewX: 0, viewY: 0, viewW: areaW, viewH: H,
       panelX: areaW, panelY: 0, panelW: panelW, panelH: H,
       areaW: areaW
@@ -155,8 +172,28 @@
   Game.prototype.resize = function (w, h) {
     this.screenW = w;
     this.screenH = h;
+    // 走统一的重排入口：清缓存 → 重建按钮 → 重设摇杆 → 重新钳制相机。
+    // 之前这里只 buildButtons + syncJoystick，既没清 layout 缓存也没重新钳制相机，
+    // 旋转后相机可能停在旧视口的合法位置、新视口下却越界（docs/design §3.8.3-D）。
+    this.applyRelayout();
+    // 同时向总线广播，让 Renderer 等其它订阅者一起失效缓存
+    if (CS.layoutBus) CS.layoutBus.relayout(w, h);
+  };
+
+  /**
+   * 响应重排：清空所有与尺寸相关的缓存并重算。
+   * 幂等 —— 可安全重复调用（旋转时会连续触发多次）。
+   */
+  Game.prototype.applyRelayout = function () {
+    this.invalidateLayout();
     this.buildButtons();
     this.syncJoystick();
+    // 相机重新钳制：旧位置在新视口下可能越界（例如横→竖时视口变窄变高）
+    if (this.snake && this.walls) {
+      var l = this.layout();
+      this.camera.x = clampCam(this.camera.x, this.walls.W, l.viewW);
+      this.camera.y = clampCam(this.camera.y, this.walls.H, l.viewH);
+    }
   };
 
   // ---------------- 相机 ----------------
@@ -655,6 +692,99 @@
   };
 
   /**
+   * 主菜单布局求解（v3.0.5，方案 A）——**渲染层与按钮布局的唯一权威源**。
+   *
+   * 之前标题/副标题/统计文字的坐标写在 renderer 里，按钮坐标写在 game 里，
+   * 两处各自按 H 的比例硬算，于是横屏时按钮压住蛇动画与副标题。
+   * 现在统一由本函数产出所有分区，renderer 只负责往给定矩形里画。
+   *
+   * 横屏矮屏（`short && !portrait`）走**左右分栏**：
+   *   左半区 = 品牌区（标题 / 蛇动画 / 副标题 / 底部统计），右半区 = 按钮单列。
+   *   两区不共享纵向空间 ⇒ 结构上不可能重叠。
+   * 竖屏 / 桌面保持原纵向流（标题在上、按钮居中、统计在底）。
+   *
+   * @returns {{split:boolean, brandX:number, brandW:number, brandCx:number,
+   *            titleY:number, titleSize:number, animY:number, subY:number,
+   *            statY:number, statLine:number, statCx:number,
+   *            btnCx:number, btnW:number, btnTop:number, btnBottom:number}}
+   */
+  Game.prototype.menuLayout = function () {
+    var W = this.screenW, H = this.screenH;
+    var l = this.layout();
+    var inset = this.safeInsets();
+    var split = l.short && !l.portrait;        // 只有横屏矮屏才分栏
+
+    if (split) {
+      var splitX = Math.round(W * 0.46);
+      var padL = 16 + inset.left, padR = 16 + inset.right;
+      var brandW = splitX - padL;
+      var brandCx = padL + brandW / 2;
+      // 品牌区纵向：标题 → 蛇动画轨道 → 副标题 → 统计两行，整体在左半区垂直居中。
+      // 轨道实际占用比色块尺寸大：色块 24px(±12) + 波浪摆动 ±2.6 ⇒ laneY±15，
+      // 且「4连消除！」飘字在 laneY-26 会向上顶标题 → 上下都要留够。
+      var titleSize = Math.round(u.clamp(H * 0.10, 24, 40));
+      var LANE_UP = 30, LANE_DN = 17;                    // 轨道上/下实际占用
+      var SUB_H = 9, STAT_H = 9;                         // 半高
+      var blockH = titleSize + LANE_UP + LANE_DN + 10 + SUB_H * 2 + 10 + STAT_H * 2 + 16;
+      var bTop = Math.max(inset.top + 6, (H - blockH) / 2);
+      var titleY = bTop + titleSize * 0.55;
+      var animY = titleY + titleSize * 0.5 + LANE_UP;    // 标题底边下方再留出飘字空间
+      var subY = animY + LANE_DN + 10 + SUB_H;
+      var statY = subY + SUB_H + 12 + STAT_H;
+      var statLine = 16;
+      // 整组超出屏幕时整体上移（极端矮屏）
+      var overflow = (statY + statLine + STAT_H + 8 + inset.bottom) - H;
+      if (overflow > 0) { titleY -= overflow; animY -= overflow; subY -= overflow; statY -= overflow; }
+      // 按钮区：右半区整体垂直居中，与品牌区完全分离
+      var btnW = Math.min(240, W - splitX - padR - 16);
+      return {
+        split: true, showStat: true, showSub: true, showAnim: true,
+        brandX: padL, brandW: brandW, brandCx: brandCx,
+        titleY: titleY, titleSize: titleSize, animY: animY, subY: subY,
+        statY: statY, statLine: statLine, statCx: brandCx,
+        btnCx: splitX + (W - splitX - padR) / 2, btnW: btnW,
+        btnTop: inset.top + 12, btnBottom: H - 12 - inset.bottom
+      };
+    }
+
+    // 纵向流（竖屏 / 桌面）：沿用原比例，但坐标集中在此处产出
+    var tSize = Math.round(u.clamp(H * 0.075, 30, 52));
+    var tY = H * 0.22;
+    var top = Math.max(H * 0.35 + 16, tY + tSize * 0.95 + 20);  // 让开副标题与蛇动画
+    var bottom = H * 0.89 - 14 - inset.bottom;                  // 让开底部两行信息
+    var showStat = true, showSub = true, showAnim = true;
+    var minNeed = 5 * 34 + 4 * 6;
+    if (bottom - top < minNeed) {                               // 极端小屏兜底
+      // 空间不足时逐级让位。优先级：**按钮可点 > 蛇动画 > 副标题 > 历史成绩**
+      //（点不到的按钮比看不到的装饰严重得多）。
+      showStat = false;
+      bottom = H - 8 - inset.bottom;
+      if (bottom - top < minNeed) {
+        showSub = false;                                        // 副标题让位
+        top = Math.max(inset.top + 6, tY + tSize * 0.62 + 8);
+      }
+      if (bottom - top < minNeed) {
+        showAnim = false;                                       // 蛇动画（纯装饰）让位
+        top = Math.max(inset.top + 4, tY + tSize * 0.55 + 6);
+      }
+      if (bottom - top < minNeed) top = Math.max(inset.top + 4, bottom - minNeed);
+    }
+    // 蛇动画是纯装饰：只要它的轨道会被按钮区压到，就直接不画（而不是硬挤）。
+    // 判据用**实际占用**（轨道下沿 animY+17）与按钮区顶 top 比较 ——
+    // 不能只看"前面几级让位是否触发"，因为 top 上移后动画照样会被压。
+    var animYv = tY + tSize * 0.95;
+    if (animYv + 17 > top) showAnim = false;
+    return {
+      split: false, showStat: showStat, showSub: showSub, showAnim: showAnim,
+      brandX: 0, brandW: W, brandCx: W / 2,
+      titleY: tY, titleSize: tSize, animY: animYv, subY: H * 0.35,
+      statY: H * 0.89, statLine: 22, statCx: W / 2,
+      btnCx: W / 2, btnW: Math.min(220, W * 0.3),
+      btnTop: top, btnBottom: bottom
+    };
+  };
+
+  /**
    * 纵向按钮组布局求解（矮屏自适应，见 docs/design §3.8.1）。
    *
    * 手机横屏可视高度只有 ~360~390px，原来「从 H*0.40 起、每个按钮占 54+16px」的固定堆叠
@@ -683,6 +813,16 @@
       gap = Math.max(minGap, Math.floor(gap * k));
       need = n * bh + (n - 1) * gap;
     }
+    // 取下限后仍超出可用区（极端小屏，如 240x320）→ 再压间距、最后压高度，
+    // 硬保证 need <= avail。没有这一步会出现「按钮组整体溢出 2~3px、最后一个点不到」。
+    if (need > avail && n > 1) {
+      gap = Math.max(0, Math.floor((avail - n * bh) / (n - 1)));
+      need = n * bh + (n - 1) * gap;
+    }
+    if (need > avail) {
+      bh = Math.max(20, Math.floor((avail - (n - 1) * gap) / n));  // 20px 是绝对下限
+      need = n * bh + (n - 1) * gap;
+    }
     // 整组垂直居中于可用区（比从固定比例起步更稳，矮屏高屏都好看）
     var startTop = top + Math.max(0, (avail - need) / 2);
     return { bh: bh, gap: gap, firstCy: startTop + bh / 2, step: bh + gap };
@@ -695,44 +835,24 @@
     var bw = Math.min(220, W * 0.3), bh = 54;
     var i;
     if (this.state === 'menu') {
-      // 主菜单按钮：可用区 = 标题/蛇动画之下 ~ 底部信息之上（不侵占它们，见 docs/design §3.8.2）
-      //   蛇动画轨道 y = H*0.22 + 52*0.95（renderer.drawTitleFx）
-      //   副标题     y = H*0.35        底部两行信息 y = H*0.89 / +22
-      // 横屏矮屏单列必然放不下 5 个 → 改**两列**（左 3 右 2），而不是继续压缩纵向，
-      // 否则按钮会盖住动画与文字（v3.0.3 的做法只治症）。
       var ids = ['level', 'endless', 'multi', 'online', 'guide'];
       var labels = ['闯关模式', '无尽模式', 'AI对战', '在线对战', '图鉴'];
-      var top = Math.max(H * 0.35 + 16, H * 0.22 + 52 * 0.95 + 20); // 让开副标题与蛇动画
-      var bottom = H * 0.89 - 14 - inset.bottom;                     // 让开底部两行信息
-      // 极端矮屏（如 320x240）连两列都放不下 → 放宽到整屏可用区（此时宁可与文字靠近，
-      // 也必须保证按钮可点、不出屏；顺序：先保可点，再保美观）。
-      var minTwoCol = Math.ceil(ids.length / 2) * 38 + (Math.ceil(ids.length / 2) - 1) * 8;
-      if (bottom - top < minTwoCol) {
-        top = Math.max(inset.top + 8, H * 0.22 + 30);
-        bottom = H - 10 - inset.bottom;
-      }
-      var needOne = ids.length * bh + (ids.length - 1) * 16;
-      var twoCol = (bottom - top) < needOne;                         // 单列放不下 → 两列
+      var ml = this.menuLayout();
 
-      if (twoCol) {
-        var leftN = Math.ceil(ids.length / 2);                       // 左 3 右 2
-        var colGap = 24;
-        var cw2 = Math.min(bw, (W - colGap - 40) / 2);
-        var st2 = this.solveButtonStack(leftN, top, bottom, { bh: bh, gap: 14, minBh: 38, minGap: 8 });
-        var lx = cx - cw2 / 2 - colGap / 2, rx = cx + cw2 / 2 + colGap / 2;
+      if (ml.split) {
+        // 方案 A：横屏左右分栏 —— 品牌区在左、按钮单列在右。
+        // 两者不再共享纵向空间，重叠在结构上不可能发生（docs/design §3.8.3-A）。
+        // 上一版的「两列」方案仍与标题带争夺纵向空间，才导致按钮盖住蛇动画/副标题。
+        var stS = this.solveButtonStack(ids.length, ml.btnTop, ml.btnBottom,
+          { bh: bh, gap: 12, minBh: 34, minGap: 5 });
         for (i = 0; i < ids.length; i++) {
-          var inLeft = i < leftN;
-          var idxInCol = inLeft ? i : i - leftN;
-          // 右列比左列少 1 个时，整列垂直居中对齐左列（观感更稳）
-          var colCount = inLeft ? leftN : (ids.length - leftN);
-          var offs = (leftN - colCount) * st2.step / 2;
-          this.addButton(ids[i], inLeft ? lx : rx,
-            st2.firstCy + idxInCol * st2.step + offs, cw2, st2.bh, labels[i]);
+          this.addButton(ids[i], ml.btnCx, stS.firstCy + i * stS.step,
+            ml.btnW, stS.bh, labels[i]);
         }
       } else {
-        var st = this.solveButtonStack(ids.length, top, bottom);
+        var st = this.solveButtonStack(ids.length, ml.btnTop, ml.btnBottom);
         for (i = 0; i < ids.length; i++) {
-          this.addButton(ids[i], cx, st.firstCy + i * st.step, bw, st.bh, labels[i]);
+          this.addButton(ids[i], ml.btnCx, st.firstCy + i * st.step, ml.btnW, st.bh, labels[i]);
         }
       }
     } else if (this.state === 'matching') {
@@ -767,11 +887,15 @@
       if (this.mode === 'multi') {
         // 多人结算：按钮并排贴底，把上方空间尽量让给记分牌卡片
         // （renderer.drawMultiResult 按 btnTop 反推卡片高度；矮屏靠这里贴底才够放两列卡片）
-        var bh2 = H < 460 ? 42 : 50;                       // 矮屏按钮略矮，多让 8px 给卡片
-        var bw2 = Math.min(170, W * 0.24);
-        var by2 = H - bh2 / 2 - 10 - inset.bottom;         // 贴底（原 H*0.87 在矮屏会占太多）
-        this.addButton('retry', cx - bw2 / 2 - 14, by2, bw2, bh2, '再来一局');
-        this.addButton('menu', cx + bw2 / 2 + 14, by2, bw2, bh2, '返回菜单');
+        // v3.0.5：与卡片一致，水平中心取**视口中心**而非屏幕中心，否则横屏时
+        // 按钮会跑到 HUD 面板下方（卡片已避让，按钮不避让就对不齐了）。
+        var lo = this.layout();
+        var ocx = lo.viewX + lo.viewW / 2;
+        var bh2 = lo.short ? 42 : 50;                      // 矮屏按钮略矮，多让 8px 给卡片
+        var bw2 = Math.min(170, lo.viewW * 0.3);
+        var by2 = lo.viewY + lo.viewH - bh2 / 2 - 10 - inset.bottom;  // 贴视口底
+        this.addButton('retry', ocx - bw2 / 2 - 14, by2, bw2, bh2, '再来一局');
+        this.addButton('menu', ocx + bw2 / 2 + 14, by2, bw2, bh2, '返回菜单');
       } else {
         var os = this.solveButtonStack(2, H * 0.50, H - 14 - inset.bottom);
         this.addButton('retry', cx, os.firstCy, bw, os.bh, '重来');
