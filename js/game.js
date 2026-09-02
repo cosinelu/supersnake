@@ -654,45 +654,99 @@
     this.uiButtons.push({ id: id, x: cx - w / 2, y: cy - h / 2, w: w, h: h, label: label, enabled: enabled !== false });
   };
 
+  /**
+   * 纵向按钮组布局求解（矮屏自适应，见 docs/design §3.8.1）。
+   *
+   * 手机横屏可视高度只有 ~360~390px，原来「从 H*0.40 起、每个按钮占 54+16px」的固定堆叠
+   * 会溢出屏幕底部 70~90px，而 canvas 没有滚动条、拖也拖不动 → 下面几个按钮永远点不到。
+   * 这里改为按「可用高度」反推：先尝试理想尺寸，放不下就等比压缩，并整组垂直居中。
+   *
+   * @param {number} n 按钮个数
+   * @param {number} top 可用区顶部 y（需为标题等内容预留）
+   * @param {number} bottom 可用区底部 y
+   * @param {object} [opt] { bh:理想高=54, gap:理想间距=16, minBh:下限=34, minGap:下限=6 }
+   * @returns {{bh:number, gap:number, firstCy:number, step:number}}
+   *   firstCy = 第 1 个按钮的中心 y；step = 相邻按钮中心距
+   */
+  Game.prototype.solveButtonStack = function (n, top, bottom, opt) {
+    opt = opt || {};
+    var bh = opt.bh || 54, gap = opt.gap != null ? opt.gap : 16;
+    var minBh = opt.minBh || 34, minGap = opt.minGap != null ? opt.minGap : 6;
+    var avail = Math.max(1, bottom - top);
+    if (n <= 0) return { bh: bh, gap: gap, firstCy: top, step: bh + gap };
+
+    var need = n * bh + (n - 1) * gap;
+    if (need > avail) {
+      // 等比压缩到可用高度；仍放不下就取下限（极端矮屏，允许贴边但不再溢出屏幕）
+      var k = avail / need;
+      bh = Math.max(minBh, Math.floor(bh * k));
+      gap = Math.max(minGap, Math.floor(gap * k));
+      need = n * bh + (n - 1) * gap;
+    }
+    // 整组垂直居中于可用区（比从固定比例起步更稳，矮屏高屏都好看）
+    var startTop = top + Math.max(0, (avail - need) / 2);
+    return { bh: bh, gap: gap, firstCy: startTop + bh / 2, step: bh + gap };
+  };
+
   Game.prototype.buildButtons = function () {
     this.uiButtons = [];
     var W = this.screenW, H = this.screenH, cx = W / 2;
+    var inset = this.safeInsets();
     var bw = Math.min(220, W * 0.3), bh = 54;
+    var i;
     if (this.state === 'menu') {
-      this.addButton('level', cx, H * 0.40, bw, bh, '闯关模式');
-      this.addButton('endless', cx, H * 0.40 + bh + 16, bw, bh, '无尽模式');
-      this.addButton('multi', cx, H * 0.40 + 2 * (bh + 16), bw, bh, 'AI对战');
-      this.addButton('online', cx, H * 0.40 + 3 * (bh + 16), bw, bh, '在线对战');
-      this.addButton('guide', cx, H * 0.40 + 4 * (bh + 16), bw, bh, '图鉴');
+      // 标题画在 H*0.22（52px 字），按钮组从标题下方开始，底部留安全区。
+      // 极端矮屏（如 320x240）连压缩到下限都放不下 → 进一步收缩标题预留，
+      // 保证按钮永远可点（宁可标题被按钮压近，也不能有按钮点不到）。
+      var ids = ['level', 'endless', 'multi', 'online', 'guide'];
+      var labels = ['闯关模式', '无尽模式', 'AI对战', '在线对战', '图鉴'];
+      var bottom = H - 14 - inset.bottom;
+      var top = H * 0.22 + 46;
+      var minNeed = ids.length * 34 + (ids.length - 1) * 6; // 下限总高
+      if (bottom - top < minNeed) top = Math.max(inset.top + 8, bottom - minNeed);
+      var st = this.solveButtonStack(ids.length, top, bottom);
+      for (i = 0; i < ids.length; i++) {
+        this.addButton(ids[i], cx, st.firstCy + i * st.step, bw, st.bh, labels[i]);
+      }
     } else if (this.state === 'matching') {
-      this.addButton('online_cancel', cx, H * 0.72, bw, bh, '取消匹配');
+      this.addButton('online_cancel', cx, Math.min(H * 0.72, H - 40 - inset.bottom), bw, bh, '取消匹配');
     } else if (this.state === 'guide') {
       // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
-      this.addButton('back', W / 2, H - 28, 120, 38, '← 返回');
+      this.addButton('back', W / 2, H - 28 - inset.bottom, 120, 38, '← 返回');
     } else if (this.state === 'levels') {
-      var cols = 5, lw = Math.min(64, (W - 80) / cols - 10), lh = 50;
+      // 关卡网格 3 行 + 返回按钮：同样按可用高度自适应（矮屏会压缩行高）
+      var cols = 5, lw = Math.min(64, (W - 80) / cols - 10);
+      var rows = Math.ceil(lv.LEVEL_COUNT / cols);
       var gridW = cols * (lw + 12) - 12;
       var startX = (W - gridW) / 2 + lw / 2;
-      var startY = H * 0.36;
-      for (var i = 1; i <= lv.LEVEL_COUNT; i++) {
+      // 行 + 返回按钮一起参与求解（返回按钮当作额外一"行"）
+      var gTop = H * 0.22 + 40, gBottom = H - 14 - inset.bottom;
+      var gMinNeed = (rows + 1) * 30 + rows * 5;
+      if (gBottom - gTop < gMinNeed) gTop = Math.max(inset.top + 8, gBottom - gMinNeed);
+      var gs = this.solveButtonStack(rows + 1, gTop, gBottom,
+        { bh: 50, gap: 16, minBh: 30, minGap: 5 });
+      for (i = 1; i <= lv.LEVEL_COUNT; i++) {
         var col = (i - 1) % cols, row = Math.floor((i - 1) / cols);
-        this.addButton('lv' + i, startX + col * (lw + 12), startY + row * (lh + 16), lw, lh, String(i), i <= this.unlocked);
+        this.addButton('lv' + i, startX + col * (lw + 12), gs.firstCy + row * gs.step,
+          lw, gs.bh, String(i), i <= this.unlocked);
       }
-      this.addButton('back', cx, startY + 2 * (lh + 16) + 42, 160, 48, '返回');
+      this.addButton('back', cx, gs.firstCy + rows * gs.step, 160, Math.min(48, gs.bh), '返回');
     } else if (this.state === 'clear') {
       var hasNext = this.levelCfg.level < lv.LEVEL_COUNT;
-      if (hasNext) this.addButton('next', cx, H * 0.58, bw, bh, '下一关');
-      this.addButton('menu', cx, H * 0.58 + (hasNext ? bh + 20 : 0), bw, bh, '返回菜单');
+      var cs = this.solveButtonStack(hasNext ? 2 : 1, H * 0.50, H - 14 - inset.bottom);
+      if (hasNext) this.addButton('next', cx, cs.firstCy, bw, cs.bh, '下一关');
+      this.addButton('menu', cx, cs.firstCy + (hasNext ? cs.step : 0), bw, cs.bh, '返回菜单');
     } else if (this.state === 'over') {
       if (this.mode === 'multi') {
         // 多人结算：手绘卡片下方并排放置（renderer 的卡片自适应停在按钮上方）
         var bw2 = Math.min(170, W * 0.24), bh2 = 50;
-        var by2 = Math.min(H * 0.87, H - bh2 / 2 - 16);
+        var by2 = Math.min(H * 0.87, H - bh2 / 2 - 16 - inset.bottom);
         this.addButton('retry', cx - bw2 / 2 - 14, by2, bw2, bh2, '再来一局');
         this.addButton('menu', cx + bw2 / 2 + 14, by2, bw2, bh2, '返回菜单');
       } else {
-        this.addButton('retry', cx, H * 0.58, bw, bh, '重来');
-        this.addButton('menu', cx, H * 0.58 + bh + 20, bw, bh, '返回菜单');
+        var os = this.solveButtonStack(2, H * 0.50, H - 14 - inset.bottom);
+        this.addButton('retry', cx, os.firstCy, bw, os.bh, '重来');
+        this.addButton('menu', cx, os.firstCy + os.step, bw, os.bh, '返回菜单');
       }
     }
   };

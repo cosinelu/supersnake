@@ -955,12 +955,71 @@
 
   // ---------------- HUD 面板（横屏右侧竖条 / 竖屏顶部横条） ----------------
 
+  /**
+   * 横屏 HUD：右侧竖条。
+   *
+   * **纵向流式布局（v3.0.3）**：原实现是固定像素堆叠（标题 y=24、分数 y=100、
+   * 小地图 y=372…），到小地图之前就已占用 372px，而手机横屏可视高度只有 360~390px
+   * → 小地图被切掉一截（用户报告）。现改为「按可用高度算紧凑系数 k」的流式布局：
+   * 先累计所有区块的理想高度，超出可用高度就整体压缩行距/字号，并按优先级
+   * 丢弃低价值区块（操作提示 → 分数构成 → 已解锁颜色标题），保证
+   * **小地图这类关键信息永远完整可见**（docs/design §3.8.1）。
+   */
   Renderer.prototype.drawPanel = function (game) {
     var l = game.layout();
     if (l.portrait) { this.drawPanelPortrait(game, l); return; }
     var ctx = this.ctx;
     var px = l.panelX, pw = l.panelW, H = this.H;
     var cx = px + pw / 2;
+    var inset = game.safeInsets ? game.safeInsets() : { top: 0, right: 0, bottom: 0, left: 0 };
+
+    var isMulti = (game.mode === 'multi' && game.mp);
+    var lb = isMulti ? game.mp.leaderboard() : null;
+    var lbRows = lb ? Math.min(lb.length, 6) : 0;
+    var ratio = game.walls.H / game.walls.W;
+
+    // ---- 纵向预算：先按理想尺寸估总高，再算紧凑系数 ----
+    var top = 16 + inset.top;
+    var bottomLimit = H - 10 - inset.bottom;
+    var availH = bottomLimit - top;
+
+    // 各区块理想高度（与下方绘制顺序一一对应）
+    var idealMapW = pw - 28;
+    var blocks = {
+      header: 46,                       // 标题 + 模式
+      score: 54,                        // 「分数」标签 + 大号分数
+      target: 26 + (game.mode === 'level' ? 14 : 0), // 目标/最高（闯关多一条进度条）
+      detail: 34,                       // 分数构成 + 速度
+      board: lbRows ? (18 + lbRows * 16) : 0,
+      colors: 18 + 2 * 27,              // 「已解锁颜色」标题 + 4x2 色格
+      map: 16 + idealMapW * ratio,      // 「小地图」标题 + 本体
+      hint: 38                          // 底部操作提示
+    };
+    var order = ['header', 'score', 'target', 'detail', 'board', 'colors', 'map', 'hint'];
+    function total(bs) {
+      var s = 0;
+      for (var i = 0; i < order.length; i++) s += bs[order[i]] || 0;
+      return s;
+    }
+    // 优先级从低到高丢弃（小地图与分数永不丢）
+    var droppable = ['hint', 'detail', 'colors'];
+    var dropped = {};
+    var need = total(blocks);
+    for (var di = 0; di < droppable.length && need > availH; di++) {
+      dropped[droppable[di]] = true;
+      blocks[droppable[di]] = 0;
+      need = total(blocks);
+    }
+    // 仍超出 → 压缩：先缩小地图（它占比最大），再整体缩行距
+    if (need > availH) {
+      var others = need - blocks.map;
+      var mapRoom = Math.max(40, availH - others - 16);
+      idealMapW = Math.max(48, Math.min(idealMapW, Math.floor(mapRoom / ratio)));
+      blocks.map = 16 + idealMapW * ratio;
+      need = total(blocks);
+    }
+    var k = need > availH ? Math.max(0.6, availH / need) : 1; // 行距压缩系数
+    var showMap = idealMapW >= 48;
 
     ctx.save();
     // 面板底：略亮纸色 + 左侧手绘分隔线
@@ -981,31 +1040,37 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    // 标题
-    ctx.font = 'bold 15px sans-serif';
-    ctx.fillText('消食蛇', cx, 24);
+    var y = top;                                    // 流式游标
+    function adv(px2) { y += px2 * k; }             // 按紧凑系数推进
 
-    // 模式 / 关卡号
-    ctx.font = '12px sans-serif';
+    // ---- 标题 + 模式 ----
+    ctx.font = 'bold ' + Math.round(15 * Math.min(1, k + 0.15)) + 'px sans-serif';
+    ctx.fillText('消食蛇', cx, y + 8);
+    adv(24);
+    ctx.font = Math.round(12 * Math.min(1, k + 0.2)) + 'px sans-serif';
     ctx.globalAlpha = 0.75;
     var modeText = game.mode === 'level' ? ('闯关模式 · 第 ' + game.levelCfg.level + ' 关')
       : (game.mode === 'multi' ? (game.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场') : '无尽模式');
-    ctx.fillText(modeText, cx, 46);
+    ctx.fillText(modeText, cx, y + 6);
     ctx.globalAlpha = 1;
+    adv(22);
 
-    // 分数
+    // ---- 分数 ----
     ctx.font = '11px sans-serif';
     ctx.globalAlpha = 0.6;
-    ctx.fillText('分数', cx, 74);
+    ctx.fillText('分数', cx, y + 6);
     ctx.globalAlpha = 1;
-    ctx.font = 'bold 28px sans-serif';
-    ctx.fillText(String(game.score), cx, 100);
+    adv(18);
+    ctx.font = 'bold ' + Math.round(28 * Math.min(1, k + 0.1)) + 'px sans-serif';
+    ctx.fillText(String(game.score), cx, y + 12);
+    adv(36);
 
-    // 目标 / 最高分 + 进度条
+    // ---- 目标 / 最高分（+ 闯关进度条）----
     ctx.font = 'bold 13px sans-serif';
     if (game.mode === 'level') {
-      ctx.fillText('目标 ' + game.levelCfg.targetScore, cx, 126);
-      var barW = pw - 44, barH = 9, bx = cx - barW / 2, by = 136;
+      ctx.fillText('目标 ' + game.levelCfg.targetScore, cx, y + 6);
+      adv(16);
+      var barW = pw - 44, barH = 9, bx = cx - barW / 2, by = y;
       var prog = u.clamp(game.score / game.levelCfg.targetScore, 0, 1);
       wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
       ctx.fillStyle = 'rgba(58,50,56,0.12)';
@@ -1019,99 +1084,118 @@
       ctx.strokeStyle = cfg.INK;
       ctx.lineWidth = 1.4;
       ctx.stroke();
+      ctx.fillStyle = cfg.INK;
+      adv(24);
     } else if (game.mode === 'multi') {
       ctx.fillText('最佳 ' + Math.max(game.mpBest.len, game.snake.length()) + '节 · ' +
-        Math.max(game.mpBest.score, game.score) + '分', cx, 126);
+        Math.max(game.mpBest.score, game.score) + '分', cx, y + 6);
+      adv(26);
     } else {
-      ctx.fillText('最高 ' + Math.max(game.best, game.score), cx, 126);
+      ctx.fillText('最高 ' + Math.max(game.best, game.score), cx, y + 6);
+      adv(26);
     }
 
-    // 分数构成
-    ctx.font = '10px sans-serif';
-    ctx.globalAlpha = 0.6;
-    ctx.fillText('存活 ' + game.survivalScore + ' · 消除 ' + game.elimScore, cx, 160);
-    // 当前速度（动态加速可视化：随长度/时间提升，吃减速道具时回落）
-    var spd = Math.round(game.currentSpeed());
-    var slow = (game.slowUntil && game.timeMs < game.slowUntil);
-    ctx.fillStyle = slow ? '#2EC4B6' : cfg.INK;
-    ctx.fillText('速度 ' + spd + (slow ? ' (减速)' : '') + ' px/s', cx, 176);
-    ctx.fillStyle = cfg.INK;
-    ctx.globalAlpha = 1;
+    // ---- 分数构成 + 速度（矮屏可丢）----
+    if (!dropped.detail) {
+      ctx.font = '10px sans-serif';
+      ctx.globalAlpha = 0.6;
+      ctx.fillText('存活 ' + game.survivalScore + ' · 消除 ' + game.elimScore, cx, y + 5);
+      adv(16);
+      var spd = Math.round(game.currentSpeed());
+      var slow = (game.slowUntil && game.timeMs < game.slowUntil);
+      ctx.fillStyle = slow ? '#2EC4B6' : cfg.INK;
+      ctx.fillText('速度 ' + spd + (slow ? ' (减速)' : '') + ' px/s', cx, y + 5);
+      ctx.fillStyle = cfg.INK;
+      ctx.globalAlpha = 1;
+      adv(18);
+    }
 
-    // 多人对战：实时排行榜（按当前节数降序，玩家高亮加粗）
-    var yOff = 0;
-    if (game.mode === 'multi' && game.mp) {
-      var lb = game.mp.leaderboard();
+    // ---- 排行榜（多人；行高随紧凑系数收缩）----
+    if (lbRows) {
       ctx.font = '11px sans-serif';
       ctx.globalAlpha = 0.6;
-      ctx.fillText('排行榜', cx, 180);
+      ctx.fillText('排行榜', cx, y + 5);
       ctx.globalAlpha = 1;
-      var rowH = 16, ly = 194;
-      for (var li = 0; li < lb.length; li++) {
-        var rowY = ly + li * rowH;
+      adv(16);
+      var rowH = Math.max(12, Math.round(16 * k));
+      for (var li = 0; li < lbRows; li++) {
         var row = lb[li];
+        var rowY = y + rowH * li + rowH / 2;
         ctx.globalAlpha = row.isPlayer ? 1 : 0.8;
         ctx.fillStyle = row.isPlayer ? '#C47F17' : cfg.INK;
         ctx.font = (row.isPlayer ? 'bold ' : '') + '11px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText((li + 1) + '. ' + row.name, px + 16, rowY);
+        ctx.fillText((li + 1) + '. ' + row.name, px + 14, rowY);
         ctx.textAlign = 'right';
-        ctx.fillText(row.length + '节', px + pw - 16, rowY);
+        ctx.fillText(row.length + '节', px + pw - 14, rowY);
         ctx.textAlign = 'center';
         ctx.globalAlpha = 1;
       }
       ctx.fillStyle = cfg.INK;
-      yOff = 30 + lb.length * rowH; // 排行榜占用的纵向高度，后续板块整体下移
+      y += rowH * lbRows + 4 * k;
     }
 
-    // 已解锁颜色预览（4 列 x 2 行，未解锁灰色带叉）
-    ctx.font = '11px sans-serif';
-    ctx.globalAlpha = 0.6;
-    ctx.fillText('已解锁颜色', cx, 186 + yOff);
-    ctx.globalAlpha = 1;
-    var sw = 20, gap = 7, cols = 4;
-    var gridW = cols * sw + (cols - 1) * gap;
-    var sx = cx - gridW / 2, sy = 196 + yOff;
-    for (i = 0; i < cfg.MAX_COLORS; i++) {
-      var col = i % cols, row = Math.floor(i / cols);
-      var bx2 = sx + col * (sw + gap), by2 = sy + row * (sw + gap);
-      if (i < game.unlockedCount) {
-        drawCrayonBlock(ctx, bx2, by2, sw, cfg.COLORS[cfg.COLOR_KEYS[i]], 30 + i, 4, {
-          rot: (u.hash2(i, 5, 2) - 0.5) * 0.3, wobble: 0.9
-        });
-      } else {
-        ctx.save();
-        ctx.globalAlpha = 0.45;
-        wobblyRoundRect(ctx, bx2, by2, sw, sw, sw * 0.28, 30 + i, 4, 0.9);
-        ctx.fillStyle = '#CFC8BC';
-        ctx.fill();
-        ctx.strokeStyle = cfg.INK;
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-        ctx.beginPath(); // 锁定叉号
-        ctx.moveTo(bx2 + sw * 0.3, by2 + sw * 0.3);
-        ctx.lineTo(bx2 + sw * 0.7, by2 + sw * 0.7);
-        ctx.moveTo(bx2 + sw * 0.7, by2 + sw * 0.3);
-        ctx.lineTo(bx2 + sw * 0.3, by2 + sw * 0.7);
-        ctx.stroke();
-        ctx.restore();
+    // ---- 已解锁颜色（4x2；矮屏可丢）----
+    if (!dropped.colors) {
+      ctx.font = '11px sans-serif';
+      ctx.globalAlpha = 0.6;
+      ctx.fillText('已解锁颜色', cx, y + 5);
+      ctx.globalAlpha = 1;
+      adv(16);
+      var sw = 20, gap = 7, cols = 4;
+      var gridW = cols * sw + (cols - 1) * gap;
+      var sx = cx - gridW / 2;
+      for (i = 0; i < cfg.MAX_COLORS; i++) {
+        var col = i % cols, row2 = Math.floor(i / cols);
+        var bx2 = sx + col * (sw + gap), by2 = y + row2 * (sw + gap);
+        if (i < game.unlockedCount) {
+          drawCrayonBlock(ctx, bx2, by2, sw, cfg.COLORS[cfg.COLOR_KEYS[i]], 30 + i, 4, {
+            rot: (u.hash2(i, 5, 2) - 0.5) * 0.3, wobble: 0.9
+          });
+        } else {
+          ctx.save();
+          ctx.globalAlpha = 0.45;
+          wobblyRoundRect(ctx, bx2, by2, sw, sw, sw * 0.28, 30 + i, 4, 0.9);
+          ctx.fillStyle = '#CFC8BC';
+          ctx.fill();
+          ctx.strokeStyle = cfg.INK;
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+          ctx.beginPath(); // 锁定叉号
+          ctx.moveTo(bx2 + sw * 0.3, by2 + sw * 0.3);
+          ctx.lineTo(bx2 + sw * 0.7, by2 + sw * 0.7);
+          ctx.moveTo(bx2 + sw * 0.7, by2 + sw * 0.3);
+          ctx.lineTo(bx2 + sw * 0.3, by2 + sw * 0.7);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      y += 2 * (sw + gap) + 12 * k;
+    }
+
+    // ---- 小地图（关键信息：优先保证完整可见，必要时缩小）----
+    if (showMap) {
+      // 若剩余高度不够，就地再缩一次（例如排行榜行数多于预估）
+      var room = bottomLimit - y - 16;
+      var mw = idealMapW;
+      if (mw * ratio > room) mw = Math.max(48, Math.floor(room / ratio));
+      if (mw >= 48) {
+        ctx.font = '11px sans-serif';
+        ctx.globalAlpha = 0.6;
+        ctx.fillText('小地图', cx, y + 5);
+        ctx.globalAlpha = 1;
+        y += 14;
+        this.drawMinimap(game, cx - mw / 2, y, mw); // 居中（缩窄后不再左贴边）
+        y += mw * ratio;
       }
     }
 
-    // 小地图
-    var mapTop = sy + 2 * (sw + gap) + 18;
-    ctx.font = '11px sans-serif';
-    ctx.globalAlpha = 0.6;
-    ctx.fillText('小地图', cx, mapTop);
-    ctx.globalAlpha = 1;
-    var mh = this.drawMinimap(game, px + 14, mapTop + 10, pw - 28);
-
-    // 底部操作提示（空间不足时省略，多人模式面板较长）
-    if (mapTop + 10 + mh < H - 60) {
+    // ---- 底部操作提示（矮屏可丢；仅在确实还有空间时画）----
+    if (!dropped.hint && y < H - 46 - inset.bottom) {
       ctx.font = '11px sans-serif';
       ctx.globalAlpha = 0.55;
-      ctx.fillText('方向键 / WASD 转向', cx, H - 44);
-      ctx.fillText('或按住左下摇杆拖动', cx, H - 26);
+      ctx.fillText('方向键 / WASD 转向', cx, H - 44 - inset.bottom);
+      ctx.fillText('或按住左下摇杆拖动', cx, H - 26 - inset.bottom);
     }
     ctx.restore();
   };

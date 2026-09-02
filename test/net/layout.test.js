@@ -176,8 +176,75 @@ function t5() {
     JSON.stringify(z));
 }
 
-console.log('横竖屏自适应布局回归（v3.0.2）');
-t1(); t2(); t3(); t4(); t5();
+// ---------------- T6 矮屏 UI 不溢出（v3.0.3 回归）----------------
+/**
+ * 手机横屏可视高度只有 ~360~390px。原实现两处按固定像素纵向堆叠会溢出屏幕底部，
+ * 而 canvas 没有滚动条、拖也拖不动 → 按钮点不到、小地图被切掉一截（用户报告）。
+ * 核心不变量：**任何屏幕尺寸下，所有 UI 按钮必须完整落在屏幕内**。
+ */
+function t6() {
+  section('T6 矮屏 UI 不溢出（按钮 + 小地图）');
+  var sizes = [
+    [844, 390, 'iPhone横屏'], [800, 360, 'Android横屏'], [740, 360, '小屏横屏'],
+    [667, 375, 'SE横屏'], [390, 844, '竖屏'], [360, 800, '安卓竖屏'],
+    [1280, 720, '桌面'], [1920, 1080, '大屏'], [320, 240, '极小'], [240, 320, '极小竖']
+  ];
+  var states = ['menu', 'levels', 'clear', 'over', 'guide', 'matching'];
+
+  sizes.forEach(function (sz) {
+    var W = sz[0], H = sz[1], name = sz[2];
+    var g = new CS.Game(W, H);
+    g.levelCfg = { level: 3, targetScore: 100 };
+    var allIn = true, detail = [];
+    states.forEach(function (st) {
+      g.mode = 'level';
+      g.setState(st);
+      g.uiButtons.forEach(function (b) {
+        if (b.y < 0 || b.y + b.h > H || b.x < 0 || b.x + b.w > W) {
+          allIn = false;
+          detail.push(st + ':' + b.id + '(y' + Math.round(b.y) + '~' + Math.round(b.y + b.h) + ')');
+        }
+      });
+    });
+    // 多人结算另测（按钮并排布局，与单人不同分支）
+    g.mode = 'multi';
+    g.setState('over');
+    g.uiButtons.forEach(function (b) {
+      if (b.y < 0 || b.y + b.h > H || b.x < 0 || b.x + b.w > W) {
+        allIn = false;
+        detail.push('multi-over:' + b.id);
+      }
+    });
+    ok(allIn, name + ' ' + W + 'x' + H + '：全部状态按钮均在屏内',
+      detail.slice(0, 4).join(' '));
+  });
+
+  // 菜单按钮：矮屏应压缩、桌面应保持原尺寸（无回归）
+  var gShort = new CS.Game(800, 360);
+  gShort.setState('menu');
+  var bsShort = gShort.uiButtons;
+  ok(bsShort.length === 5, '菜单仍有 5 个按钮（矮屏不隐藏功能）', '实际 ' + bsShort.length);
+  ok(bsShort[0].h < 54, '矮屏按钮高度被压缩（' + Math.round(bsShort[0].h) + ' < 54）');
+  ok(bsShort[0].h >= 34, '压缩不低于可点下限 34px（' + Math.round(bsShort[0].h) + '）');
+
+  var gDesk = new CS.Game(1280, 720);
+  gDesk.setState('menu');
+  ok(gDesk.uiButtons[0].h === 54, '桌面按钮保持 54px（无回归）',
+    '实际 ' + gDesk.uiButtons[0].h);
+
+  // solveButtonStack 契约
+  var g2 = new CS.Game(800, 360);
+  var st1 = g2.solveButtonStack(5, 100, 340);
+  ok(st1.firstCy - st1.bh / 2 >= 100 - 0.5, 'solveButtonStack：首个按钮不越顶');
+  ok(st1.firstCy + 4 * st1.step + st1.bh / 2 <= 340 + 0.5,
+    'solveButtonStack：末个按钮不越底',
+    '末底=' + (st1.firstCy + 4 * st1.step + st1.bh / 2).toFixed(1));
+  var st2 = g2.solveButtonStack(0, 100, 340);
+  ok(isFinite(st2.firstCy), 'solveButtonStack：n=0 不崩');
+}
+
+console.log('横竖屏自适应布局回归（v3.0.2 / v3.0.3）');
+t1(); t2(); t3(); t4(); t5(); t6();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');
