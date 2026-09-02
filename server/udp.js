@@ -207,21 +207,31 @@ UdpEndpoint.prototype.sendFrame = function (connId, bytes) {
   if (dup <= 1) return true;
 
   // 后续副本按 interval/dup 均分延迟。
-  // 注意 Node 的 setTimeout 系统性偏慢（实测目标 22ms 实际 33ms），
-  // 若不钳制，末份可能落到下一帧之后 —— 那就不再是「本帧的冗余」而是纯浪费带宽。
-  // 因此按 dup 均分后再留 20% 余量，保证全部副本落在本帧窗口内。
+  //
+  // **链式调度而非一次性排队**：定时器分辨率在 Windows 上约 15.6ms，
+  // 一次性排 9ms 与 18ms 两个定时器会被合并到同一个 tick 触发，打散完全失效 ——
+  // 那就退化成「同时发」，而同时发在突发丢包下等于没发。
+  // 改为发完一份再排下一份，按「本应发送的时刻」自校正，抵消定时器漂移。
+  // 窗口只用 80%：副本落到下一帧就不再是本帧的冗余，纯浪费带宽。
   var span = interval * 0.8;
+  var step = span / dup;
   var self = this;
-  var addr = s.addr, port = s.port;
-  for (var i = 1; i < dup; i++) {
-    var delay = Math.max(1, Math.round(span / dup * i));
-    var tm = setTimeout(function () {
-      // 发送时重新取当前地址：期间可能发生 NAT 重绑定
-      var cur = self.sessions[token];
-      self._sendRaw(buf, cur ? cur.addr : addr, cur ? cur.port : port);
-    }, delay);
-    if (tm.unref) tm.unref();   // 不阻止进程退出
+  var t0 = Date.now();
+  var n = 1;
+  function next() {
+    var cur = self.sessions[token];
+    if (!cur || !cur.addr || n >= dup) return;
+    // 发送时重新取地址：期间可能发生 NAT 重绑定
+    self._sendRaw(buf, cur.addr, cur.port);
+    n++;
+    if (n >= dup) return;
+    var due = t0 + step * n;
+    var wait = Math.max(1, Math.round(due - Date.now()));
+    var tm = setTimeout(next, wait);
+    if (tm.unref) tm.unref();
   }
+  var first = setTimeout(next, Math.max(1, Math.round(step)));
+  if (first.unref) first.unref();   // 不阻止进程退出
   return true;
 };
 

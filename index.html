@@ -56,6 +56,10 @@
 <!-- v3.0 联机：协议/传输/插值/预测/远程视图/在线控制器（按依赖顺序） -->
 <script src="js/net/protocol.js?v=20260902d"></script>
 <script src="js/net/transport.js?v=20260902d"></script>
+<!-- v3.1 UDP：二进制编解码 + UDP 加速层（wsTransport 依赖它们，须在其之前） -->
+<script src="js/net/binCodec.js?v=20260902d"></script>
+<script src="js/net/binProtocol.js?v=20260902d"></script>
+<script src="js/net/udpTransport.js?v=20260902d"></script>
 <script src="js/net/interpolation.js?v=20260902d"></script>
 <script src="js/net/prediction.js?v=20260902d"></script>
 <script src="js/net/netMatch.js?v=20260902d"></script>
