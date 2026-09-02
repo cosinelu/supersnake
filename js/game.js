@@ -73,23 +73,82 @@
     this.syncJoystick();
   }
 
-  // ---------------- 横版布局 ----------------
+  // ---------------- 布局（横屏右侧面板 / 竖屏顶部面板） ----------------
 
   /**
-   * 横版布局：右侧固定 HUD 面板，其余为视口区（相机画面）。
-   * @returns {{areaW:number, panelX:number, panelW:number}}
+   * 自适应布局：横屏 = 右侧竖向 HUD 面板；竖屏 = 顶部横向 HUD 条。
+   *
+   * 竖屏（手机竖持）若沿用右侧竖条，面板会吃掉近半个屏幕宽度，可玩区变成窄条；
+   * 改为顶部横条后可玩区占满宽度，观感与操作都正常（docs/design §3.8）。
+   *
+   * 返回值同时提供：
+   *   - 视口矩形 viewX/viewY/viewW/viewH（世界渲染与相机的唯一权威来源）
+   *   - 面板矩形 panelX/panelY/panelW/panelH
+   *   - portrait 标记，供渲染层选择 HUD 排布
+   *   - areaW（= viewW）：兼容旧调用点的别名
+   * @returns {{portrait:boolean, viewX:number, viewY:number, viewW:number, viewH:number,
+   *            panelX:number, panelY:number, panelW:number, panelH:number, areaW:number}}
    */
   Game.prototype.layout = function () {
-    var panelW = Math.round(u.clamp(this.screenW * 0.19, 148, 230));
-    if (this.screenW < 560) panelW = Math.round(u.clamp(this.screenW * 0.24, 110, 148)); // 窄屏压缩面板
-    var areaW = Math.max(120, this.screenW - panelW);
-    return { areaW: areaW, panelX: areaW, panelW: panelW };
+    var W = this.screenW, H = this.screenH;
+    // 竖屏判定：高明显大于宽。用 1.05 而非 1.0 留一点余量，避免接近正方时反复抖动。
+    var portrait = H > W * 1.05;
+
+    if (portrait) {
+      // 顶部横条：占屏高的一小部分，夹在 [132, 200]，保证可玩区仍是主体
+      var panelH = Math.round(u.clamp(H * 0.20, 132, 200));
+      if (panelH > H * 0.34) panelH = Math.round(H * 0.34); // 极端矮屏兜底
+      return {
+        portrait: true,
+        viewX: 0, viewY: panelH, viewW: W, viewH: Math.max(120, H - panelH),
+        panelX: 0, panelY: 0, panelW: W, panelH: panelH,
+        areaW: W
+      };
+    }
+
+    var panelW = Math.round(u.clamp(W * 0.19, 148, 230));
+    if (W < 560) panelW = Math.round(u.clamp(W * 0.24, 110, 148)); // 窄屏压缩面板
+    var areaW = Math.max(120, W - panelW);
+    return {
+      portrait: false,
+      viewX: 0, viewY: 0, viewW: areaW, viewH: H,
+      panelX: areaW, panelY: 0, panelW: panelW, panelH: H,
+      areaW: areaW
+    };
   };
 
-  /** 摇杆底座：视口区左下角（浮于画面之上，半透明） */
+  /**
+   * 摇杆底座：视口区左下角（浮于画面之上，半透明）。
+   * 竖屏时底部可用空间更大 → 底座上移、半径加大，便于拇指操作；
+   * 同时读取安全区内边距（iOS 刘海 / 小白条），避免被系统 UI 遮挡。
+   */
   Game.prototype.syncJoystick = function () {
-    var r = 52;
-    this.joystick.setBase(r + 30, this.screenH - r - 30, r);
+    var l = this.layout();
+    var inset = this.safeInsets();
+    var r = l.portrait ? 62 : 52;
+    var margin = l.portrait ? 42 : 30;
+    var x = l.viewX + r + margin + inset.left;
+    var y = l.viewY + l.viewH - r - margin - inset.bottom;
+    this.joystick.setBase(x, y, r);
+  };
+
+  /**
+   * 安全区内边距（px）。浏览器只在 CSS 侧暴露 env(safe-area-inset-*)，
+   * 这里读取 body 上预置的 CSS 变量计算值（见 index.html），拿不到时回退 0。
+   * 供摇杆与 HUD 避让刘海 / 圆角 / 底部小白条。
+   */
+  Game.prototype.safeInsets = function () {
+    var z = { top: 0, right: 0, bottom: 0, left: 0 };
+    if (typeof document === 'undefined' || !document.body ||
+        typeof getComputedStyle !== 'function') return z;
+    try {
+      var cs = getComputedStyle(document.body);
+      ['top', 'right', 'bottom', 'left'].forEach(function (k) {
+        var v = parseFloat(cs.getPropertyValue('--safe-' + k));
+        if (isFinite(v)) z[k] = v;
+      });
+    } catch (e) { /* 非浏览器环境或读取失败：全 0 */ }
+    return z;
   };
 
   /** 窗口尺寸变化（main.js 在 resize 时调用） */
@@ -118,7 +177,7 @@
   Game.prototype.updateCamera = function (dt) {
     if (!this.snake || !this.walls) return;
     var l = this.layout();
-    var vw = l.areaW, vh = this.screenH;
+    var vw = l.viewW, vh = l.viewH;
     var tx = clampCam(this.snake.x - vw / 2, this.walls.W, vw);
     var ty = clampCam(this.snake.y - vh / 2, this.walls.H, vh);
     var k = 1 - Math.exp(-cfg.CAMERA_LERP * dt / 1000); // lerp 系数
@@ -129,8 +188,8 @@
   /** 相机立即就位（开局调用，避免从原点飞入） */
   Game.prototype.snapCamera = function () {
     var l = this.layout();
-    this.camera.x = clampCam(this.snake.x - l.areaW / 2, this.walls.W, l.areaW);
-    this.camera.y = clampCam(this.snake.y - this.screenH / 2, this.walls.H, this.screenH);
+    this.camera.x = clampCam(this.snake.x - l.viewW / 2, this.walls.W, l.viewW);
+    this.camera.y = clampCam(this.snake.y - l.viewH / 2, this.walls.H, l.viewH);
   };
 
   // ---------------- 对局生命周期 ----------------
@@ -164,7 +223,7 @@
     this.spawner.unlockedKeys = this.unlockedKeys; // 色块只从已解锁颜色刷新
     this.spawner.fillNow();
     this.particles.clear();
-    this.joystick.onTouchEnd(this.joystick.touchId); // 重置摇杆状态
+    this.joystick.reset(); // 重置摇杆（含在屏触点集合）；setState(play) 随后会 latch 仍按住的手指
     this.wallSpawnTimer = Math.round(cfg.WALL_SPAWN_INTERVAL_MS * 0.5); // 开局延迟约半周期再生成首段
     this.snapCamera();
     this.syncJoystick();
@@ -223,7 +282,7 @@
     this.mp = new CS.Multiplayer(this);
     this.mp.setup(); // 玩家 Entry + 补足 AI 编制（同时挂 spawner.others 活引用）
     this.spawner.fillNow();
-    this.joystick.onTouchEnd(this.joystick.touchId); // 重置摇杆状态
+    this.joystick.reset(); // 重置摇杆（含在屏触点集合）；setState(play) 随后会 latch 仍按住的手指
     this.wallSpawnTimer = Math.round(cfg.WALL_SPAWN_INTERVAL_MS * 0.5); // 开局延迟约半周期再生成首段
     this.snapCamera();
     this.syncJoystick();
@@ -583,8 +642,12 @@
   // ---------------- UI 状态与按钮 ----------------
 
   Game.prototype.setState = function (s) {
+    var was = this.state;
     this.state = s;
     this.buildButtons();
+    // 进入对局：若手指此刻仍按在屏上（倒计时期间按住、或 touchstart 走了按钮分支），
+    // 立即用该触点接管摇杆，避免「手指在屏却整局无响应」（docs/design §3.7）。
+    if (s === 'play' && was !== 'play') this.joystick.latchExisting();
   };
 
   Game.prototype.addButton = function (id, cx, cy, w, h, label, enabled) {
@@ -684,6 +747,9 @@
 
   Game.prototype.onTouchStart = function (x, y, id) {
     if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); return; }
+    // 非 play 态也要登记触点：否则「倒计时按住手指 → 开局」时摇杆不知道手指还在屏上，
+    // 后续只有 touchmove 在流，原实现会整局锁死（见 docs/design §3.7）。
+    this.joystick.touches[id] = { x: x, y: y };
     // 图鉴页：页签切换 / 翻页（按钮优先）
     if (this.state === 'guide') {
       // 1) 按钮（返回）优先
@@ -719,7 +785,9 @@
   };
 
   Game.prototype.onTouchMove = function (x, y, id) {
-    if (this.state === 'play') this.joystick.onTouchMove(x, y, id);
+    if (this.state === 'play') { this.joystick.onTouchMove(x, y, id); return; }
+    // 非 play 态同样跟踪触点位置，保证进入 play 时 latchExisting 能拿到最新坐标
+    if (this.joystick.touches[id]) { this.joystick.touches[id].x = x; this.joystick.touches[id].y = y; }
   };
 
   Game.prototype.onTouchEnd = function (id) {

@@ -19,6 +19,8 @@ module.exports = {
 
   MAX_MSG_BYTES: 4096,      // 上行消息体积上限（防垃圾流量）
   INPUT_MAX_SEQ_JUMP: 1000, // input seq 异常跳变容忍（超出视为作弊/乱序，忽略）
+  INPUT_SEQ_RESET_GAP: 64,  // seq 回退超过该幅度 → 视为客户端重新计数，重置基线
+                            // （防「重连后 seq 归零而服务端 lastSeq 停在旧值」导致输入永久失效）
 
   nowFn: Date.now           // 时间源（测试可注入）
 };

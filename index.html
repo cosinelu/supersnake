@@ -3,6 +3,10 @@
 <head data-page-node-id="9vQtmzA4KJaVotoUs08mHC">
 <meta charset="UTF-8" data-page-node-id="MrSJcRHYfeLnuKt8g980y5">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" data-page-node-id="XS0mwPljO4QgPXxf4RDj4d">
+<meta name="theme-color" content="#FBF6E9">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>消食蛇 · 网页版</title>
 <style>
   html, body {
@@ -12,6 +16,15 @@
     height: 100%;
     overflow: hidden;
     background: #FBF6E9; /* 浅奶油纸底 */
+    overscroll-behavior: none; /* 禁止下拉刷新/边缘回弹干扰拖动 */
+  }
+  /* 安全区内边距暴露为 CSS 变量，供 game.safeInsets() 读取
+     （JS 无法直接取 env()，只能通过计算样式读变量） */
+  body {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
   }
   #game {
     display: block;
@@ -21,54 +34,34 @@
     -webkit-tap-highlight-color: transparent;
     cursor: crosshair;
   }
-  /* 竖屏时的小提示（游戏本身仍可玩） */
-  #rotateTip {
-    display: none;
-    position: fixed;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 6px 14px;
-    border: 2px solid #3A3238;
-    border-radius: 14px;
-    background: #FFFDF5;
-    color: #3A3238;
-    font: 13px sans-serif;
-    pointer-events: none;
-    z-index: 10;
-  }
-  @media (orientation: portrait) {
-    #rotateTip { display: block; }
-  }
 </style>
 </head>
 <body data-page-node-id="1TKuKKHs10nGUE9AH99HEb">
 <canvas id="game" data-page-node-id="sw2YLCL307EYwYfBQuCxrE"></canvas>
-<div id="rotateTip" data-page-node-id="yQfcmkUeZTFYMGa1Wwv268">横屏体验更佳</div>
 <!-- file:// 直开可用：纯 IIFE 全局命名空间 CS，按依赖顺序引入，无 ES Module / 无构建 -->
 <!-- ?v= 查询参数用于强制浏览器刷新最新 JS（避免改动后还加载旧缓存） -->
-<script src="js/config.js?v=20260901"></script>
-<script src="js/utils.js?v=20260901"></script>
-<script src="js/storage.js?v=20260901"></script>
-<script src="js/levels.js?v=20260901"></script>
-<script src="js/walls.js?v=20260901"></script>
-<script src="js/snake.js?v=20260901"></script>
-<script src="js/spawner.js?v=20260901"></script>
-<script src="js/particles.js?v=20260901"></script>
-<script src="js/joystick.js?v=20260901"></script>
-<script src="js/audio.js?v=20260901"></script>
-<script src="js/ai.js?v=20260901"></script>
-<script src="js/multiplayer.js?v=20260901"></script>
+<script src="js/config.js?v=20260902"></script>
+<script src="js/utils.js?v=20260902"></script>
+<script src="js/storage.js?v=20260902"></script>
+<script src="js/levels.js?v=20260902"></script>
+<script src="js/walls.js?v=20260902"></script>
+<script src="js/snake.js?v=20260902"></script>
+<script src="js/spawner.js?v=20260902"></script>
+<script src="js/particles.js?v=20260902"></script>
+<script src="js/joystick.js?v=20260902"></script>
+<script src="js/audio.js?v=20260902"></script>
+<script src="js/ai.js?v=20260902"></script>
+<script src="js/multiplayer.js?v=20260902"></script>
 <!-- v3.0 联机：协议/传输/插值/预测/远程视图/在线控制器（按依赖顺序） -->
-<script src="js/net/protocol.js?v=20260901"></script>
-<script src="js/net/transport.js?v=20260901"></script>
-<script src="js/net/interpolation.js?v=20260901"></script>
-<script src="js/net/prediction.js?v=20260901"></script>
-<script src="js/net/netMatch.js?v=20260901"></script>
-<script src="js/net/wsTransport.js?v=20260901"></script>
-<script src="js/net/onlineMatch.js?v=20260901"></script>
-<script src="js/renderer.js?v=20260901"></script>
-<script src="js/game.js?v=20260901"></script>
-<script src="js/main.js?v=20260901"></script>
+<script src="js/net/protocol.js?v=20260902"></script>
+<script src="js/net/transport.js?v=20260902"></script>
+<script src="js/net/interpolation.js?v=20260902"></script>
+<script src="js/net/prediction.js?v=20260902"></script>
+<script src="js/net/netMatch.js?v=20260902"></script>
+<script src="js/net/wsTransport.js?v=20260902"></script>
+<script src="js/net/onlineMatch.js?v=20260902"></script>
+<script src="js/renderer.js?v=20260902"></script>
+<script src="js/game.js?v=20260902"></script>
+<script src="js/main.js?v=20260902"></script>
 </body>
 </html>

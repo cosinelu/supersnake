@@ -116,7 +116,11 @@
     g.mpBonusScore = 0; g.elimCombo = 0; g.elimComboTimer = 0;
     g.mpResult = null; g.slowUntil = 0;
     g.particles.clear();
-    g.joystick.onTouchEnd(g.joystick.touchId);
+    // 只释放摇杆的「激活态/角度」，**保留在屏触点集合**：
+    // 玩家常在倒计时期间就按住屏幕，若把触点一并清掉，进入 play 后只有 touchmove 在流，
+    // 摇杆永远不会激活 → 整局锁死（这正是 v3.0.2 修复的断点 3，见 docs/design §3.7）。
+    // setState('play') 会调 latchExisting()，把仍按住的手指重新接管。
+    g.joystick.release();
 
     this.remote = new CS.RemoteMatch(this.playerId);
     g.mp = this.remote;
@@ -257,11 +261,14 @@
     r.renderSample(Date.now());
 
     // 本机 Entry 视图与预测体对齐（名牌/排行榜/小地图读它）
+    // colors/segPos 必须拷贝：早期按引用赋值会让视图与预测体共享同一数组，
+    // 任一侧被快照覆写都会污染另一侧（见架构文档 §5.4.1「引用隔离」）。
     var e = r.playerEntry;
     if (e && this.predictor.snake) {
       var ps = this.predictor.snake, vs = e.snake;
       vs.x = ps.x; vs.y = ps.y; vs.angle = ps.angle; vs.speed = ps.speed;
-      vs.colors = ps.colors; vs.segPos = ps.segPos;
+      vs.colors = ps.colors.slice();
+      vs.segPos = ps.segPos.map(function (p) { return { x: p.x, y: p.y }; });
     }
 
     // HUD 计分同步（权威在服务器 Entry 上）

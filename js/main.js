@@ -19,7 +19,10 @@
     root.__game = game; // 调试钩子：控制台/WebBridge 可读取对局状态（无功能影响）
 
     function resize() {
-      var w = window.innerWidth, h = window.innerHeight;
+      // 移动端优先用 visualViewport：地址栏收起/展开时 innerHeight 未必及时更新
+      var vv = window.visualViewport;
+      var w = Math.round(vv && vv.width ? vv.width : window.innerWidth);
+      var h = Math.round(vv && vv.height ? vv.height : window.innerHeight);
       var dpr = window.devicePixelRatio || 1;
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
@@ -30,6 +33,14 @@
       renderer.resize(w, h);
     }
     window.addEventListener('resize', resize);
+    // 横竖屏切换：orientationchange 触发时尺寸常还没更新，延迟再量一次
+    window.addEventListener('orientationchange', function () {
+      setTimeout(resize, 80);
+      setTimeout(resize, 300); // 二次校正（部分机型旋转动画结束后尺寸才稳定）
+    });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', resize);
+    }
     resize();
 
     // ---------- 触摸输入 ----------

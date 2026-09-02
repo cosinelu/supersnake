@@ -105,12 +105,20 @@ Room.prototype.startAuto = function () {
   this.run();
 };
 
-/** 输入处理：保留最新角度/加速位 + seq（快照 ack 用） */
+/** 输入处理：保留最新角度/加速位 + seq（快照 ack 用）
+ *
+ * seq 校验用于丢弃乱序/重放包。但不能简单「seq < lastSeq 就丢」：
+ * 客户端 WsTransport.seq 在重建连接后从 0 重新计数，而服务端 lastSeq 停在旧值，
+ * 会导致该玩家输入被**永久**丢弃（表现为「怎么划都不动」且无法自行恢复）。
+ * 因此对「大幅回退」判定为新的计数周期，重置基线而非丢弃。 */
 Room.prototype.handleInput = function (connId, msg) {
   var h = this.humans[connId];
   if (!h || !h.connected || this.state !== 'running') return;
   var seq = msg.seq | 0;
-  if (seq < h.lastSeq || seq > h.lastSeq + this.config.INPUT_MAX_SEQ_JUMP) return; // 乱序/异常丢弃
+  if (seq > h.lastSeq + this.config.INPUT_MAX_SEQ_JUMP) return; // 异常跳变（作弊/损坏）：忽略
+  // 回退幅度小 → 网络乱序，丢弃（后续更新的包会补上）；
+  // 回退幅度大（含归零）→ 客户端重新计数，接受并把基线拉回，避免永久失效。
+  if (seq < h.lastSeq && (h.lastSeq - seq) < this.config.INPUT_SEQ_RESET_GAP) return;
   if (typeof msg.a === 'number' && isFinite(msg.a)) h.angle = msg.a;
   h.boost = msg.bo ? 1 : 0;
   h.lastSeq = seq;

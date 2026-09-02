@@ -571,13 +571,13 @@
     var ctx = this.ctx, l = game.layout();
     var walls = game.walls, snake = game.snake, spawner = game.spawner;
     var cam = game.camera;
-    var vw = l.areaW, vh = this.H;
+    var vw = l.viewW, vh = l.viewH;
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, 0, vw, vh);
-    ctx.clip();                       // 世界内容裁剪在视口区
-    ctx.translate(-cam.x, -cam.y);    // 相机变换
+    ctx.rect(l.viewX, l.viewY, vw, vh);
+    ctx.clip();                              // 世界内容裁剪在视口区
+    ctx.translate(l.viewX - cam.x, l.viewY - cam.y); // 视口原点偏移 + 相机变换
 
     // 世界外区域压暗（衬托可玩范围）
     var M = Math.max(vw, vh) + 80;
@@ -900,7 +900,7 @@
     ctx.strokeStyle = 'rgba(58,50,56,0.45)';
     ctx.lineWidth = 1;
     ctx.strokeRect(mx + game.camera.x * scale, my + game.camera.y * scale,
-      l.areaW * scale, this.H * scale);
+      l.viewW * scale, l.viewH * scale);
     // 多人对战：AI 蛇亮点（各自头部颜色小点），画在玩家亮点下层
     if (game.mode === 'multi' && game.mp) {
       var bots = game.mp.bots;
@@ -953,10 +953,12 @@
     return mh;
   };
 
-  // ---------------- 右侧 HUD 面板 ----------------
+  // ---------------- HUD 面板（横屏右侧竖条 / 竖屏顶部横条） ----------------
 
   Renderer.prototype.drawPanel = function (game) {
-    var ctx = this.ctx, l = game.layout();
+    var l = game.layout();
+    if (l.portrait) { this.drawPanelPortrait(game, l); return; }
+    var ctx = this.ctx;
     var px = l.panelX, pw = l.panelW, H = this.H;
     var cx = px + pw / 2;
 
@@ -1110,6 +1112,139 @@
       ctx.globalAlpha = 0.55;
       ctx.fillText('方向键 / WASD 转向', cx, H - 44);
       ctx.fillText('或按住左下摇杆拖动', cx, H - 26);
+    }
+    ctx.restore();
+  };
+
+  /**
+   * 竖屏 HUD：顶部横条。
+   * 横向分三栏（分数区 / 中部信息 / 小地图），并把「已解锁颜色」压成单行 8 格，
+   * 排行榜改为紧凑两列。目标是在 ≤200px 高度内放下关键信息，可玩区占满宽度。
+   */
+  Renderer.prototype.drawPanelPortrait = function (game, l) {
+    var ctx = this.ctx;
+    var pw = l.panelW, ph = l.panelH;
+    var inset = game.safeInsets ? game.safeInsets() : { top: 0, left: 0, right: 0, bottom: 0 };
+    var top = inset.top;                       // 刘海避让
+    var padL = 14 + inset.left, padR = 14 + inset.right;
+
+    ctx.save();
+    // 面板底 + 底部手绘分隔线（横屏是左侧竖线，这里改成下边横线）
+    ctx.fillStyle = 'rgba(255,253,245,0.72)';
+    ctx.fillRect(0, 0, pw, ph);
+    ctx.strokeStyle = 'rgba(58,50,56,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    var seg = 12;
+    for (var i = 0; i <= seg; i++) {
+      var lx = pw * i / seg;
+      var ly = ph + (u.hash2(i, 7, 3) - 0.5) * 5;
+      if (i === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
+    }
+    ctx.stroke();
+
+    ctx.fillStyle = cfg.INK;
+    ctx.textBaseline = 'middle';
+
+    // ---- 左栏：标题 + 模式 + 分数 ----
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('消食蛇', padL, top + 16);
+    ctx.font = '11px sans-serif';
+    ctx.globalAlpha = 0.75;
+    var modeText = game.mode === 'level' ? ('闯关 · 第 ' + game.levelCfg.level + ' 关')
+      : (game.mode === 'multi' ? (game.online ? '在线对战' : 'AI对战') : '无尽模式');
+    ctx.fillText(modeText, padL, top + 34);
+    ctx.globalAlpha = 1;
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillText(String(game.score), padL, top + 60);
+    ctx.font = '10px sans-serif';
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('存活 ' + game.survivalScore + ' · 消除 ' + game.elimScore, padL, top + 80);
+    var spd = Math.round(game.currentSpeed());
+    var slow = (game.slowUntil && game.timeMs < game.slowUntil);
+    ctx.fillStyle = slow ? '#2EC4B6' : cfg.INK;
+    ctx.fillText('速度 ' + spd + (slow ? ' (减速)' : ''), padL, top + 95);
+    ctx.fillStyle = cfg.INK;
+    ctx.globalAlpha = 1;
+
+    // ---- 右栏：小地图（正方形，贴右边）----
+    var mapSize = Math.min(ph - top - 16, 96);
+    var mapX = pw - padR - mapSize;
+    var mapY = top + 8;
+    this.drawMinimap(game, mapX, mapY, mapSize);
+
+    // ---- 中栏：目标/最高分 + 已解锁颜色（单行）+ 排行榜（紧凑）----
+    var midX = padL + 132;
+    var midW = mapX - 12 - midX;
+    if (midW > 90) {
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 12px sans-serif';
+      if (game.mode === 'level') {
+        ctx.fillText('目标 ' + game.levelCfg.targetScore, midX, top + 16);
+        var barW = Math.min(midW, 150), barH = 8, by = top + 28;
+        var prog = u.clamp(game.score / game.levelCfg.targetScore, 0, 1);
+        wobblyRoundRect(ctx, midX, by, barW, barH, 4, 9, 3, 0.8);
+        ctx.fillStyle = 'rgba(58,50,56,0.12)';
+        ctx.fill();
+        if (prog > 0.02) {
+          wobblyRoundRect(ctx, midX, by, Math.max(8, barW * prog), barH, 4, 9, 3, 0.8);
+          ctx.fillStyle = cfg.COLORS.green;
+          ctx.fill();
+        }
+        wobblyRoundRect(ctx, midX, by, barW, barH, 4, 9, 3, 0.8);
+        ctx.strokeStyle = cfg.INK;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        ctx.fillStyle = cfg.INK;
+      } else if (game.mode === 'multi') {
+        ctx.fillText('最佳 ' + Math.max(game.mpBest.len, game.snake.length()) + '节 · ' +
+          Math.max(game.mpBest.score, game.score) + '分', midX, top + 16);
+      } else {
+        ctx.fillText('最高 ' + Math.max(game.best, game.score), midX, top + 16);
+      }
+
+      // 已解锁颜色：单行 8 格（竖屏横向空间足够）
+      var sw = 16, gap = 5;
+      var sy = top + 44;
+      for (i = 0; i < cfg.MAX_COLORS; i++) {
+        var bx2 = midX + i * (sw + gap);
+        if (bx2 + sw > mapX - 8) break;        // 空间不足则截断，不与小地图重叠
+        if (i < game.unlockedCount) {
+          drawCrayonBlock(ctx, bx2, sy, sw, cfg.COLORS[cfg.COLOR_KEYS[i]], 30 + i, 4, {
+            rot: (u.hash2(i, 5, 2) - 0.5) * 0.3, wobble: 0.9
+          });
+        } else {
+          ctx.save();
+          ctx.globalAlpha = 0.45;
+          wobblyRoundRect(ctx, bx2, sy, sw, sw, sw * 0.28, 30 + i, 4, 0.9);
+          ctx.fillStyle = '#CFC8BC';
+          ctx.fill();
+          ctx.strokeStyle = cfg.INK;
+          ctx.lineWidth = 1.1;
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      // 排行榜：竖屏用两列紧凑排布，最多 4 行
+      if (game.mode === 'multi' && game.mp) {
+        var lb = game.mp.leaderboard().slice(0, 4);
+        ctx.font = '10px sans-serif';
+        var rowH = 13, ry = top + 74;
+        for (var li = 0; li < lb.length; li++) {
+          var row = lb[li];
+          var colX = midX + (li % 2) * (midW / 2);
+          var rowY = ry + Math.floor(li / 2) * rowH;
+          ctx.globalAlpha = row.isPlayer ? 1 : 0.8;
+          ctx.fillStyle = row.isPlayer ? '#C47F17' : cfg.INK;
+          ctx.font = (row.isPlayer ? 'bold ' : '') + '10px sans-serif';
+          var nm = row.name.length > 5 ? row.name.slice(0, 5) : row.name;
+          ctx.fillText((li + 1) + '.' + nm + ' ' + row.length + '节', colX, rowY);
+          ctx.globalAlpha = 1;
+        }
+        ctx.fillStyle = cfg.INK;
+      }
     }
     ctx.restore();
   };
@@ -1708,8 +1843,8 @@
     a = Math.max(0, Math.min(1, a));
     if (a <= 0) return;
 
-    var cx = l.areaW / 2;
-    var ty = this.H * 0.25; // 视口上方 1/4 处
+    var cx = l.viewX + l.viewW / 2;
+    var ty = l.viewY + l.viewH * 0.25; // 视口上方 1/4 处（竖屏时自动落在顶部面板之下）
 
     ctx.save();
     ctx.globalAlpha = a;
@@ -1757,8 +1892,8 @@
     a = Math.max(0, Math.min(1, a));
     if (a <= 0) return;
 
-    var cx = l.areaW / 2;
-    var ty = 64; // 视口区顶部
+    var cx = l.viewX + l.viewW / 2;
+    var ty = l.viewY + 64; // 视口区顶部（竖屏时落在顶部面板之下）
 
     ctx.save();
     ctx.globalAlpha = a;
@@ -1774,7 +1909,7 @@
     // 下方一道短装饰线（纯手绘感，无底板）
     ctx.lineWidth = 2;
     ctx.globalAlpha = a * 0.6;
-    var dw = Math.min(l.areaW * 0.5, ctx.measureText(b.text).width + 24);
+    var dw = Math.min(l.viewW * 0.5, ctx.measureText(b.text).width + 24);
     ctx.beginPath();
     ctx.moveTo(cx - dw / 2, ty + 16);
     ctx.lineTo(cx + dw / 2, ty + 16);
@@ -1794,12 +1929,12 @@
     var ctx = this.ctx, l = game.layout();
     var t = game.timeMs / 1000;
     var alpha = 0.78 + 0.22 * Math.sin(t * 4); // 呼吸闪烁（不至于太低看不清）
-    var cx = l.areaW / 2;
-    var ty = 30;
+    var cx = l.viewX + l.viewW / 2;
+    var ty = l.viewY + 30; // 竖屏时落在顶部面板之下
     var txt = '彩色星出现！快去抢夺 +20% 分';
     var fs = 18;
     ctx.font = 'bold ' + fs + 'px sans-serif';
-    var maxW = l.areaW * 0.94;
+    var maxW = l.viewW * 0.94;
     while (ctx.measureText(txt).width + 64 > maxW && fs > 11) { fs--; ctx.font = 'bold ' + fs + 'px sans-serif'; }
     var tw = ctx.measureText(txt).width;
     var iconW = Math.min(30, fs + 12);
