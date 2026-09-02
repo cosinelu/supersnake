@@ -31,6 +31,8 @@ feature/* ──┐
    在 README 顶部追加该版本的变更说明段（沿用既有格式：加粗版本号 + 条目化说明）。
 2. **打 tag**：`git tag vX.Y.Z` 打在 main 的合并提交上，并 `git push origin vX.Y.Z`。tag 名与 README 版本号严格一致。
 3. **正式发布**：GitHub Actions 手动触发 `official-deploy`（只能在 main 分支上触发，workflow 有分支硬校验）。
+4. **刷新分享版**：运行 `node scripts/pack-share.js` 重新生成 `消食蛇-网页版-分享.html` / `deploy/index.html` / `.zip`
+   （这三个是生成物，**禁止手改**，版本号自动取自 README 标题）。
 
 > 修订号（Z）= bug 修复/小改动；次版本（Y）= 新功能/新模式；主版本（X）= 架构级变化。
 > 联机对战（v3.0.0）即主版本示例。
