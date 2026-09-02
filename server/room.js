@@ -13,11 +13,12 @@ var path = require('path');
 var JS = path.join(__dirname, '..', 'js');
 ['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'ai', 'multiplayer']
   .forEach(function (f) { require(path.join(JS, f + '.js')); });
-['protocol', 'transport', 'headlessGame']
+['protocol', 'transport', 'headlessGame', 'binCodec', 'binProtocol']
   .forEach(function (f) { require(path.join(JS, 'net', f + '.js')); });
 
 var CS = globalThis.CS;
 var P = CS.protocol;
+var BP = CS.binProtocol;
 
 var nextRoomId = 1;
 
@@ -32,11 +33,16 @@ function Room(opts) {
   this.id = 'r' + (nextRoomId++);
   this.config = opts.config;
   this.onEmpty = opts.onEmpty || function () {};
+  this.udp = opts.udp || null;   // UdpEndpoint（可选）：为 null 时全程走 TCP
   this.state = 'countdown'; // countdown → running → over
   this.tickCount = 0;
   this.countdownLeft = this.config.COUNTDOWN_MS;
   this._timer = null;
   this._overTimer = null;
+  // 色块增量同步：记录上一帧的色块集合，每帧算出 add/del（见 02-udp-transport.md §2.4）
+  this._blockSeen = {};     // bid → block
+  this._nextBid = 1;
+  this._lowFreqAt = 0;      // 低频通道（昵称/计分/色块全量校正）上次发送时刻
 
   var self = this;
   this.game = new CS.HeadlessGame({
@@ -59,6 +65,38 @@ function Room(opts) {
   this.totalHumans = opts.players.length;
 }
 
+/**
+ * 低频通道（1Hz，走 TCP）：昵称 / 计分 / 排行榜 + 色块全量校正。
+ *
+ * 这些字段永不变或低频变，从 30Hz 的每帧快照里移出去（原本占 103 B/蛇）。
+ * 色块全量是增量同步的兜底：客户端漏收任一增量都会永久偏差，
+ * 靠 1Hz 全量整体替换修复。走 TCP 是因为它低频、体积大、且不能丢。
+ */
+Room.prototype._maybeLowFreq = function () {
+  if (!this.udp || !this.config.UDP_ENABLED) return;   // 纯 TCP 路径无需低频通道
+  var now = this.config.nowFn();
+  var period = this.config.LOWFREQ_MS || 1000;
+  if (now - this._lowFreqAt < period) return;
+  this._lowFreqAt = now;
+
+  var entries = this.game.mp.allEntries();
+  var meta = entries.map(function (e) {
+    return {
+      id: e.id, nm: e.name, kl: e.kills | 0, es: e.elimScore | 0,
+      et: e.elimTotal | 0, ml: e.maxLen | 0,
+      sv: e.survivalScore | 0, mb: e.mpBonusScore | 0
+    };
+  });
+  var blocks = this.game.spawner.blocks;
+  var full = [];
+  for (var i = 0; i < blocks.length; i++) {
+    var b = blocks[i];
+    if (b.__bid == null) continue;   // 尚未编号的下一帧增量会带上
+    full.push({ bid: b.__bid, x: Math.round(b.x), y: Math.round(b.y), c: b.color });
+  }
+  this._broadcast({ t: 'meta', tk: this.tickCount, sn: meta, blocks: full });
+};
+
 /** 广播 matched，进入倒计时（step 驱动递减） */
 Room.prototype.start = function () {
   var players = [];
@@ -69,11 +107,18 @@ Room.prototype.start = function () {
   var walls = this.game.walls.rects.map(function (r) { return [r.x | 0, r.y | 0, r.w | 0, r.h | 0]; });
   for (var c in this.humans) {
     var h = this.humans[c];
-    h.send({
+    var msg = {
       t: P.S2C.MATCHED, roomId: this.id, playerId: h.entry.id,
       players: players, countdownMs: this.config.COUNTDOWN_MS,
-      W: this.game.W, H: this.game.H, walls: walls
-    });
+      W: this.game.W, H: this.game.H, walls: walls,
+      snapIntervalMs: this.config.TICK_MS * this.config.SNAP_EVERY // 客户端插值缓冲据此自适应
+    };
+    // UDP 会话信息（可选）：客户端据此打洞；拿不到就全程走 TCP（见 02-udp-transport.md §4.3）
+    if (this.udp) {
+      var info = this.udp.offer(c, this.id);
+      if (info) { msg.udpPort = info.port; msg.udpToken = info.token; }
+    }
+    h.send(msg);
   }
 };
 
@@ -156,6 +201,7 @@ Room.prototype.step = function (dt) {
   this.tickCount++;
 
   if (this.tickCount % this.config.SNAP_EVERY === 0) this._broadcastSnap();
+  this._maybeLowFreq();
 
   this._checkPlayerDeaths();
   this._checkOver();
@@ -168,16 +214,94 @@ Room.prototype._broadcast = function (msg) {
   }
 };
 
-/** 快照广播：ack 按连接个性化（该连接已应用到哪个输入 seq） */
+/**
+ * 快照广播：ack 按连接个性化（该连接已应用到哪个输入 seq）。
+ *
+ * 双通道（见 docs/architecture/02-udp-transport.md §4）：
+ *   UDP 会话就绪 → 发二进制帧（冗余打散，单包 ≤ UDP_SNAP_CAP 永不分片）
+ *   否则         → 回落 TCP JSON（保底通道，不做任何额外处理）
+ * 两条通道的解码结果同构，客户端上层零感知。
+ */
 Room.prototype._broadcastSnap = function () {
-  var snap = P.snap(this.tickCount, 0, this.game.mp.timeMs,
-    this.game.mp.allEntries(), this.game.spawner.blocks, this.game.spawner.meteors);
+  var entries = this.game.mp.allEntries();
+  var blocks = this.game.spawner.blocks;
+  var useUdp = this.udp && this.config.UDP_ENABLED;
+
+  // 色块增量：只在启用 UDP 时才需要（TCP 路径沿用全量 JSON，保持零改动）
+  var delta = useUdp ? this._blockDelta(blocks) : null;
+
+  var snap = null;   // TCP 路径的 JSON 快照（懒构造：全 UDP 时不必付出序列化开销）
   for (var cid in this.humans) {
     var h = this.humans[cid];
     if (!h.connected) continue;
+
+    if (useUdp && this.udp.isReady(cid)) {
+      var ents = this._orderForViewer(h, entries);
+      var res = BP.encSnapCapped({
+        tick: this.tickCount, ack: h.lastSeq, timeMs: this.game.mp.timeMs,
+        entries: ents, blockAdd: delta.add, blockDel: delta.del
+      }, this.config.UDP_SNAP_CAP);
+      if (res.degraded > 0) this._degradeCount = (this._degradeCount || 0) + 1;
+      this.udp.sendFrame(cid, res.bytes);
+      continue;
+    }
+
+    if (!snap) {
+      snap = P.snap(this.tickCount, 0, this.game.mp.timeMs,
+        entries, blocks, this.game.spawner.meteors);
+    }
     snap.ack = h.lastSeq;
     safeSend(h, snap);
   }
+};
+
+/**
+ * 按「与观察者的距离」升序排列实体，本机玩家永远排第一。
+ *
+ * 这个顺序是 encSnapCapped 降级策略的前提：超预算时从末尾（最远）开始降级为
+ * lite 档，本机玩家（index 0）永不被降级。
+ */
+Room.prototype._orderForViewer = function (h, entries) {
+  var me = h.entry;
+  var mx = me.snake.x, my = me.snake.y;
+  var rest = [];
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    if (e === me) continue;
+    var dx = e.snake.x - mx, dy = e.snake.y - my;
+    rest.push({ e: e, d: dx * dx + dy * dy });
+  }
+  rest.sort(function (a, b) { return a.d - b.d; });
+  var out = [{ e: me, lite: false }];
+  for (i = 0; i < rest.length; i++) out.push({ e: rest[i].e, lite: false });
+  return out;
+};
+
+/**
+ * 计算色块增量。
+ *
+ * 色块占 JSON 快照的 60%（168 块 × 69 字节 = 11814 B）却基本静止，
+ * 全量重传是最大的一块浪费。稳态每帧变化 < 5 个。
+ *
+ * 漏收增量会导致客户端永久偏差 → 由 1Hz 全量校正（走 TCP）兜底，见 _sendLowFreq。
+ */
+Room.prototype._blockDelta = function (blocks) {
+  var add = [], del = [];
+  var now = {};
+  for (var i = 0; i < blocks.length; i++) {
+    var b = blocks[i];
+    if (b.__bid == null) {
+      b.__bid = this._nextBid++;
+      if (this._nextBid > 65535) this._nextBid = 1;   // uint16 环回
+      add.push({ bid: b.__bid, x: b.x, y: b.y, color: b.color });
+    }
+    now[b.__bid] = 1;
+  }
+  for (var bid in this._blockSeen) {
+    if (!now[bid]) del.push(parseInt(bid, 10));
+  }
+  this._blockSeen = now;
+  return { add: add, del: del };
 };
 
 /** 真人自然死亡（撞墙/被撞）→ 立即给本人发 over(dead)（对手继续） */

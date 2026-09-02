@@ -90,6 +90,7 @@ Matchmaker.prototype._form = function (n) {
   var room = new Room({
     players: members,
     config: this.config,
+    udp: this.hooks.udp || null,   // UDP 端点（可选）：为 null 时房间全程走 TCP
     onEmpty: function (r) {
       delete self.rooms[r.id];
       if (self.hooks.onRoomEmpty) self.hooks.onRoomEmpty(r);

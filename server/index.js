@@ -25,6 +25,7 @@ var P = globalThis.CS.protocol;
 
 var baseConfig = require('./config');
 var Matchmaker = require('./matchmaker');
+var UdpEndpoint = require('./udp');
 
 var nextConnId = 1;
 
@@ -74,7 +75,28 @@ function createServer(overrides) {
   });
   var conns = {}; // connId → { id, ws, name, roomId }
 
+  // UDP 端点（v3.1）：上下行走二进制 + 冗余打散；TCP 全程保留作控制/保底通道。
+  // UDP_ENABLED=0 即整体回退到纯 TCP（回滚点，见 02-udp-transport.md §4.3）。
+  var udp = null;
+  if (config.UDP_ENABLED) {
+    udp = new UdpEndpoint(config, {
+      onInput: function (connId, inp) {
+        var c = conns[connId];
+        var room = c && c.roomId && matchmaker.rooms[c.roomId];
+        // 复用 TCP 路径同一个入口：判定逻辑零改动，只是换了传输层。
+        // frameId 去重已在 UdpEndpoint 内做过（与 room 的 seq 语义一致），
+        // 这里给 seq 传 lastSeq+1 让 room 无条件采纳，避免二次去重把包吃掉。
+        if (room && room.humans[connId]) {
+          room.handleInput(connId, {
+            seq: room.humans[connId].lastSeq + 1, a: inp.angle, bo: inp.boost
+          });
+        }
+      }
+    });
+  }
+
   var matchmaker = new Matchmaker(config, {
+    udp: udp,
     onRoomCreated: function (room) {
       for (var cid in room.humans) {
         if (conns[cid]) conns[cid].roomId = room.id;
@@ -143,6 +165,7 @@ function createServer(overrides) {
       matchmaker.remove(connId);
       var room = conn.roomId && matchmaker.rooms[conn.roomId];
       if (room) room.handleDrop(connId);
+      if (udp) udp.dropSession(connId);   // 释放会话，避免令牌泄漏
       delete conns[connId];
     });
     ws.on('error', function () { /* close 事件随后处理清理 */ });
@@ -155,16 +178,28 @@ function createServer(overrides) {
     httpServer: httpServer,
     wss: wss,
     matchmaker: matchmaker,
+    udp: udp,
     config: config,
     listen: function (cb) {
-      httpServer.listen(config.PORT, config.HOST, cb);
+      httpServer.listen(config.PORT, config.HOST, function () {
+        if (!udp) { if (cb) cb(); return; }
+        // UDP 端点起不来不应阻断服务：降级为纯 TCP，游戏照常可玩
+        try {
+          udp.listen(function () { if (cb) cb(); });
+        } catch (e) {
+          udp = null;
+          if (cb) cb();
+        }
+      });
     },
     port: function () { return httpServer.address().port; },
+    udpPort: function () { return udp ? udp.port() : 0; },
     close: function (cb) {
       clearInterval(mmTimer);
       matchmaker.destroy();
       for (var cid in conns) { try { conns[cid].ws.terminate(); } catch (e) {} }
-      wss.close(function () { httpServer.close(cb || function () {}); });
+      var done = function () { wss.close(function () { httpServer.close(cb || function () {}); }); };
+      if (udp) udp.close(done); else done();
     }
   };
 }
