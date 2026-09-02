@@ -141,6 +141,10 @@ onMatched / onStart / onSnap / onEvent / onOver / onDrop  — 回调注册
 - `LocalTransport`：内部直接实例化现有 `CS.Multiplayer`（本地 AI 对战），把本地对局状态包装成与 `snap/event` 同构的对象。**联机 UI/渲染管线先用它开发**，服务器没好也能干活。
 - `WsTransport`：连 `wss://host/ws`，负责编码、心跳、断线回调（→ 直接进"掉线判负"结算页）。
 
+> **v3.1 起新增 UDP 传输层**：`UdpTransport`（小游戏 `wx.createUDPSocket`）走二进制协议 +
+> 冗余打散，WebSocket 降级为控制通道与保底通道。设计见
+> **`docs/architecture/02-udp-transport.md`**。上层 `onlineMatch` 与判定逻辑零改动。
+
 ### 5.3 服务端房间 `server/room.js` + `headlessGame.js`
 
 - `HeadlessGame`：伪装成本地 `game` 对象，提供 `multiplayer.js` 需要的字段：
@@ -148,6 +152,8 @@ onMatched / onStart / onSnap / onEvent / onOver / onDrop  — 回调注册
 - 真人玩家的蛇：输入来自 ws（最新 angle/boost 覆盖），不走 AI；AI 补位蛇照旧走 `CS.AI`。
 - **固定步长模拟**：`TICK = 33ms`（30Hz），`multiplayer.update(0.033)`，与渲染解耦，避免本地 RAF 帧率差异影响判定。
 - **快照广播 15Hz**（每 2 个 tick 发一次）。事件即时发。
+  > v3.1 起 `SNAP_EVERY` 可配：1 = 30Hz（新默认），2 = 15Hz。客户端插值缓冲按
+  > `snapIntervalMs × 1.8` 自适应。见 `02-udp-transport.md` §5。
 - 掉线处理：ws close → `kill(entry)`（复用现有死亡/尸体掉落逻辑）→ 广播 event；房间存活真人 ≤1 → 结算解散。
 
 ### 5.4 流畅度 `js/net/prediction.js` + `interpolation.js`
