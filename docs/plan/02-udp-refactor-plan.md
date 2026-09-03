@@ -387,13 +387,46 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
 4. **wss 回退是必需项不是可选项** —— WebTransport 目前无 TCP 回退，
    UDP 被封的网络下直接连不上。
 
+### 端口决策（已定）
+
+| 环境 | wss（TCP） | WebTransport（UDP） | 小游戏裸 UDP |
+|---|---|---|---|
+| official | 443（nginx） | **443** | 8094 |
+| dev | 443（nginx，按域名分流） | **8093** | 8092 |
+
+- **official 用 443/udp**：企业网 / 酒店 WiFi 对高位 UDP 的封禁率远高于 443，
+  而 443/udp 正是 HTTP/3 的标准端口。nginx 只占 TCP 443，两者**同号不冲突**
+  （已核实 UDP 443 空闲）。服务以 `ubuntu` 非 root 运行 ⇒ 需给 unit 加
+  `AmbientCapabilities=CAP_NET_BIND_SERVICE`。
+- **dev 用 8093/udp**：443/udp 全机只有一个，两个环境抢不了；
+  dev 只需能验证、不需要最佳穿透。8093 紧邻既有的 8092（dev 裸 UDP），便于记忆与排查。
+- **两层放行**：ufw（脚本可改）+ 云控制台（**必须手动**）。
+  待放行：`8093/udp`（dev）、`443/udp`（official）。
+
+### 依赖与构建（澄清一处早先的误判）
+
+`node_modules` 不入库（见 `.gitignore`），**进 git 的只有 `server/package.json`
+与 `server/package-lock.json`**；CI 用 `npm ci`、服务器用 `npm ci --omit=dev` 各自安装。
+
+早先把「引入 native addon」当作与「零构建」冲突，这是**错的**：
+零构建指的是**前端** —— 浏览器直接加载 `js/*.js`、无打包步骤；
+而 native addon 是**服务端 npm 依赖**，两件事互不相干。
+
+预编译可用性已三处实测（`npm install` 16~18 秒，无需 cmake/g++，`await quicheLoaded` 成功）：
+
+| 环境 | 安装 | native 加载 |
+|---|---|---|
+| 服务器 Ubuntu x64 / Node 22 | ✅ 18s | ✅ |
+| 本地 Windows x64 / Node 22 | ✅ 16s | ✅ |
+| CI `ubuntu-latest` / Node 22 | 与服务器同构，预期 ✅ | 首次 CI 即验证 |
+
+⇒ **测试可以进 CI**，不需要「本地跑 / CI 跳过」的降级方案。
+
 ### 任务
 
 - [ ] **1d.1** 服务器：`server/webtransport.js`
   - `Http3Server`（`@fails-components/webtransport` 1.6.7 + `-transport-http3-quiche`）
-  - 端口决策：生产用 **443/udp**（nginx 只占 TCP 443，UDP 空闲已核实；
-    企业防火墙对高位 UDP 封禁率远高于 443）。需给 node 加
-    `AmbientCapabilities=CAP_NET_BIND_SERVICE`。**开发环境先用 4443 验证**。
+  - 端口走上表：`WT_PORT` 环境变量，dev 8093 / official 443
   - 证书直接读 letsencrypt 的 `fullchain.pem` / `privkey.pem`
   - **会话与现有 `UdpEndpoint` 的会话表打通**：token 语义、地址跟随、
     frameId 去重必须与 `server/udp.js` 保持一致，否则同一套客户端逻辑要分叉
@@ -406,23 +439,24 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
 - [ ] **1d.3** 降级路径：WT 握手失败 / `closed` reject / 对局中停滞
       → 停用旁路走 wss（复用 `UdpAccel` 既有的 `_setActive(false)`）
 - [ ] **1d.4** certbot 续期钩子：`renewal-hooks/deploy` 同时 reload nginx 与重载 Node 证书
-- [ ] **1d.5** 测试
-  - `webtransport.test.js`：真 `Http3Server` + 真客户端，断言 datagram 往返、
-    降级、二进制帧解码同构
-  - **能否进 CI 取决于 native addon 在 CI runner 上能否装** —— 若不能，
-    退化为「本地必跑 + CI 跳过」，并在 `npm test` 里明确标注跳过原因
+- [ ] **1d.5** 测试 `test/net/webtransport.test.js`
+  - 真 `Http3Server` + 真客户端，断言 datagram 往返、降级、二进制帧解码与
+    JSON 路径同构
+  - **进 CI**（三平台预编译已实测可用）。测试内需
+    `await quicheLoaded` 且**自签证书 + `serverCertificateHashes`**，
+    不能依赖 letsencrypt 真证书（CI 上没有）
   - 弱网复验：`netem-weaknet.sh` 对 WT 端口注入丢包，确认冗余打散同样生效
-- [ ] **1d.6** 云控制台手动放行 UDP 443（**必须用户操作**）
+- [ ] **1d.6** 云控制台手动放行 UDP（**必须用户操作**）：dev `8093`、official `443`
 
-### 待决问题
+### 遗留注意点
 
-- **443/udp vs 4443**：443 穿透性最好但需 capability；4443 简单但企业网易被封。
-  倾向 443，开发阶段先 4443 验证。
-- **native addon 与「零构建」的调性冲突**：本项目一直是零构建纯 JS，
-  引入预编译 native 依赖是首次。虽然有 prebuilt 不需要编译工具链，
-  但服务器部署脚本要相应调整（`npm ci --omit=dev` 需能拉到预编译包）。
 - 库作者自称 "duct tape-style solution"，缺 `getStats()` ⇒ **按 beta 对待**，
-  wss 回退必须始终可用。
+  wss 回退必须始终可用（这也是 §7.4.1 的硬结论：WT 无 TCP 回退）。
+- **`datagrams.writable` 已被库标记 deprecated**（实测打印警告），
+  实现时查一下当前推荐的写法，别照抄旧示例。
+- Node 客户端做非 `serverCertificateHashes` 的证书校验会打
+  「experimental / DO NOT USE IN PRODUCTION」警告 —— 那只针对**该库的 Node 客户端**，
+  真浏览器走标准 Web PKI 不受影响。但**测试里**应改用自签 + hashes 以避开这条路径。
 
 ---
 

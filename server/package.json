@@ -10,6 +10,8 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@fails-components/webtransport": "^1.6.7",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.7",
     "ws": "^8.21.3"
   }
 }
