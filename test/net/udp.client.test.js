@@ -303,6 +303,91 @@ function t6(done) {
   done();
 }
 
+// ---------------- T7 通道可观测性 ----------------
+//
+// 为什么这组断言值得存在：加速通道**设计成静默降级** —— 打不通就走 wss、
+// 玩家无感。产品行为是对的，但代价是「有没有吃到 UDP 收益」不可观测。
+// 网页版曾经整个阶段都在走 wss+JSON 而无人察觉，正是因为
+// `udp` 事件被发出来却没有任何消费者。
+//
+// 所以断言两件事：
+//   1. 事件必须带**通道类型**，不能只报 active 布尔 ——
+//      否则页面无法区分「WebTransport」与「裸 UDP」
+//   2. `offered` 必须与「实际生效」分开记 ——
+//      「服务器没下发」和「下发了但没用上」是两种完全不同的故障，
+//      合成一个布尔就没法定位了
+function t7(done) {
+  section('T7 通道可观测性（静默降级必须可见）');
+
+  var events = [];
+  var fakeWs = { send: function () {}, close: function () {}, readyState: 1 };
+  // 注入一个自报 channelKind='wt' 的工厂，模拟浏览器选中 WebTransport。
+  // 这里能这么测，正是因为通道类型改成了**由工厂自报**而不是调用方重判平台 ——
+  // 若还是在 _setupUdp 里判 wx/node，本测试跑在 node 上就永远只能测到裸 UDP 分支。
+  var wtFactory = function () {
+    return { onMessage: function () {}, send: function () {}, close: function () {} };
+  };
+  wtFactory.channelKind = 'wt';
+  var T = new CS.WsTransport({
+    url: 'ws://127.0.0.1:1',
+    WebSocketImpl: function () { return fakeWs; },
+    udpSocketFactory: wtFactory
+  });
+  T.ws = fakeWs;
+  T.onAll({ udp: function (m) { events.push(m); } });
+
+  // 服务器同时下发裸 UDP 与 WT，工厂标注为 wt ⇒ 应选 WT 的 port/token
+  T._setupUdp({
+    udpPort: 8092, udpToken: 11,
+    wtPort: 8093, wtToken: 22, wtPath: '/wt',
+    snapIntervalMs: 33
+  });
+  ok(T.udp !== null, '拿到 socket 时建立加速旁路');
+  ok(T.udpKind === 'wt',
+    '**通道类型取自工厂自报的 channelKind**（udpKind=' + T.udpKind + '）',
+    '若这里重判平台，node 下会误判成 udp');
+  ok(T.udp.token === 22,
+    '**用的是 wtToken 而非 udpToken**（token=' + T.udp.token + '）',
+    '两个端点会话表独立，token 不可混用');
+
+  // 走**真实的 _setActive** 触发，而不是直接调回调 ——
+  // 直接调回调等于绕过实现，那样测的是测试自己的代码。
+  T.udp._setActive(true);
+  ok(events.length > 0, '状态变化会向上抛 udp 事件');
+  ok(events.length > 0 && events[events.length - 1].active === true,
+    '事件带 active 状态');
+  ok(events.length > 0 && events[events.length - 1].kind === 'wt',
+    '**事件带通道类型 kind=wt** —— 只报 active 布尔的话页面说不清走的哪条',
+    '实际 kind=' + (events.length ? events[events.length - 1].kind : 'none'));
+
+  T.udp._setActive(false);
+  ok(events.length >= 2 && events[events.length - 1].active === false,
+    '降级时同样上报（active=false）');
+  ok(events[events.length - 1].kind === 'wt',
+    '降级事件仍带原通道类型（用于说明「从哪条掉下来的」）');
+
+  T.dispose();
+
+  // 只下发裸 UDP（小游戏 / node 场景）时 kind 应为 udp
+  var events2 = [];
+  var T2 = new CS.WsTransport({
+    url: 'ws://127.0.0.1:1',
+    WebSocketImpl: function () { return fakeWs; },
+    udpSocketFactory: function () {
+      return { onMessage: function () {}, send: function () {}, close: function () {} };
+    }
+  });
+  T2.ws = fakeWs;
+  T2.onAll({ udp: function (m) { events2.push(m); } });
+  T2._setupUdp({ udpPort: 8092, udpToken: 11, snapIntervalMs: 33 });
+  ok(T2.udpKind === 'udp', '只有裸 UDP 时 kind=udp（' + T2.udpKind + '）');
+  T2.udp._setActive(true);
+  ok(events2.length > 0 && events2[0].kind === 'udp', '事件反映裸 UDP 通道');
+  T2.dispose();
+
+  done();
+}
+
 // ---------------- 主流程 ----------------
 console.log('客户端 UDP 加速层回归（v3.1 M1b）');
 t1(function () {
@@ -311,8 +396,10 @@ t1(function () {
       t4(function () {
         t5(function () {
           t6(function () {
-            console.log('\n结果：' + pass + ' 通过，' + fail + ' 失败');
-            process.exit(fail === 0 ? 0 : 1);
+            t7(function () {
+              console.log('\n结果：' + pass + ' 通过，' + fail + ' 失败');
+              process.exit(fail === 0 ? 0 : 1);
+            });
           });
         });
       });

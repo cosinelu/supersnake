@@ -997,6 +997,9 @@
     var idealMapW = pw - 28;
     var blocks = {
       header: 46,                       // 标题 + 模式
+      // 传输通道诊断行：只有在线对战才有。列为独立可丢弃区块，
+      // 小屏下优先保证游戏信息 —— 它是诊断信息，不是玩法信息。
+      channel: (game.mode === 'multi' && game.online) ? 16 : 0,
       score: 54,                        // 「分数」标签 + 大号分数
       target: 26 + (game.mode === 'level' ? 14 : 0), // 目标/最高（闯关多一条进度条）
       detail: 34,                       // 分数构成 + 速度
@@ -1005,14 +1008,14 @@
       map: 16 + idealMapW * ratio,      // 「小地图」标题 + 本体
       hint: 38                          // 底部操作提示
     };
-    var order = ['header', 'score', 'target', 'detail', 'board', 'colors', 'map', 'hint'];
+    var order = ['header', 'channel', 'score', 'target', 'detail', 'board', 'colors', 'map', 'hint'];
     function total(bs) {
       var s = 0;
       for (var i = 0; i < order.length; i++) s += bs[order[i]] || 0;
       return s;
     }
     // 优先级从低到高丢弃（小地图与分数永不丢）
-    var droppable = ['hint', 'detail', 'colors'];
+    var droppable = ['hint', 'channel', 'detail', 'colors'];
     var dropped = {};
     var need = total(blocks);
     for (var di = 0; di < droppable.length && need > availH; di++) {
@@ -1064,6 +1067,32 @@
     ctx.fillText(modeText, cx, y + 6);
     ctx.globalAlpha = 1;
     adv(22);
+
+    // ---- 传输通道（仅在线对战）----
+    //
+    // 加速通道是静默降级的：打不通就走 wss，玩家无感。产品行为是对的，
+    // 但代价是「有没有吃到 UDP 收益」完全不可观测 —— 网页版曾整个阶段
+    // 都在走 wss+JSON 而无人察觉。所以这行必须在正常界面上就能看到，
+    // 不能只藏在控制台里。
+    //
+    // 配色按「实际生效的传输质量」区分，不按「有没有报错」：
+    // 走加速通道 = 墨绿，回落 TCP = 赭红（不是错误，但确实没吃到收益）。
+    // 取深色调是因为面板底是米白纸色（rgba(255,253,245,.72)），
+    // 亮色荧光调在这上面几乎看不见。
+    if (!dropped.channel && game.mode === 'multi' && game.online && game.online.channel) {
+      var ch = game.online.channel;
+      var accel = (ch.kind !== 'tcp');
+      ctx.font = Math.round(10 * Math.min(1, k + 0.2)) + 'px sans-serif';
+      ctx.fillStyle = accel ? '#2e7d6b' : '#a5592b';
+      var chText = accel
+        ? (ch.kind === 'wt' ? 'WebTransport · UDP' : '裸 UDP')
+        : 'TCP · wss';
+      // 中途降级过要显式标出来：只看当前状态会漏掉「开局是 UDP、后来掉了」
+      if (ch.switches > 1) chText += '（切换 ' + ch.switches + ' 次）';
+      ctx.fillText(chText, cx, y + 5);
+      ctx.fillStyle = cfg.INK;   // 必须还原成墨色：面板是浅底，白字会看不见
+      adv(16);
+    }
 
     // ---- 分数 ----
     ctx.font = '11px sans-serif';

@@ -124,23 +124,31 @@
     if (!this.udpFactory) return;   // 无可用通道（如无 WebTransport 的旧浏览器）
 
     // 走哪条通道就用哪套 port/token。
-    // 优先裸 UDP（开销更低）；只有它不可用时才用 WT。
+    //
+    // **通道类型由工厂自报**（`channelKind`），这里不再重判平台 ——
+    // `autoSocketFactory` 已经按 wx / node / 浏览器做过选择，
+    // 在这儿判第二遍等于两处独立判定同一件事：一旦分叉，
+    // UI 显示的通道就会与实际走的不一致，而那种 bug 看起来完全正常。
+    var kind = this.udpFactory.channelKind === 'wt' ? 'wt' : 'udp';
     var port = msg.udpPort, token = msg.udpToken;
-    var isWx = (typeof wx !== 'undefined' && wx.createUDPSocket);
-    var isNode = (typeof process !== 'undefined' && process.versions && process.versions.node);
-    if (!isWx && !isNode && msg.wtPort) {
-      // 浏览器：走 WebTransport。端口已编进工厂的 URL，
-      // 这里的 udpPort 只是给 UdpAccel 的形式参数，真正要紧的是 token。
+    if (kind === 'wt') {
+      // WebTransport：端口已编进工厂的 URL，这里的 port 只是
+      // 给 UdpAccel 的形式参数，真正要紧的是 token（两个端点会话表独立）。
       port = msg.wtPort;
       token = msg.wtToken;
     }
     if (!port || token == null) return;
 
     var self = this;
+    this.udpKind = kind;
     this.udp = new CS.UdpAccel({
       socketFactory: this.udpFactory,
       onSnap: function (dec) { self._emit('snap', self._mergeMeta(dec)); },
-      onStateChange: function (active) { self._emit('udp', { active: active }); }
+      // 带上通道类型：上层要能区分「WebTransport」与「裸 UDP」。
+      // 只报一个 active 布尔的话，页面上说不清玩家实际走的是哪条。
+      onStateChange: function (active) {
+        self._emit('udp', { active: active, kind: kind });
+      }
     });
     if (!this.udp.attach({
       udpPort: port, udpToken: token, host: host,

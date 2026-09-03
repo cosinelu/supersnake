@@ -18,6 +18,19 @@
     var renderer = new CS.Renderer(ctx, window.innerWidth, window.innerHeight);
     root.__game = game; // 调试钩子：控制台/WebBridge 可读取对局状态（无功能影响）
 
+    /**
+     * 传输通道诊断入口：控制台敲 `__net()` 即可看当前走 TCP 还是 UDP/WebTransport。
+     *
+     * 这不是调试残留，是**必要的可观测性**：加速通道设计成静默降级
+     * （打不通就走 wss，玩家无感），代价是「有没有吃到 UDP 收益」不可观测。
+     * 网页版曾整个阶段都在走 wss+JSON 而无人察觉，就是因为缺这个。
+     */
+    root.__net = function () {
+      var om = game && game.online;
+      if (!om) return '未在联机对局中（先点「在线对战」）';
+      return om.netInfo();
+    };
+
     // 全局重排订阅（docs/design §3.8.3-D）：各界面各自失效缓存并重算。
     // game.resize() 内部会 emit，这里订阅的是"除 game 之外"的参与者。
     if (CS.layoutBus) {

@@ -298,7 +298,7 @@
    *   `certHashes` 仅测试用（自签证书）；生产走标准 Web PKI，不传。
    */
   function makeWebTransportFactory(info) {
-    return function () {
+    var f = function () {
       var WT = (typeof WebTransport !== 'undefined') ? WebTransport
         : (typeof globalThis !== 'undefined' ? globalThis.WebTransport : null);
       if (!WT || !info || !info.wtPort) return null;
@@ -366,6 +366,8 @@
         }
       };
     };
+    f.channelKind = 'wt';
+    return f;
   }
 
   /**
@@ -384,6 +386,16 @@
     if (hasWT && info && info.wtPort) return makeWebTransportFactory(info);
     return null;
   }
+
+  // 每个工厂自报通道类型（'udp' | 'wt'）。
+  //
+  // 为什么标在工厂上而不是让调用方再判一次平台：`_setupUdp` 需要知道走的是
+  // 哪条通道（选 port/token、上报给 UI），而它原本自己又判了一遍 wx/node ——
+  // **同一件事在两处独立判定，迟早分叉**，而且分叉后 UI 显示的通道会与
+  // 实际走的通道不一致，那种 bug 极难发现（显示错的那个看起来完全正常）。
+  // 现在判定只有 autoSocketFactory 一处，其余人读标注。
+  wxSocketFactory.channelKind = 'udp';
+  nodeSocketFactory.channelKind = 'udp';
 
   CS.UdpAccel = UdpAccel;
   CS.udpSocketFactories = {
