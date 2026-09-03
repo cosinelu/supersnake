@@ -508,7 +508,16 @@ quiche 传输就绪 ✓
 - **证书可直接复用** `/etc/letsencrypt/live/.../fullchain.pem` + `privkey.pem`，
   浏览器走标准 Web PKI，**不需要** `serverCertificateHashes`（那套 14 天有效期
   限制只适用于自签 hashes 路径）。一 TCP 一 UDP，socket 不冲突。
-  但 certbot 续期后需同时 reload nginx 与让 Node 重载证书（加 `renewal-hooks/deploy`）。
+- **`updateCert` 在 HTTP/3 下是 no-op，热换证书不存在**（查源码 + 实测确认）。
+  `Http3Server.updateCert` 的实现是 `if (transport.updateCert) transport.updateCert(...)`，
+  而该方法**只有 http2 transport 实现了**（走 Node `setSecureContext`）；
+  `-transport-http3-quiche` 里全包零命中。条件不成立 ⇒ 静默跳过、不报错，
+  **返回 true 只代表调用没炸**。
+  证伪方式（唯一可靠的）：换证后用**新**证书 hash 连不上、用**旧**的照样连通。
+  ⇒ certbot 续期只能靠**重建端点**（`_watchCert` + `_rebuild`）。
+  重建期间在局玩家由 `UdpAccel` 停滞检测自动切回 wss —— **1b 的降级路径
+  正好就是换证的缓冲垫**，不需要额外机制，也不必重启进程（那会断掉 WebSocket）。
+- **`datagrams.writable` 已被库标注 deprecated**（仍可用，但将来要跟进 API 变化）。
 - **`@fails-components/webtransport` 1.6.7 有 linux x64 预编译**，
   实测 `npm install` 18 秒完成，**不需要 cmake/g++**。native 二进制在独立包
   `@fails-components/webtransport-transport-http3-quiche`，必须一并安装。

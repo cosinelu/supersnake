@@ -455,8 +455,32 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
     ⇒ 工厂只能在 matched 之后选定，不能在 `WsTransport` 构造时定
 - [x] **1d.4** 降级路径（**已完成**）：握手失败 / `closed` reject / 会话中断
       → 停止收包 → `UdpAccel` 既有的停滞检测回落 wss
-- [ ] **1d.5** certbot 续期钩子：`renewal-hooks/deploy` 同时 reload nginx
-      与让 Node 调 `updateCert`（接口已实现，钩子脚本待写）
+- [x] **1d.5** 证书续期（**已完成**，方案与最初设想不同，见下）
+  - **`updateCert` 在 HTTP/3 下是 no-op** —— 这是查源码 + 双向对照实测确认的。
+    `Http3Server.updateCert` 的实现是
+    `if (transport.updateCert) transport.updateCert(...)`，而该方法
+    **只有 http2 transport 实现了**（走 Node `setSecureContext`）；
+    `-transport-http3-quiche` 全包零命中、native 侧也没有。
+    条件不成立 ⇒ 静默跳过、不报错 ⇒ **返回 true 只代表调用没炸**。
+  - 我最初就是照热换写的，测试断言「`updateCert` 返回 true」，**全绿**。
+    双向对照才揭穿：换证后用**新**证书 hash 连不上、用**旧**的照样连通。
+    这又是一次「断言了调用成功而非效果发生」。
+  - 落地方案：**进程自己盯证书文件，变了就重建端点**（不是热换、也不重启进程）
+    - 为什么重建端点优于重启进程：**wss 通道完全不受影响**。重建只动
+      WebTransport 的 UDP socket，在局玩家由 `UdpAccel` 的停滞检测自动
+      切回 wss（1b 已有的降级路径），对局继续。
+      **已有的降级路径正好就是换证的缓冲垫**，不需要额外机制。
+    - 为什么进程自己盯、不用 certbot 的 deploy hook：钩子是外部脚本，
+      与进程无现成通信通道；靠钩子意味着「重装 / 换机 / 忘配」都会让续期
+      悄悄失效。与 netem 脚本自带兜底清理同一个判断 ——
+      **依赖人记得的运维步骤终会漏**。
+    - 用 `fs.watchFile`（轮询）而非 `fs.watch`（inotify）：certbot 是
+      **替换符号链接**，inotify 盯旧 inode，换完再也收不到事件。
+    - 延迟 2s 再读：certbot 先写 fullchain 后写 privkey，立刻读会拿到
+      「新证书 + 旧私钥」的错配组合。
+    - 重建必须复用**当前实际监听端口**而非回读配置（配置可能是 0），
+      否则换端口会让已下发的 `wtPort` 全部指向空气。
+
 - [x] **1d.6** 测试 `test/net/webtransport.test.js`（**已完成，50 条断言，已接入 CI**）
   - 自签 ECDSA P-256 + 13 天有效期 + `serverCertificateHashes`
     （CI 上没有 letsencrypt 证书；这条路径还顺带避开库那条 experimental 警告）
@@ -465,11 +489,57 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
   - 断言 WT 下行字节与裸 UDP 路径**逐字节一致**（编码层确实共用）
   - 畸形输入（空包/长度不足/crc 错/未知 magic/1500 全零）不崩服务
   - **已用故障注入验证断言非空**：打散换成同步连发 → 跨度 0ms 报错；
-    去掉「大幅回退重置」→ 两条断言报错
+    去掉「大幅回退重置」→ 两条断言报错；把换证改回 `updateCert` 热换
+    → 两条决定性断言同时报错（且失败信息直指 no-op 这个真因）
+  - **T5 换证用双向对照**：新证书 hash 必须通、旧证书 hash 必须**不通**。
+    只有两者同时成立，才排除「压根没换」与「hash 校验没起作用」两种假绿灯。
+  - **T3 加了回环黑洞重建重试**：Windows 回环约 7% 概率让整只 socket 变成
+    永久黑洞（裸 dgram 对照同样存在，非项目代码问题）。加之前实测 8 轮里
+    **2 轮**因此挂掉，加之后 12 轮零 flake。原地重试无效（1 秒 40 次也不恢复），
+    只有整只客户端重建有用；这不会掩盖真缺陷 —— 逻辑真坏了重建 3 次一样全失败。
   - 无 openssl 时**显式 SKIP 并说明**，不假装通过
-- [ ] **1d.7** 云控制台手动放行 UDP（**必须用户操作**）：dev `8093`、official `443`
-- [ ] **1d.8** systemd unit：加 `WT_ENABLED=1` / `WT_PORT` / `WT_CERT` / `WT_KEY`，
-      official 还需 `AmbientCapabilities=CAP_NET_BIND_SERVICE`（绑 443）
+  - **故障注入本身也要验证生效**：我第一次注入用了 8 空格缩进而实际是 6，
+    替换静默失败、跑出一片全绿 —— 差点把「没注入」误读成「断言无效」。
+    此后注入脚本一律先 `if (indexOf(target) < 0) exit(1)` 再改。
+- [x] **1d.7** 云控制台放行 UDP（**已完成**，2026-09-03 由用户手动操作）
+  - dev `8093/udp`、official `443/udp` 均已放行
+  - 验证方法：`tcpdump -ni any "udp port X"` 从外部打包，**看到 `In` 才算通**。
+    只有 `Out` 说明卡在控制台那层（9092 与 4443 都是这么被判出来的）
+- [x] **1d.8** systemd 配置：`scripts/wt-setup.sh`（**已完成并实测**）
+  - 用 drop-in（`$UNIT.d/10-webtransport.conf`）叠加，**删掉即完全恢复**，
+    也不会被 `server-init.sh` 重跑冲掉
+  - 三个与原 unit 硬化选项的冲突已解决：`NoNewPrivileges=true` 会让
+    `AmbientCapabilities` 失效（绑 443 时必须置 false）；letsencrypt 私钥
+    默认 `root:root 0600` 而服务以 ubuntu 运行 ⇒ 用 certbot 官方推荐的
+    组可读方式（不 chmod 私钥本身，那会被续期重置）
+  - **前置检查是必需的，不是保险**：实测对 official 跑时，配置全部正确
+    （capability `0x400` 就位、5 个 `WT_*` 环境变量都在）、服务照常运行、
+    日志一片正常，唯独 443 不监听 —— 因为 official 分支还没合入 1d，
+    `WT_ENABLED=1` 对它只是个没人读的变量。而脚本原本把原因指向
+    「证书不可读 / 端口被占 / addon 缺失」，排查方向被完全带偏。
+    **配置正确但代码不认，是最难自证的一类故障**，故改为动配置之前先查
+    `WorkingDirectory` 下有无 `server/webtransport.js` 与 WT 依赖，
+    缺则拒绝执行且不写入任何配置（已验证：拦下并返回 1）
+
+### 公网实测（2026-09-03，dev 环境 8093/udp）
+
+走真实公网域名 + 真 Let's Encrypt 证书（**不用** `serverCertificateHashes`），
+60 秒窗口：
+
+```
+matched            : wtPort=8093, wtPath=/wt, snapIntervalMs=33
+WebTransport 握手  : ready ✓（公网 QUIC + Web PKI 证书校验）
+hello_ack          : ✓ 打洞成功
+二进制快照(WT)     : 603 帧，均 95 / 峰 475 字节
+  冗余副本去重     : 1206 = 2.00 × 帧数（精确对上 UDP_DUP=3）
+  帧间隔 avg/p50/p95/max : 33.0 / 33 / 35 / 37 ms
+JSON 快照(TCP)     : 0 帧（全程未降级）
+```
+
+**与裸 UDP 路径（8092）的数据几乎完全一致**（那边 553 帧、p50 33 / p95 34），
+这正是预期结果 —— 两条通道共用同一套编码层与冗余策略，差别只在管道。
+均包 95 字节也与裸 UDP 相同，说明 QUIC 的额外开销没有落在应用层载荷上。
+
 
 ### 实现期踩到的坑（都已写进代码注释）
 

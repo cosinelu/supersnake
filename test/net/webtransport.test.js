@@ -230,102 +230,133 @@ function t3(done) {
     import(WebTransportEndpoint.libEntryUrl()).then(function (mod) {
       return mod.quicheLoaded.then(function () { return mod; });
     }).then(function (mod) {
-      // 客户端复用生产的 socket 工厂 —— 不另写一份，
-      // 否则测的是测试自己的代码而不是实现（layout.test.js 吃过这个亏）
-      var factory = CS.udpSocketFactories.webTransport({
-        host: '127.0.0.1', wtPort: ep.port(), wtPath: '/wt',
-        certHashes: [{ algorithm: 'sha-256', value: c.hash }]
-      });
-      // 生产工厂用全局 WebTransport；Node 下注入库的实现
-      var prevWT = globalThis.WebTransport;
-      globalThis.WebTransport = mod.WebTransport;
-      var sock = factory();
-      globalThis.WebTransport = prevWT;
+      // Windows 回环有约 7% 概率把整只 socket 变成永久黑洞（裸 dgram 对照
+      // 同样存在，不是本项目代码的问题）。实测本文件 8 轮里 2 轮因此挂掉，
+      // 表现是「打洞完全收不到 hello_ack」而后续断言连锁失败。
+      // 唯一有效的对策是**整只客户端重建**，原地多重试无用 ——
+      // 已验证 1 秒内 40 次重试也不恢复。
+      //
+      // 这不会掩盖真实缺陷：若打洞逻辑真的坏了，重建 3 次一样全失败。
+      // 每次重建都换新 token，避免旧会话状态干扰。
+      var MAX_TRY = 3;
 
-      ok(sock && typeof sock.send === 'function',
-        '生产 socket 工厂返回可用 socket（同步返回，握手在内部异步完成）');
-      if (!sock) { cleanup(done); return; }
-
-      var recv = [];
-      sock.onMessage(function (u8) { recv.push({ u8: u8, t: Date.now() }); });
-
-      // 打洞：工厂内部会把 ready 之前的发送排队，这里可以立刻发
-      sock.send(mkHello(offer.token));
-
-      waitFor(function () { return recv.length > 0; }, 8000, function (okAck) {
-        ok(okAck, '收到下行（打洞握手完成）');
-        ok(recv.length > 0 && recv[0].u8[0] === MAGIC_HACK,
-          '首个下行是 hello_ack（0x4B）',
-          recv.length ? '实际 0x' + recv[0].u8[0].toString(16) : '无下行');
-        ok(ep.isReady('c1') === true, '服务器认定该连接已就绪');
-        ok(ep.stats.sessions >= 1, '服务器记录到会话（' + ep.stats.sessions + '）');
-
-        // 上行输入
-        sock.send(BP.encInputFrag(offer.token, 1, 1.234, 0));
-        waitFor(function () { return inputs.length > 0; }, 4000, function (okIn) {
-          ok(okIn && inputs.length > 0, '**上行输入到达服务器**');
-          if (inputs.length) {
-            ok(Math.abs(inputs[0].inp.angle - 1.234) < 0.02,
-              '上行角度正确（' + inputs[0].inp.angle.toFixed(3) + '）');
-            ok(inputs[0].connId === 'c1', '映射到正确的 connId');
-          }
-
-          // 重复副本必须被去重（冗余的正常情况）
-          var before = inputs.length;
-          sock.send(BP.encInputFrag(offer.token, 1, 1.234, 0));
-          setTimeout(function () {
-            ok(inputs.length === before, '重复 frameId 被去重（未重复投递）');
-
-            // 下行：冗余份数 + 时间打散
-            recv.length = 0;
-            var frame = BP.encSnapBin({ tick: 7, ack: 1, timeMs: 0, entries: [] });
-            ep.sendFrame('c1', frame);
-            setTimeout(function () {
-              var frames = recv.filter(function (r) { return r.u8[0] !== MAGIC_HACK; });
-              ok(frames.length >= 2 && frames.length <= cfg.UDP_DUP,
-                '下行发出 UDP_DUP=' + cfg.UDP_DUP + ' 份（收到 ' + frames.length + '）');
-              if (frames.length >= 2) {
-                var span = frames[frames.length - 1].t - frames[0].t;
-                console.log('       副本到达跨度 ' + span + 'ms（帧窗口 ' +
-                  (cfg.TICK_MS * cfg.SNAP_EVERY) + 'ms）');
-                // 打散判据与 udp.test.js 一致：要跨得过定时器 tick。
-                // 同一时刻连发在突发丢包下等于没发（副本共命运）。
-                ok(span >= 5, '**副本时间打散**（跨度 ' + span + 'ms ≥5ms，非同时发）',
-                  '趋近 0 说明打散调度失效');
-              }
-              // 解码同构：字段名要与协议实际设计一致。
-              // 注意二进制路径用的是**色块增量**（blockAdd/blockDel，1a.4 的设计），
-              // 不是 JSON 路径的全量 bl —— 全量由 1Hz 低频通道走 TCP 兜底。
-              // wsTransport._mergeMeta 会把两者合并成与 JSON snap 同构的对象后
-              // 才交给上层，所以上层零感知。
-              if (frames.length) {
-                var dec = BP.decSnapBin(frames[0].u8);
-                ok(dec && dec.tk === 7 && dec.ack === 1,
-                  '二进制帧可解码且字段正确（tk=' + (dec && dec.tk) + '）');
-                ok(dec && dec.t === 'snap' && Array.isArray(dec.sn),
-                  '解码结果带 snap 类型标记与 sn 数组（与 JSON 路径同名）');
-                ok(dec && Array.isArray(dec.blockAdd) && Array.isArray(dec.blockDel),
-                  '带色块增量字段 blockAdd/blockDel（1a.4 增量同步）');
-                // 与裸 UDP 路径逐字节一致 —— 两条通道只是管道不同，
-                // 编码完全共用；若不一致说明某条通道偷偷改了编码
-                var same = true, ref = BP.encSnapBin({ tick: 7, ack: 1, timeMs: 0, entries: [] });
-                if (ref.length !== frames[0].u8.length) same = false;
-                else for (var bi = 0; bi < ref.length; bi++) {
-                  if (ref[bi] !== frames[0].u8[bi]) { same = false; break; }
-                }
-                ok(same, '**WT 下行字节与裸 UDP 路径完全一致**（编码层共用）',
-                  '长度 ' + frames[0].u8.length + ' vs ' + ref.length);
-              }
-
-              t3b(ep, sock, offer, c, cleanup, done);
-            }, 250);
-          }, 200);
+      (function attempt(n) {
+        var offerN = n === 1 ? offer : ep.offer('c1', 'r1');
+        var factory = CS.udpSocketFactories.webTransport({
+          host: '127.0.0.1', wtPort: ep.port(), wtPath: '/wt',
+          certHashes: [{ algorithm: 'sha-256', value: c.hash }]
         });
-      });
+        // 生产工厂用全局 WebTransport；Node 下注入库的实现
+        var prevWT = globalThis.WebTransport;
+        globalThis.WebTransport = mod.WebTransport;
+        var sock = factory();
+        globalThis.WebTransport = prevWT;
+
+        if (n === 1) {
+          ok(sock && typeof sock.send === 'function',
+            '生产 socket 工厂返回可用 socket（同步返回，握手在内部异步完成）');
+        }
+        if (!sock) { cleanup(done); return; }
+
+        var recv = [];
+        sock.onMessage(function (u8) { recv.push({ u8: u8, t: Date.now() }); });
+        // 打洞：工厂内部会把 ready 之前的发送排队，这里可以立刻发
+        sock.send(mkHello(offerN.token));
+
+        waitFor(function () { return recv.length > 0; }, 8000, function (okAck) {
+          if (!okAck && n < MAX_TRY) {
+            console.log('       （第 ' + n + ' 次打洞无响应，疑似回环黑洞，重建客户端重试）');
+            try { sock.close(); } catch (e) {}
+            ep.dropSession('c1');
+            attempt(n + 1);
+            return;
+          }
+          t3Body(mod, ep, sock, offerN, recv, inputs, c, cleanup, done,
+            okAck, n);
+        });
+      })(1);
     }).catch(function (e) {
       ok(false, '客户端建立失败', e && e.message);
       cleanup(done);
     });
+  });
+}
+
+/**
+ * T3 主体：打洞成功后的全部断言。
+ * 抽成独立函数是为了让上面的「回环黑洞重建重试」能包住整段握手，
+ * 而不必把重试逻辑和断言逻辑缠在一起。
+ */
+function t3Body(mod, ep, sock, offer, recv, inputs, c, cleanup, done, okAck, tries) {
+  var cfg = ep.config;
+  ok(okAck, '收到下行（打洞握手完成）' +
+    (tries > 1 ? '（重建 ' + tries + ' 次）' : ''));
+  ok(recv.length > 0 && recv[0].u8[0] === MAGIC_HACK,
+    '首个下行是 hello_ack（0x4B）',
+    recv.length ? '实际 0x' + recv[0].u8[0].toString(16) : '无下行');
+  ok(ep.isReady('c1') === true, '服务器认定该连接已就绪');
+  ok(ep.stats.sessions >= 1, '服务器记录到会话（' + ep.stats.sessions + '）');
+
+  // 上行输入
+  sock.send(BP.encInputFrag(offer.token, 1, 1.234, 0));
+  waitFor(function () { return inputs.length > 0; }, 4000, function (okIn) {
+    ok(okIn && inputs.length > 0, '**上行输入到达服务器**');
+    if (inputs.length) {
+      ok(Math.abs(inputs[0].inp.angle - 1.234) < 0.02,
+        '上行角度正确（' + inputs[0].inp.angle.toFixed(3) + '）');
+      ok(inputs[0].connId === 'c1', '映射到正确的 connId');
+    }
+
+    // 重复副本必须被去重（冗余的正常情况）
+    var before = inputs.length;
+    sock.send(BP.encInputFrag(offer.token, 1, 1.234, 0));
+    setTimeout(function () {
+      ok(inputs.length === before, '重复 frameId 被去重（未重复投递）');
+
+      // 下行：冗余份数 + 时间打散
+      recv.length = 0;
+      var frame = BP.encSnapBin({ tick: 7, ack: 1, timeMs: 0, entries: [] });
+      ep.sendFrame('c1', frame);
+      setTimeout(function () {
+        var frames = recv.filter(function (r) { return r.u8[0] !== MAGIC_HACK; });
+        ok(frames.length >= 2 && frames.length <= cfg.UDP_DUP,
+          '下行发出 UDP_DUP=' + cfg.UDP_DUP + ' 份（收到 ' + frames.length + '）');
+        if (frames.length >= 2) {
+          var span = frames[frames.length - 1].t - frames[0].t;
+          console.log('       副本到达跨度 ' + span + 'ms（帧窗口 ' +
+            (cfg.TICK_MS * cfg.SNAP_EVERY) + 'ms）');
+          // 打散判据与 udp.test.js 一致：要跨得过定时器 tick。
+          // 同一时刻连发在突发丢包下等于没发（副本共命运）。
+          ok(span >= 5, '**副本时间打散**（跨度 ' + span + 'ms ≥5ms，非同时发）',
+            '趋近 0 说明打散调度失效');
+        }
+        // 解码同构：字段名要与协议实际设计一致。
+        // 注意二进制路径用的是**色块增量**（blockAdd/blockDel，1a.4 的设计），
+        // 不是 JSON 路径的全量 bl —— 全量由 1Hz 低频通道走 TCP 兜底。
+        // wsTransport._mergeMeta 会把两者合并成与 JSON snap 同构的对象后
+        // 才交给上层，所以上层零感知。
+        if (frames.length) {
+          var dec = BP.decSnapBin(frames[0].u8);
+          ok(dec && dec.tk === 7 && dec.ack === 1,
+            '二进制帧可解码且字段正确（tk=' + (dec && dec.tk) + '）');
+          ok(dec && dec.t === 'snap' && Array.isArray(dec.sn),
+            '解码结果带 snap 类型标记与 sn 数组（与 JSON 路径同名）');
+          ok(dec && Array.isArray(dec.blockAdd) && Array.isArray(dec.blockDel),
+            '带色块增量字段 blockAdd/blockDel（1a.4 增量同步）');
+          // 与裸 UDP 路径逐字节一致 —— 两条通道只是管道不同，
+          // 编码完全共用；若不一致说明某条通道偷偷改了编码
+          var same = true, ref = BP.encSnapBin({ tick: 7, ack: 1, timeMs: 0, entries: [] });
+          if (ref.length !== frames[0].u8.length) same = false;
+          else for (var bi = 0; bi < ref.length; bi++) {
+            if (ref[bi] !== frames[0].u8[bi]) { same = false; break; }
+          }
+          ok(same, '**WT 下行字节与裸 UDP 路径完全一致**（编码层共用）',
+            '长度 ' + frames[0].u8.length + ' vs ' + ref.length);
+        }
+
+        t3b(ep, sock, offer, c, cleanup, done);
+      }, 250);
+    }, 200);
   });
 }
 
@@ -372,12 +403,146 @@ function waitFor(cond, timeoutMs, cb) {
   })();
 }
 
+// ---------------- T5 证书续期 ----------------
+//
+// 为什么这条必须做真实的双向对照、不能只断言「函数返回 true」：
+//
+// 我最初实现的是 `updateCert` 热换，测试断言它返回 true —— 全绿。
+// 但双向对照立刻揭穿了：换证后用**新**证书 hash 连不上、用**旧**的照样连通，
+// 服务器根本没换。查库源码找到根因：`Http3Server.updateCert` 的实现是
+// `if (transport.updateCert) transport.updateCert(...)`，而这个方法
+// **只有 http2 transport 实现了**，`-transport-http3-quiche` 里零命中。
+// 条件不成立 ⇒ 静默跳过、不报错。**返回 true 只代表调用没炸。**
+//
+// 这正是本项目反复吃亏的那类问题：断言了「调用成功」而不是「效果发生」。
+// 所以这里断言的是**新证书能连、旧证书连不上**——只有两者同时成立，
+// 才排除了「压根没换」和「hash 校验没起作用」两种假绿灯。
+//
+// 证书 90 天到期而 certbot 每天检查，这个故障会等到续期那天才暴露，
+// 表现为「昨天还好好的，今天全连不上」。
+function t5(done) {
+  section('T5 certbot 续期换证（重建端点，非热换）');
+
+  if (!haveOpenssl()) {
+    skipped++;
+    console.log('  SKIP 无 openssl，无法生成第二张自签证书');
+    done();
+    return;
+  }
+
+  var a = makeSelfSigned();      // 初始证书
+  var b = makeSelfSigned();      // 模拟续期后的新证书
+  ok(Buffer.compare(a.hash, b.hash) !== 0,
+    '两张自签证书的 sha256 不同（构成有效对照）');
+
+  // 落盘成 certbot 那样的路径，让 _watchCert 能盯到
+  var live = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-live-'));
+  var certPath = path.join(live, 'fullchain.pem');
+  var keyPath = path.join(live, 'privkey.pem');
+  fs.writeFileSync(certPath, a.cert);
+  fs.writeFileSync(keyPath, a.key);
+
+  var ep = new WebTransportEndpoint(testConfig({
+    WT_CERT: certPath, WT_KEY: keyPath,
+    WT_CERT_WATCH_MS: 100,      // 测试里把轮询压到 100ms，生产是 60s
+    WT_CERT_PEM: null, WT_KEY_PEM: null
+  }), {});
+
+  var cleanupFs = function () {
+    [a.dir, b.dir, live].forEach(function (d) {
+      try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) {}
+    });
+  };
+  var finish = function () { ep.close(function () { cleanupFs(); done(); }); };
+
+  ep.listen(function (err) {
+    if (err) {
+      ok(false, 'Http3Server 启动（从文件读证书）', err.message);
+      cleanupFs(); done(); return;
+    }
+    ok(true, 'Http3Server 从 WT_CERT/WT_KEY 文件路径启动');
+    ok(ep._certWatched === true, '**已挂上证书文件监听**（续期无需外部钩子）');
+
+    var portBefore = ep.port();
+
+    import(WebTransportEndpoint.libEntryUrl()).then(function (mod) {
+      return mod.quicheLoaded.then(function () { return mod; });
+    }).then(function (mod) {
+      // 换证后旧会话必须作废：新端点的 QUIC 连接是全新的，
+      // 若不清会让 isReady 给出假阳性、sendFrame 往死会话写。
+      ep.createSession('stale', 'r0');
+
+      // 模拟 certbot：替换两个文件（先 cert 后 key，与 certbot 顺序一致）
+      fs.writeFileSync(certPath, b.cert);
+      fs.writeFileSync(keyPath, b.key);
+
+      waitFor(function () { return ep.stats.certReloads > 0; }, 15000, function (okReload) {
+        ok(okReload, '**检测到文件变化并完成换证**（certReloads=' +
+          ep.stats.certReloads + '）', '失败=' + ep.stats.certReloadFail);
+        if (!okReload) { finish(); return; }
+
+        ok(ep.stats.certReloadFail === 0, '换证过程无失败');
+        ok(ep.listening === true, '换证后仍在监听（进程未重启，wss 通道不受影响）');
+        ok(ep.port() === portBefore,
+          '**端口保持不变（' + ep.port() + '）** —— 否则已下发的 wtPort 会全部失效',
+          '重建时必须复用实际监听端口，不能回读可能为 0 的配置值');
+        ok(ep.isReady('stale') === false,
+          '旧会话已作废（新端点的 QUIC 连接是全新的）');
+
+        // 决定性对照：新证书必须通、旧证书必须不通。
+        // 只有两者同时成立，才排除「没换」与「hash 未校验」两种假绿灯。
+        tryHash(mod, ep.port(), b.hash, 'newcert', function (newOk) {
+          ok(newOk,
+            '**用新证书 hash 能建立会话 ⇒ 换证真的生效了**',
+            '连不上说明服务器仍持旧证书');
+          tryHash(mod, ep.port(), a.hash, 'oldcert', function (oldOk) {
+            ok(!oldOk,
+              '**用旧证书 hash 已连不上 ⇒ 旧证书确已弃用**',
+              '仍能连通说明 updateCert 是个 no-op（HTTP/3 下正是如此）');
+            finish();
+          });
+        });
+      });
+    }).catch(function (e) {
+      ok(false, '加载客户端库', e.message);
+      finish();
+    });
+  });
+
+  /** 用指定证书 hash 试连；复用生产工厂，不另造客户端 */
+  function tryHash(mod, port, hash, connId, cb) {
+    var token = ep.createSession(connId, 'rr');
+    var factory = CS.udpSocketFactories.webTransport({
+      host: '127.0.0.1', wtPort: port, wtPath: '/wt',
+      certHashes: [{ algorithm: 'sha-256', value: hash }]
+    });
+    var prevWT = globalThis.WebTransport;
+    globalThis.WebTransport = mod.WebTransport;
+    var sock = factory();
+    globalThis.WebTransport = prevWT;
+    if (!sock) { cb(false); return; }
+
+    var got = false;
+    sock.onMessage(function () { got = true; });
+    var w = new B.BinWriter(8);
+    w.u8(MAGIC_HELLO); w.u32(token); w.finishCrc16();
+    sock.send(w.bytes());
+    // 6s：握手失败时库不会立刻 reject，只能等超时判定
+    waitFor(function () { return got; }, 6000, function (okConn) {
+      try { sock.close(); } catch (e) {}
+      cb(okConn);
+    });
+  }
+}
+
 // ---------------- 主流程 ----------------
 console.log('WebTransport 通道回归（v3.1 阶段 1d）');
 t1();
 t2();
 t3(function () {
-  console.log('\n结果：' + pass + ' 通过，' + fail + ' 失败' +
-    (skipped ? '，' + skipped + ' 组跳过' : ''));
-  process.exit(fail === 0 ? 0 : 1);
+  t5(function () {
+    console.log('\n结果：' + pass + ' 通过，' + fail + ' 失败' +
+      (skipped ? '，' + skipped + ' 组跳过' : ''));
+    process.exit(fail === 0 ? 0 : 1);
+  });
 });

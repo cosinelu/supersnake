@@ -68,9 +68,11 @@ function WebTransportEndpoint(config, hooks) {
   this.byConn = {};
   this.stats = {
     rx: 0, tx: 0, sessions: 0,
-    dropMagic: 0, dropToken: 0, dropCrc: 0, dropSeq: 0
+    dropMagic: 0, dropToken: 0, dropCrc: 0, dropSeq: 0,
+    certReloads: 0, certReloadFail: 0
   };
   this._closing = false;
+  this._certWatched = false;
 }
 
 /**
@@ -316,6 +318,7 @@ WebTransportEndpoint.prototype.listen = function (cb) {
     return Promise.race([self.server.ready, readyTimeout]).then(function () {
       self.listening = true;
       self._acceptSessions();
+      self._watchCert();     // certbot 续期后自动热换，无需外部钩子
       if (cb) cb();
     });
   }).catch(function (err) {
@@ -395,15 +398,140 @@ WebTransportEndpoint.prototype.port = function () {
   return a ? a.port : 0;
 };
 
-/** certbot 续期后热换证书（不必重启进程） */
+/**
+ * 尝试热换证书。
+ *
+ * **警告：走 HTTP/3 时这个调用是 no-op**（实测 + 查库源码确认）。
+ *
+ * `Http3Server.updateCert` 的实现是：
+ *     this.transportsInts.forEach(t => { if (t.updateCert) t.updateCert(...) })
+ * 而 `updateCert` **只有 http2 transport 实现了**（走 Node 的
+ * `setSecureContext`）；`-transport-http3-quiche` 里根本没有这个方法
+ * （grep 全包零命中，native 侧也没有）。条件不成立 ⇒ 静默跳过、
+ * 不报错、不抛异常。所以它返回 true 只代表「调用没炸」。
+ *
+ * 实测证据（旧/新 hash 双向对照，这是唯一能证伪的测法）：
+ *     换证后用**新**证书 hash 连 → 超时不通
+ *     换证后用**旧**证书 hash 连 → 依然连通
+ * ⇒ 服务器仍持旧证书。
+ *
+ * 因此本方法**不作为续期方案**，只保留给将来库补上实现时用。
+ * 真正的续期路径见 `_watchCert`：重建整个端点。
+ *
+ * @returns {boolean} 仅表示调用未抛异常，**不表示证书真的换了**
+ */
 WebTransportEndpoint.prototype.updateCert = function (cert, privKey) {
   if (!this.server || typeof this.server.updateCert !== 'function') return false;
   try { this.server.updateCert(cert, privKey); return true; } catch (e) { return false; }
 };
 
+/**
+ * 监听证书文件变化，变了就**重建端点**（不是热换 —— 见 updateCert 的说明）。
+ *
+ * 为什么必须处理：证书 90 天到期、certbot 每天检查一次。续期后若服务器
+ * 仍持旧证书，QUIC 握手会一直用过期证书、浏览器直接拒连。而这个故障
+ * 要等到续期那天才暴露，表现是「昨天还好好的，今天全连不上」。
+ *
+ * 为什么是重建而不是热换：quiche transport 没实现 `updateCert`（见上），
+ * HTTP/3 下热换在库层面就不存在。剩下的选择只有重建端点或重启进程。
+ *
+ * 为什么重建端点优于重启进程：**wss 通道完全不受影响**。重建只影响
+ * WebTransport 的 UDP socket，正在对局的玩家会被 `UdpAccel` 的停滞检测
+ * 自动切回 wss（1b 已实现的降级路径），对局继续；等下一次 matched 再走
+ * 新端点。而重启进程会断掉所有 WebSocket、直接踢人。
+ * 换句话说：**已有的降级路径正好就是换证的缓冲垫**，不需要额外机制。
+ *
+ * 为什么进程自己盯文件、而不用 certbot 的 deploy hook：
+ * 钩子是外部脚本，与进程之间没有现成通信通道；靠钩子就意味着
+ * 「重装系统 / 换机 / 忘记配」都会让续期悄悄失效。让进程自己发现，
+ * 这件事就不依赖任何人记得 —— 与 netem 脚本自带兜底清理同一个判断。
+ *
+ * 用 `fs.watchFile`（轮询 stat）而非 `fs.watch`（inotify）：certbot 是
+ * **替换符号链接**而不是原地改文件，inotify 盯的是旧 inode，换完就再也
+ * 收不到事件。轮询看的是路径，符号链接换指向照样能发现。
+ */
+WebTransportEndpoint.prototype._watchCert = function () {
+  if (!this.config.WT_CERT || !this.config.WT_KEY) return;
+  if (this.config.WT_CERT_WATCH === false) return;
+  var self = this;
+  var fs = require('fs');
+  var interval = this.config.WT_CERT_WATCH_MS || 60000;
+  var busy = false;
+
+  var onChange = function (cur, prev) {
+    // mtime 相同说明只是轮询触发、内容没变
+    if (cur.mtimeMs === prev.mtimeMs) return;
+    if (busy || self._closing) return;
+    busy = true;
+    // 延迟一拍再动：certbot 先写 fullchain 再写 privkey，
+    // 立刻读会拿到「新证书 + 旧私钥」的错配组合。
+    setTimeout(function () {
+      if (self._closing) { busy = false; return; }
+      self._rebuild(function () { busy = false; });
+    }, 2000);
+  };
+
+  fs.watchFile(this.config.WT_CERT, { interval: interval }, onChange);
+  fs.watchFile(this.config.WT_KEY, { interval: interval }, onChange);
+  this._certWatched = true;
+};
+
+/**
+ * 用新证书重建 Http3Server（会话全部作废，客户端由降级路径接住）。
+ *
+ * 端口必须复用**当前实际监听的端口**而不是配置值：配置里可能写 0
+ * （测试用随机端口），重建时再传 0 会换到另一个端口，
+ * 已下发给客户端的 `wtPort` 就全部指向空气了。
+ */
+WebTransportEndpoint.prototype._rebuild = function (cb) {
+  var self = this;
+  var curPort = this.port() || this.config.WT_PORT;
+  var oldServer = this.server;
+
+  this.listening = false;
+  // 会话作废：新端点的 QUIC 连接是全新的，旧 token 对应的 wt 已随旧 server 死掉。
+  // 不清会导致 sendFrame 往已关闭的会话写、isReady 给出假阳性。
+  for (var t in this.sessions) {
+    var s = this.sessions[t];
+    if (s.wt) { try { s.wt.close(); } catch (e) {} }
+    s.wt = null;
+  }
+  this.sessions = {}; this.byConn = {};
+  this.server = null;
+  if (oldServer) { try { oldServer.stopServer(); } catch (e) {} }
+
+  // 稍等让 native 侧释放端口，否则新 server 绑同一端口会失败
+  setTimeout(function () {
+    var savedPort = self.config.WT_PORT;
+    self.config.WT_PORT = curPort;
+    // 重建时不要再挂一遍 watch（已经在盯着了）
+    var alreadyWatched = self._certWatched;
+    self._certWatched = true;
+    self.listen(function (err) {
+      self._certWatched = alreadyWatched;
+      self.config.WT_PORT = savedPort;
+      if (err) {
+        self.stats.certReloadFail++;
+        if (self.hooks.onError) self.hooks.onError(err);
+      } else {
+        self.stats.certReloads++;
+      }
+      if (cb) cb(err);
+    });
+  }, 300);
+};
+
 WebTransportEndpoint.prototype.close = function (cb) {
   this._closing = true;
   this.listening = false;
+  // 必须先解除 watchFile：它会持有 libuv handle 让**进程无法退出**，
+  // 测试里表现为「断言全过但进程挂住」——比断言失败更难查。
+  if (this._certWatched) {
+    var fs = require('fs');
+    try { fs.unwatchFile(this.config.WT_CERT); } catch (e) {}
+    try { fs.unwatchFile(this.config.WT_KEY); } catch (e) {}
+    this._certWatched = false;
+  }
   for (var t in this.sessions) {
     var s = this.sessions[t];
     if (s.wt) { try { s.wt.close(); } catch (e) {} }
