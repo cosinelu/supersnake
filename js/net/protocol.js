@@ -18,7 +18,8 @@
 (function (root) {
   var CS = root.CS = root.CS || {};
 
-  var PROTO_VER = 1;
+  // v2：二进制快照升级为 BIN_VER=2（kind/null color/meteors），不允许新旧两端混跑。
+  var PROTO_VER = 2;
 
   // ---------------- 消息类型 ----------------
   // 客户端 → 服务器
@@ -26,7 +27,8 @@
     JOIN: 'join',       // { t, ver, name }
     CANCEL: 'cancel',   // { t }
     INPUT: 'input',     // { t, seq, a(angle), bo(boost 0/1) }
-    PING: 'ping'        // { t, ts }
+    PING: 'ping',       // { t, ts }
+    ACCEL: 'accel'      // { t, on(0/1/2) } TCP / 加速 / 双发探测
   };
   // 服务器 → 客户端
   var S2C = {
@@ -100,6 +102,8 @@
   function cancel() { return { t: C2S.CANCEL }; }
   function input(seq, angle, boost) { return { t: C2S.INPUT, seq: seq | 0, a: qAngle(angle), bo: boost ? 1 : 0 }; }
   function ping(ts) { return { t: C2S.PING, ts: ts }; }
+  // on: 0=TCP only, 1=accelerated only, 2=probe (send both until a full datagram proves the path)
+  function accel(mode) { return { t: C2S.ACCEL, on: mode === 2 ? 2 : (mode ? 1 : 0) }; }
 
   // ---------------- 快照序列化（服务器/LocalTransport 产出） ----------------
 
@@ -127,6 +131,8 @@
 
   function serBlock(b) {
     return {
+      // bid 让偶发 TCP 全量帧可重建二进制增量基线；旧客户端忽略未知字段。
+      bid: b.__bid != null ? b.__bid : (b.bid != null ? b.bid : null),
       x: qCoord(b.x), y: qCoord(b.y),
       c: b.color ? cShort(b.color) : null, k: b.kind || 'color', r: b.rarity || null,
       ph: Math.round((b.phase || 0) * 100) / 100, ttl: b.ttl | 0, rr: b.rr || b.r || 0
@@ -172,7 +178,7 @@
   }
 
   function deBlock(d) {
-    return { x: d.x, y: d.y, color: d.c ? cLong(d.c) : null, kind: d.k, rarity: d.r, phase: d.ph, ttl: d.ttl, r: d.rr || 0 };
+    return { bid: d.bid, x: d.x, y: d.y, color: d.c ? cLong(d.c) : null, kind: d.k, rarity: d.r, phase: d.ph, ttl: d.ttl, r: d.rr || 0 };
   }
 
   function deMeteor(d) {
@@ -186,7 +192,7 @@
     C2S: C2S, S2C: S2C, EVENT_KIND: EVENT_KIND, OVER_REASON: OVER_REASON,
     qCoord: qCoord, qAngle: qAngle,
     encode: encode, decode: decode,
-    join: join, cancel: cancel, input: input, ping: ping,
+    join: join, cancel: cancel, input: input, ping: ping, accel: accel,
     serSnake: serSnake, serBlock: serBlock, serMeteor: serMeteor,
     snap: snap, event: event,
     deSnake: deSnake, deBlock: deBlock, deMeteor: deMeteor

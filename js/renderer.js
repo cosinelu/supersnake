@@ -997,9 +997,9 @@
     var idealMapW = pw - 28;
     var blocks = {
       header: 46,                       // 标题 + 模式
-      // 传输通道诊断行：只有在线对战才有。列为独立可丢弃区块，
-      // 小屏下优先保证游戏信息 —— 它是诊断信息，不是玩法信息。
-      channel: (game.mode === 'multi' && game.online) ? 16 : 0,
+      // 传输通道诊断：静默降级必须始终可见，否则玩家无法区分 WT 与 wss。
+      // 两行：协议 + RTT/丢帧（或 TCP 迟到率）。
+      channel: (game.mode === 'multi' && game.online) ? 30 : 0,
       score: 54,                        // 「分数」标签 + 大号分数
       target: 26 + (game.mode === 'level' ? 14 : 0), // 目标/最高（闯关多一条进度条）
       detail: 34,                       // 分数构成 + 速度
@@ -1014,8 +1014,9 @@
       for (var i = 0; i < order.length; i++) s += bs[order[i]] || 0;
       return s;
     }
-    // 优先级从低到高丢弃（小地图与分数永不丢）
-    var droppable = ['hint', 'channel', 'detail', 'colors'];
+    // 优先级从低到高丢弃（小地图、分数、通道诊断永不丢）。
+    // 用户反馈手机端完全看不到协议，根因就是曾把 channel 放进此列表。
+    var droppable = ['hint', 'detail', 'colors'];
     var dropped = {};
     var need = total(blocks);
     for (var di = 0; di < droppable.length && need > availH; di++) {
@@ -1079,17 +1080,28 @@
     // 走加速通道 = 墨绿，回落 TCP = 赭红（不是错误，但确实没吃到收益）。
     // 取深色调是因为面板底是米白纸色（rgba(255,253,245,.72)），
     // 亮色荧光调在这上面几乎看不见。
-    if (!dropped.channel && game.mode === 'multi' && game.online && game.online.channel) {
+    if (game.mode === 'multi' && game.online && game.online.channel) {
       var ch = game.online.channel;
       var accel = (ch.kind !== 'tcp');
-      ctx.font = Math.round(10 * Math.min(1, k + 0.2)) + 'px sans-serif';
+      var ni = typeof game.online.netInfo === 'function' ? game.online.netInfo() : null;
+      ctx.font = 'bold ' + Math.round(10 * Math.min(1, k + 0.2)) + 'px sans-serif';
       ctx.fillStyle = accel ? '#2e7d6b' : '#a5592b';
       var chText = accel
         ? (ch.kind === 'wt' ? 'WebTransport · UDP' : '裸 UDP')
         : 'TCP · wss';
       // 中途降级过要显式标出来：只看当前状态会漏掉「开局是 UDP、后来掉了」
       if (ch.switches > 1) chText += '（切换 ' + ch.switches + ' 次）';
-      ctx.fillText(chText, cx, y + 5);
+      ctx.fillText(chText, cx, y + 4);
+      adv(14);
+
+      ctx.font = Math.round(9 * Math.min(1, k + 0.2)) + 'px sans-serif';
+      ctx.globalAlpha = 0.78;
+      var rtt = ni ? (accel ? ni.加速通道延迟ms : ni.WSS延迟ms) : 0;
+      var qText = accel
+        ? ('RTT ' + (rtt || '--') + 'ms · 丢 ' + (ni ? ni.逻辑帧丢失率 : 0) + '%')
+        : ('RTT ' + (rtt || '--') + 'ms · 迟到 ' + (ni ? ni.快照迟到率 : 0) + '%');
+      ctx.fillText(qText, cx, y + 3);
+      ctx.globalAlpha = 1;
       ctx.fillStyle = cfg.INK;   // 必须还原成墨色：面板是浅底，白字会看不见
       adv(16);
     }
@@ -1349,37 +1361,52 @@
       y3base = y3base + 20;
     }
 
-    // ---- 行 2：已解锁颜色格（按剩余宽度决定格数）+ 速度 ----
+    // ---- 行 2：在线时固定显示协议/网络质量；单机时显示颜色格。速度始终保留 ----
     var spd = Math.round(game.currentSpeed());
     var slow = (game.slowUntil && game.timeMs < game.slowUntil);
     var spdText = '速度 ' + spd + (slow ? ' (减速)' : '');
     ctx.font = '10px sans-serif';
     var spdW = ctx.measureText(spdText).width;
-    var sw = 15, gap = 4;
-    // 颜色格能画几个：留出速度文字的位置（速度优先级高于颜色格）
-    var gridRoom = availW - spdW - 12;
-    var maxCells = Math.max(0, Math.floor((gridRoom + gap) / (sw + gap)));
-    var cells = Math.min(cfg.MAX_COLORS, maxCells);
-    var gx = padL;
-    for (i = 0; i < cells; i++) {
-      var bx2 = gx + i * (sw + gap);
-      if (i < game.unlockedCount) {
-        drawCrayonBlock(ctx, bx2, y2 - sw / 2, sw, cfg.COLORS[cfg.COLOR_KEYS[i]], 30 + i, 4, {
-          rot: (u.hash2(i, 5, 2) - 0.5) * 0.3, wobble: 0.9
-        });
-      } else {
-        ctx.save();
-        ctx.globalAlpha = 0.45;
-        wobblyRoundRect(ctx, bx2, y2 - sw / 2, sw, sw, sw * 0.28, 30 + i, 4, 0.9);
-        ctx.fillStyle = '#CFC8BC';
-        ctx.fill();
-        ctx.strokeStyle = cfg.INK;
-        ctx.lineWidth = 1.1;
-        ctx.stroke();
-        ctx.restore();
+    if (game.mode === 'multi' && game.online && typeof game.online.netSummary === 'function') {
+      // 竖屏旧实现完全没有通道行；手机上因此看不到协议。网络诊断优先于颜色格，
+      // 直接占用行 2 左侧，且不参与「空间不足就丢弃」逻辑。
+      var netText = game.online.netSummary();
+      var maxNetW = Math.max(60, availW - spdW - 12);
+      while (netText.length > 4 && ctx.measureText(netText).width > maxNetW) {
+        netText = netText.slice(0, -1);
+      }
+      ctx.fillStyle = game.online.channel.kind === 'tcp' ? '#a5592b' : '#2e7d6b';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText(netText, padL, y2);
+      ctx.fillStyle = cfg.INK;
+    } else {
+      var sw = 15, gap = 4;
+      // 颜色格能画几个：留出速度文字的位置（速度优先级高于颜色格）
+      var gridRoom = availW - spdW - 12;
+      var maxCells = Math.max(0, Math.floor((gridRoom + gap) / (sw + gap)));
+      var cells = Math.min(cfg.MAX_COLORS, maxCells);
+      var gx = padL;
+      for (i = 0; i < cells; i++) {
+        var bx2 = gx + i * (sw + gap);
+        if (i < game.unlockedCount) {
+          drawCrayonBlock(ctx, bx2, y2 - sw / 2, sw, cfg.COLORS[cfg.COLOR_KEYS[i]], 30 + i, 4, {
+            rot: (u.hash2(i, 5, 2) - 0.5) * 0.3, wobble: 0.9
+          });
+        } else {
+          ctx.save();
+          ctx.globalAlpha = 0.45;
+          wobblyRoundRect(ctx, bx2, y2 - sw / 2, sw, sw, sw * 0.28, 30 + i, 4, 0.9);
+          ctx.fillStyle = '#CFC8BC';
+          ctx.fill();
+          ctx.strokeStyle = cfg.INK;
+          ctx.lineWidth = 1.1;
+          ctx.stroke();
+          ctx.restore();
+        }
       }
     }
     // 速度：贴文本区右侧
+    ctx.font = '10px sans-serif';
     ctx.textAlign = 'right';
     ctx.globalAlpha = 0.7;
     ctx.fillStyle = slow ? '#2EC4B6' : cfg.INK;
@@ -1397,7 +1424,9 @@
       var xr = padL;
       for (var li = 0; li < lb.length; li++) {
         var row = lb[li];
-        var nm = row.name.length > 4 ? row.name.slice(0, 4) : row.name;
+        // 首个二进制帧理论上可能先于低频 meta；即使协议层兜底失效，HUD 也不能崩。
+        var rawName = row.name == null ? ('玩家' + row.id) : String(row.name);
+        var nm = rawName.length > 4 ? rawName.slice(0, 4) : rawName;
         var txt = (li + 1) + '.' + nm + ' ' + row.length;
         ctx.font = (row.isPlayer ? 'bold ' : '') + '10px sans-serif';
         var tw = ctx.measureText(txt).width;

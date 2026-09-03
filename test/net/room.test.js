@@ -44,6 +44,7 @@ section('协议编解码');
 (function () {
   // 客户端消息构造
   var j = P.join('测试玩家');
+  ok(P.PROTO_VER === 2, '**外层协议版本随二进制 v2 一起升级，禁止新旧端混跑**');
   ok(j.t === 'join' && j.ver === P.PROTO_VER && j.name === '测试玩家', 'join 消息构造');
   var inp = P.input(7, Math.PI, true);
   ok(inp.t === 'input' && inp.seq === 7 && inp.bo === 1, 'input 消息构造（seq/boost）');

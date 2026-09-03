@@ -101,7 +101,8 @@ docs/                   本目录
 ### 5.1 协议 `js/net/protocol.js`
 
 IIFE 同时挂 `CS.protocol`（浏览器）与 `module.exports`（server require）。
-消息一律 JSON：`{ t: 类型, … }`。
+消息一律 JSON：`{ t: 类型, … }`。当前 `PROTO_VER=2`；这次版本提升与二进制
+`BIN_VER=2` 同步，用于拒绝新旧客户端/服务端交叉运行，避免不兼容快照持续解码失败。
 
 客户端 → 服务器：
 
@@ -109,7 +110,8 @@ IIFE 同时挂 `CS.protocol`（浏览器）与 `module.exports`（server require
 |---|---|---|
 | `join` | `name` | 进匹配队列 |
 | `cancel` | — | 取消匹配 |
-| `input` | `seq, angle, boost` | 方向输入，30Hz 上限，服务端只保留最新 |
+| `input` | `seq, angle, boost` | 方向输入，30Hz 上限；`seq` 在 TCP/UDP/WT 间共享，服务端只保留最新 |
+| `accel` | `on` | 可靠控制面：0=TCP，1=加速，2=TCP+加速双发探测 |
 | `ping` | `ts` | 心跳/测 RTT |
 
 服务器 → 客户端：
@@ -141,27 +143,32 @@ onMatched / onStart / onSnap / onEvent / onOver / onDrop  — 回调注册
 - `LocalTransport`：内部直接实例化现有 `CS.Multiplayer`（本地 AI 对战），把本地对局状态包装成与 `snap/event` 同构的对象。**联机 UI/渲染管线先用它开发**，服务器没好也能干活。
 - `WsTransport`：连 `wss://host/ws`，负责编码、心跳、断线回调（→ 直接进"掉线判负"结算页）。
 
-> **v3.1 起新增 UDP 传输层**：`UdpTransport`（小游戏 `wx.createUDPSocket`）走二进制协议 +
-> 冗余打散，WebSocket 降级为控制通道与保底通道。设计见
-> **`docs/architecture/02-udp-transport.md`**。上层 `onlineMatch` 与判定逻辑零改动。
+> **v3.1 起新增加速传输层**：`UdpAccel` 在小游戏/Node 上使用裸 UDP，在浏览器使用
+> WebTransport datagram；两者共用二进制协议与冗余打散，WebSocket 保留为可靠控制面和
+> 15Hz 全量保底。设计见 **`docs/architecture/02-udp-transport.md`**。上层
+> `onlineMatch` 与判定逻辑零改动。
 
 ### 5.3 服务端房间 `server/room.js` + `headlessGame.js`
 
 - `HeadlessGame`：伪装成本地 `game` 对象，提供 `multiplayer.js` 需要的字段：
   `walls / spawner / particles(空实现) / elapsed / survivalScore / elimScore / mpBonusScore / elimCombo / unlockedKeys / setItemToast(→ 转成 event 广播) / updateMulti(→ 钩子)`，`CS.audio` 挂 no-op。
-- 真人玩家的蛇：输入来自 ws（最新 angle/boost 覆盖），不走 AI；AI 补位蛇照旧走 `CS.AI`。
+- 真人玩家的蛇：输入来自可靠 TCP 或已激活的 UDP/WT 旁路（最新 angle/boost 覆盖），不走 AI；
+  两条物理通道共享同一个单调 `seq/frameId`，服务端将其原样作为快照 `ack` 基线；
+  AI 补位蛇照旧走 `CS.AI`。
 - **固定步长模拟**：`TICK = 33ms`（30Hz），`multiplayer.update(0.033)`，与渲染解耦，避免本地 RAF 帧率差异影响判定。
-- **快照广播 30Hz**（v3.1 起每 tick 发一次；v3.0 为 15Hz / 隔 tick）。事件即时发。
-  > `SNAP_EVERY` 是唯一的带宽旋钮：1 = 30Hz（当前默认），2 = 15Hz。
-  > **服务器模拟频率不随之变化**（恒 30Hz），客户端插值延迟由
-  > `matched.snapIntervalMs` 自动推导 ⇒ 改这个数不需要动任何前端代码。
+- **快照广播按实际通道分频**，事件仍即时发：UDP / WebTransport 二进制 30Hz，
+  TCP / wss 全量 JSON 保底 15Hz。
+  > `SNAP_EVERY=1` 控制加速通道，`TCP_SNAP_EVERY=2` 控制保底通道；
+  > **服务器模拟频率不随之变化**（恒 30Hz）。`matched` 同时下发两套间隔，
+  > 客户端在通道激活 / 降级时动态切换插值缓冲：加速通道 70ms，wss 119ms。
+  > 这样既保留二进制 30Hz 的实时性，也避免 TCP 队头阻塞把 30Hz JSON 聚成突发。
   > 公式与实测见 `02-udp-transport.md` §5。
 - 掉线处理：ws close → `kill(entry)`（复用现有死亡/尸体掉落逻辑）→ 广播 event；房间存活真人 ≤1 → 结算解散。
 
 ### 5.4 流畅度 `js/net/prediction.js` + `interpolation.js`
 
-- **自己的蛇**：本地每帧按收到的最新输入即刻模拟移动（参数与服务器一致），服务器快照带回 `ack` 后做**软校正**——偏差 < 阈值直接忽略，偏差大则按 10%/帧 向权威位置收敛，绝不瞬移。蛇运动连续平滑，预测几乎不偏差，校正应极少触发。
-  > 本机蛇**不经过插值缓冲**，操作到画面的延迟恒为 0，与快照频率无关。
+- **自己的蛇**：本地每帧按收到的最新输入即刻模拟移动（参数与服务器一致），服务器快照带回 `ack` 后做**软校正**。每次权威快照应**替换**当前待校正残差，不能把同一时段的误差反复累加；位置校正必须把蛇头与整条 `trail` 一起平移，不能只移动 `x/y` 后让身体继续沿旧轨迹，否则首节间距会被拉大，表现为「头身分离」。偏差 ≥ 硬阈值时才整体重建。
+  > 本机蛇**不经过插值缓冲**，操作到画面的延迟恒为 0，与快照频率无关；但校正频率越高，错误的“累加残差 + 只挪头”实现会越快放大，因此该不变量必须单独测试。
 - **他人蛇/食物/道具**：维护插值缓冲，在两帧快照间对位置/角度插值（角度走最短弧）。
   渲染始终比权威时刻慢 `delayMs`，肉眼无感。
   > `delayMs` **不是常量**，由快照间隔推导（`interval × 1.5 + 20`）：

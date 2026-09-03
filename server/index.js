@@ -11,6 +11,7 @@
  *   cancel → matchmaker.remove
  *   input  → 所在房间 handleInput
  *   ping   → pong
+ *   accel  → 客户端暂停/恢复加速下行（停滞时真正回落 TCP）
  * 连接关闭 → 队列中则移除；对局中则 room.handleDrop（掉线判负）。
  * 畸形/超大消息 → error 回复并断开（1002）。
  */
@@ -85,13 +86,14 @@ function createServer(overrides) {
   var onAccelInput = function (connId, inp) {
     var c = conns[connId];
     var room = c && c.roomId && matchmaker.rooms[c.roomId];
-    // 复用 TCP 路径同一个入口：判定逻辑零改动，只是换了传输层。
-    // frameId 去重已在端点内做过（与 room 的 seq 语义一致），
-    // 这里给 seq 传 lastSeq+1 让 room 无条件采纳，避免二次去重把包吃掉。
+    // 复用 TCP 路径同一个入口：frameId 就是客户端跨 TCP/加速通道共享的输入 seq。
+    // 不能在服务端另造 lastSeq+1：那会让客户端回落 TCP 时从较小序号继续，
+    // 被 room 当成乱序包丢弃，方向最长冻结 INPUT_SEQ_RESET_GAP 帧。
     if (room && room.humans[connId]) {
-      room.handleInput(connId, {
-        seq: room.humans[connId].lastSeq + 1, a: inp.angle, bo: inp.boost
+      var accepted = room.handleInput(connId, {
+        seq: inp.frameId, a: inp.angle, bo: inp.boost
       });
+      if (accepted && hub) hub.syncInputSeq(connId, inp.frameId);
     }
   };
 
@@ -160,11 +162,20 @@ function createServer(overrides) {
           break;
         case P.C2S.INPUT: {
           var room = conn.roomId && matchmaker.rooms[conn.roomId];
-          if (room) room.handleInput(connId, msg);
+          if (room && room.handleInput(connId, msg) && hub) {
+            // TCP 回落可能持续很久；把已采纳 seq 同步给加速端点，恢复时首帧不会
+            // 因相对旧 frameId 前跳超过 INPUT_MAX_SEQ_JUMP 而被永久拒绝。
+            hub.syncInputSeq(connId, msg.seq);
+          }
           break;
         }
         case P.C2S.PING:
           send(ws, { t: P.S2C.PONG, ts: msg.ts });
+          break;
+        case P.C2S.ACCEL:
+          // 下行停滞必须由客户端经可靠通道显式告知服务器；否则服务端仍把
+          // 已握手会话视为 ready，会继续抑制 TCP 快照，形成“假回落”。
+          if (hub) hub.setClientActive(connId, msg.on === 2 ? 2 : (msg.on ? 1 : 0));
           break;
         default:
           send(ws, { t: P.S2C.ERROR, code: 'unknown', msg: '未知消息类型: ' + msg.t });
@@ -203,16 +214,27 @@ function createServer(overrides) {
         }
         if (udp) {
           pending++;
-          try { udp.listen(oneDone); } catch (e) { udp = null; oneDone(); }
+          try { udp.listen(oneDone); } catch (e) {
+            udp = null;
+            if (hub) hub.udp = null;
+            oneDone();
+          }
         }
         if (wt) {
           pending++;
           try {
             wt.listen(function (err) {
-              if (err) wt = null;   // 起不来就当没有这条通道
+              if (err) {
+                wt = null;   // 起不来就当没有这条通道
+                if (hub) hub.wt = null;
+              }
               oneDone();
             });
-          } catch (e) { wt = null; oneDone(); }
+          } catch (e) {
+            wt = null;
+            if (hub) hub.wt = null;
+            oneDone();
+          }
         }
         if (pending === 0 && !fired) { fired = true; if (cb) cb(); }
       });

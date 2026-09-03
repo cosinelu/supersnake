@@ -123,6 +123,15 @@
     this.pos += 2;
     return this;
   };
+  BinWriter.prototype.i16 = function (v) {
+    this._need(2);
+    var n = Math.round(v || 0);
+    if (n < -32768) n = -32768;
+    if (n > 32767) n = 32767;
+    this.view.setInt16(this.pos, n, true);
+    this.pos += 2;
+    return this;
+  };
   BinWriter.prototype.u32 = function (v) {
     this._need(4);
     this.view.setUint32(this.pos, v >>> 0, true);
@@ -184,6 +193,12 @@
   BinReader.prototype.u16 = function () {
     if (!this._ok(2)) return 0;
     var v = this.view.getUint16(this.pos, true);
+    this.pos += 2;
+    return v;
+  };
+  BinReader.prototype.i16 = function () {
+    if (!this._ok(2)) return 0;
+    var v = this.view.getInt16(this.pos, true);
     this.pos += 2;
     return v;
   };

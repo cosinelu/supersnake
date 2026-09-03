@@ -38,6 +38,7 @@
     this.socketFactory = opts.socketFactory || null;
     this.onSnap = opts.onSnap || function () {};
     this.onStateChange = opts.onStateChange || function () {};
+    this.onProbe = opts.onProbe || function () {};
     this.dup = opts.dup || 3;
     this.frameIntervalMs = opts.frameIntervalMs || 33;
 
@@ -50,11 +51,20 @@
     this.frameId = 0;
     this.lastRecvTick = -1;     // 下行去重：tick 回退或重复则丢弃
     this.lastRecvAt = 0;
-    this.stats = { sent: 0, recv: 0, dupDropped: 0, decodeFail: 0, fallbacks: 0 };
+    this.tickStep = 1;          // 相邻逻辑快照的 tick 差（默认每 tick 一帧）
+    this.expectedDup = 3;       // 服务端每帧发送副本数（诊断副本接收率）
+    this._lastHelloAt = 0;
+    this._prevPathRtt = 0;
+    this.stats = {
+      sent: 0, recv: 0, dupDropped: 0, decodeFail: 0, fallbacks: 0, socketErrors: 0,
+      rawSnaps: 0, missingFrames: 0, outOfOrder: 0,
+      pathRttMs: 0, pathRttJitterMs: 0, pathRttMinMs: 0, pathRttMaxMs: 0
+    };
 
     this._hsTimer = null;
     this._kaTimer = null;
     this._stallTimer = null;
+    this._probeTimer = null;    // 回落后仅在双发探测窗内尝试恢复，避免小 ACK 假阳性
     this._pending = [];         // 打散发送的定时器句柄，dispose 时清理
   }
 
@@ -69,6 +79,11 @@
     this.port = info.udpPort;
     this.token = info.udpToken >>> 0;
     if (info.snapIntervalMs) this.frameIntervalMs = info.snapIntervalMs;
+    if (info.tickStep > 0) this.tickStep = info.tickStep | 0;
+    if (info.expectedDup > 0) {
+      this.expectedDup = info.expectedDup | 0;
+      this.dup = this.expectedDup; // 上下行冗余策略保持一致，且诊断按同一真值计算
+    }
 
     var self = this;
     try {
@@ -77,6 +92,21 @@
     if (!this.sock) return false;
 
     this.sock.onMessage(function (u8) { self._onMessage(u8); });
+    if (typeof this.sock.onError === 'function') {
+      this.sock.onError(function () {
+        self.stats.socketErrors++;
+        self.available = false;
+        // WebTransport writable/reader/会话关闭属于终止性错误：当前 socket 已不可恢复。
+        // 停掉握手、保活、探测和打散定时器，避免每 300ms/5s 重复发送 accel(0)。
+        if (self._hsTimer) { clearInterval(self._hsTimer); self._hsTimer = null; }
+        if (self._kaTimer) { clearInterval(self._kaTimer); self._kaTimer = null; }
+        if (self._stallTimer) { clearInterval(self._stallTimer); self._stallTimer = null; }
+        if (self._probeTimer) { clearTimeout(self._probeTimer); self._probeTimer = null; }
+        for (var i = 0; i < self._pending.length; i++) clearTimeout(self._pending[i]);
+        self._pending.length = 0;
+        self._setActive(false, true);
+      });
+    }
 
     this._sendHello();
     // 打洞可能丢包，握手窗口内重试几次
@@ -87,7 +117,10 @@
       if (tries * 300 >= HANDSHAKE_TIMEOUT_MS) {
         // 判定 UDP 不可用：静默走 TCP，不打扰玩家（架构文档 §4.3）
         clearInterval(self._hsTimer); self._hsTimer = null;
-        self._setActive(false);
+        // 即使 active 从未变成 true，也必须强制上报一次 false：服务端可能已经
+        // 收到 hello 并开始发二进制，只是回程 ACK/快照全丢。不上报就会形成
+        // 服务端持续抑制 TCP、客户端却等待 TCP 的“假回落”。
+        self._setActive(false, true);
         return;
       }
       self._sendHello();
@@ -103,48 +136,97 @@
   UdpAccel.prototype._sendHello = function () {
     var w = new B.BinWriter(8);
     w.u8(MAGIC_HELLO); w.u32(this.token); w.finishCrc16();
+    this._lastHelloAt = Date.now();
     this._raw(w.bytes());
   };
 
   UdpAccel.prototype._raw = function (u8) {
-    if (!this.sock) return;
-    try { this.sock.send(u8, this.host, this.port); this.stats.sent++; } catch (e) { /* 忽略瞬时错误 */ }
+    if (!this.sock) return false;
+    try {
+      if (this.sock.send(u8, this.host, this.port) === false) {
+        this.stats.socketErrors++;
+        this.available = false;
+        this._setActive(false, true);
+        return false;
+      }
+      this.stats.sent++;
+      return true;
+    } catch (e) {
+      this.stats.socketErrors++;
+      this.available = false;
+      this._setActive(false, true);
+      return false;
+    }
   };
 
-  UdpAccel.prototype._setActive = function (v) {
-    if (this.active === v) return;
+  UdpAccel.prototype._setActive = function (v, forceNotify) {
+    if (this.active === v && !forceNotify) return;
+    var wasActive = this.active;
     this.active = v;
-    if (!v) this.stats.fallbacks++;
+    if (!v && wasActive) this.stats.fallbacks++;
     this.onStateChange(v);
   };
 
   UdpAccel.prototype._onMessage = function (u8) {
     if (!u8 || !u8.length) return;
-    this.lastRecvAt = Date.now();
 
     if (u8[0] === MAGIC_HACK) {
+      // ACK 与 hello 一样是 7B 完整帧：magic1 + token4 + crc16。
+      // 只看首字节会把随机/截断包当成可用性证明，并刷新停滞计时形成假在线。
+      if (u8.length !== 7 || new B.BinReader(u8).checkCrc16() !== true) {
+        this.stats.decodeFail++;
+        return;
+      }
+      var ackToken = new DataView(u8.buffer, u8.byteOffset, u8.byteLength).getUint32(1, true);
+      if (ackToken !== this.token) { this.stats.decodeFail++; return; }
+      this.lastRecvAt = Date.now();
+      if (this._lastHelloAt > 0) {
+        var rtt = Math.max(0, Date.now() - this._lastHelloAt);
+        this.stats.pathRttMs = rtt;
+        if (!this.stats.pathRttMinMs || rtt < this.stats.pathRttMinMs) this.stats.pathRttMinMs = rtt;
+        if (rtt > this.stats.pathRttMaxMs) this.stats.pathRttMaxMs = rtt;
+        if (this._prevPathRtt > 0) {
+          this.stats.pathRttJitterMs +=
+            (Math.abs(rtt - this._prevPathRtt) - this.stats.pathRttJitterMs) / 16;
+        }
+        this._prevPathRtt = rtt;
+      }
       if (!this.available) {
         this.available = true;
         if (this._hsTimer) { clearInterval(this._hsTimer); this._hsTimer = null; }
         this._startKeepalive();
         this._startStallWatch();
+        this._setActive(true);   // 首次握手：允许加速通道接管
+      } else if (!this.active) {
+        // 回落后的 hello_ack 只能证明 7B 小包往返，不足以证明完整快照可达。
+        // 进入“服务器双发”探测窗；收到真实 snap 后才 active=true 并停止 TCP。
+        this._startProbe();
       }
-      this._setActive(true);
       return;
     }
 
     var dec = BP.decSnapBin(u8);
     if (!dec) { this.stats.decodeFail++; return; }
+    this.lastRecvAt = Date.now();
+    this.stats.rawSnaps++;
 
-    // 下行去重：冗余副本与乱序。tick 是 uint16，需处理环回
+    // 下行去重：冗余副本与乱序。tick 是 uint16，需处理环回。
+    // 同时统计逻辑帧缺失；这才是 UDP/WT 可称为「丢帧率」的指标。
     if (this.lastRecvTick >= 0) {
       var d = (dec.tk - this.lastRecvTick) & 0xFFFF;
-      // d 落在 [1, 32767] 视为更新的帧；否则是旧帧或重复
-      if (d === 0 || d > 32767) { this.stats.dupDropped++; return; }
+      if (d === 0) { this.stats.dupDropped++; return; }
+      if (d > 32767) {
+        this.stats.dupDropped++;
+        this.stats.outOfOrder++;
+        return;
+      }
+      var logical = Math.round(d / this.tickStep);
+      if (logical > 1) this.stats.missingFrames += logical - 1;
     }
     this.lastRecvTick = dec.tk;
     this.stats.recv++;
-    this._setActive(true);
+    if (this._probeTimer) { clearTimeout(this._probeTimer); this._probeTimer = null; }
+    this._setActive(true);       // 只有完整二进制快照到达才确认恢复
     this.onSnap(dec);
   };
 
@@ -157,9 +239,12 @@
    *
    * @returns {boolean} 是否已由 UDP 承载（false 时调用方应走 TCP）
    */
-  UdpAccel.prototype.sendInput = function (angle, boost) {
+  UdpAccel.prototype.sendInput = function (angle, boost, seq) {
     if (!this.active || !this.sock) return false;
-    this.frameId = (this.frameId + 1) & 0xFFFF;
+    // WsTransport 传入跨 TCP/加速通道共享的逻辑序号；独立测试/工具可省略并沿用内部计数。
+    // 两条通道若各自计数，早期加速回落后 TCP seq 会落后服务端 lastSeq，输入将被冻结。
+    this.frameId = (typeof seq === 'number' && isFinite(seq))
+      ? (seq & 0xFFFF) : ((this.frameId + 1) & 0xFFFF);
     var frag = BP.encInputFrag(this.token, this.frameId, angle, boost);
     this._raw(frag);
     if (this.dup <= 1) return true;
@@ -202,14 +287,26 @@
     if (this._pending.length > 64) this._pending.shift();
   };
 
+  /** 回落后的安全恢复：短暂请求服务器双发，完整快照到达后才停 TCP。 */
+  UdpAccel.prototype._startProbe = function () {
+    if (this.active || this._probeTimer) return;
+    var self = this;
+    this.onProbe(true);
+    this._probeTimer = setTimeout(function () {
+      self._probeTimer = null;
+      if (!self.active) self.onProbe(false);
+    }, STALL_MS + 200);
+  };
+
   /** NAT 保活：死亡/观战时不发上行，映射会失效（通常 30s） */
   UdpAccel.prototype._startKeepalive = function () {
     var self = this;
     if (this._kaTimer) return;
     this._kaTimer = setInterval(function () {
       if (!self.sock) return;
-      if (Date.now() - self.lastRecvAt < KEEPALIVE_MS) return;
-      self._sendHello();   // hello 兼作 keepalive，服务器会刷新 lastSeen
+      // 无论下行是否繁忙都发一次极小 hello：除 NAT 保活外，它还是加速通道
+      // 唯一可用的双向 RTT 探针。7 字节 / 5 秒可忽略，服务端会立即回 hello_ack。
+      self._sendHello();
     }, KEEPALIVE_MS);
   };
 
@@ -227,6 +324,7 @@
     if (this._hsTimer) { clearInterval(this._hsTimer); this._hsTimer = null; }
     if (this._kaTimer) { clearInterval(this._kaTimer); this._kaTimer = null; }
     if (this._stallTimer) { clearInterval(this._stallTimer); this._stallTimer = null; }
+    if (this._probeTimer) { clearTimeout(this._probeTimer); this._probeTimer = null; }
     for (var i = 0; i < this._pending.length; i++) clearTimeout(this._pending[i]);
     this._pending.length = 0;
     if (this.sock) { try { this.sock.close(); } catch (e) {} this.sock = null; }
@@ -312,8 +410,27 @@
       var wt;
       try { wt = new WT(url, opts); } catch (e) { return null; }
 
-      var writer = null, reader = null, onMsg = null, closed = false;
+      var writer = null, reader = null, onMsg = null, onError = null, closed = false;
       var queue = [];   // ready 之前的待发数据（限长，防异常场景无限增长）
+
+      function fail(err) {
+        if (closed) return;
+        closed = true;
+        queue.length = 0;
+        if (onError) onError(err || new Error('WebTransport datagram closed'));
+      }
+
+      function writeDatagram(u8) {
+        if (!writer || closed) return false;
+        try {
+          var pending = writer.write(u8);
+          if (pending && typeof pending.catch === 'function') pending.catch(fail);
+          return true;
+        } catch (e) {
+          fail(e);
+          return false;
+        }
+      }
 
       // datagrams.writable 在 1.6.x 已标记 deprecated，但 createWritable
       // 未必存在 ⇒ 能力探测，不硬用其中一个
@@ -330,38 +447,38 @@
           reader = wt.datagrams.readable.getReader();
         } catch (e) { return; }
         for (var i = 0; i < queue.length; i++) {
-          try { writer.write(queue[i]); } catch (e) { break; }
+          if (!writeDatagram(queue[i])) break;
         }
         queue.length = 0;
         (function pump() {
           if (closed || !reader) return;
           reader.read().then(function (res) {
-            if (res.done || closed) return;
+            if (res.done || closed) { if (res.done) fail(); return; }
             if (onMsg) {
               var v = res.value;
               onMsg(v instanceof Uint8Array ? v : new Uint8Array(v));
             }
             pump();
-          }).catch(function () { /* 会话结束：停滞检测会让上层回落 TCP */ });
+          }).catch(fail);
         })();
-      }).catch(function () {
-        // 握手失败（UDP 被封 / 证书问题 / 服务未起）不抛错：
-        // UdpAccel 收不到 hello_ack，1.5s 后自行判定不可用并静默走 wss。
-        // **这条回退路径是必需项** —— WebTransport 目前没有 TCP 回退。
-        closed = true;
-      });
+      }).catch(fail);
 
-      wt.closed.then(function () { closed = true; }).catch(function () { closed = true; });
+      wt.closed.then(function () { fail(); }).catch(fail);
 
       return {
         onMessage: function (cb) { onMsg = cb; },
+        onError: function (cb) { onError = cb; },
         send: function (u8) {
-          if (closed) return;
-          if (!writer) { if (queue.length < 32) queue.push(u8); return; }
-          try { writer.write(u8); } catch (e) { closed = true; }
+          if (closed) return false;
+          if (!writer) {
+            if (queue.length < 32) queue.push(u8);
+            return true;
+          }
+          return writeDatagram(u8);
         },
         close: function () {
           closed = true;
+          queue.length = 0;
           try { if (wt) wt.close(); } catch (e) {}
         }
       };

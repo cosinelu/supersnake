@@ -15,9 +15,9 @@
  *   - 人均快照速率 ≥ 标称的 65%（定时器抖动容差）
  *   - 人均下行 ≤ 40 KB/s（预算见架构文档 §7）
  *
- * **这条路径量的是 TCP JSON 保底通道**：机器人客户端不打洞，
- * 所以拿到的是最坏情况带宽。UDP 二进制路径的实测值见
- * `test/net/udp.e2e.test.js` 场景 D（同为 30Hz 时约为此值的 1/4）。
+ * **这条路径量的是 TCP JSON 保底通道**：机器人客户端不打洞。
+ * 当前加速通道 30Hz、TCP 保底 15Hz；两条物理特性不同的通道不再强行同频。
+ * UDP / WebTransport 二进制路径的实测值见 `test/net/udp.e2e.test.js` 场景 D。
  */
 var path = require('path');
 var zlib = require('zlib');
@@ -25,10 +25,10 @@ var createServer = require(path.join(__dirname, '..', '..', 'server', 'index.js'
 var BotClient = require(path.join(__dirname, 'botClient.js'));
 require(path.join(__dirname, '..', '..', 'js', 'net', 'protocol.js'));
 var P = globalThis.CS.protocol;
-// 标称快照频率从生产配置推导：SNAP_EVERY 改了这里要跟着变，
-// 写死「15Hz / ≥10 帧」会在提频后变成一条永远通过的空断言。
+// 本工具的机器人不打洞，量的是 TCP 保底通道，因此必须从
+// TCP_SNAP_EVERY 推导；若仍读 SNAP_EVERY，会把 15Hz 的正确行为误报成回归。
 var PROD = require(path.join(__dirname, '..', '..', 'server', 'config.js'));
-var NOMINAL_HZ = 1000 / (PROD.TICK_MS * PROD.SNAP_EVERY);
+var NOMINAL_HZ = 1000 / (PROD.TICK_MS * PROD.TCP_SNAP_EVERY);
 var MIN_HZ = NOMINAL_HZ * 0.65;
 
 var CLIENTS = parseInt(process.argv[2], 10) || 100;

@@ -66,6 +66,11 @@
     this.snapIntervalMs = 0; // 0 = 未从服务器获知
     this.cap = 30;           // 与旧行为一致（15Hz 下约 2 秒历史）
     this.snaps = []; // [{ time(本地接收时刻), byId: {id: deSnake} }] 按时间升序
+    // 缓冲是否够用必须可观测：renderT 越过最新帧时只能钳住不动，
+    // 这正是玩家看到「停一下、再跳一下」的直接原因。
+    this.stats = { samples: 0, interpolated: 0, latestClamps: 0, oldestClamps: 0 };
+    this.lastLeadMs = 0;     // 最新快照相对 renderT 还领先多少；负数 = 缓冲已耗尽
+    this._lastBracketKind = 'none';
   }
 
   /**
@@ -103,16 +108,20 @@
   /** 取渲染时刻的前后两帧快照（不足两帧时返回 [最新, 最新]） */
   InterpBuffer.prototype._bracket = function (renderT) {
     var ss = this.snaps;
-    if (!ss.length) return null;
+    if (!ss.length) { this._lastBracketKind = 'none'; return null; }
+    this.lastLeadMs = ss[ss.length - 1].time - renderT;
     if (ss.length === 1 || renderT >= ss[ss.length - 1].time) {
+      this._lastBracketKind = 'latest';
       return [ss[ss.length - 1], ss[ss.length - 1], 0];
     }
     for (var i = ss.length - 1; i >= 1; i--) {
       if (ss[i - 1].time <= renderT) {
         var span = ss[i].time - ss[i - 1].time;
+        this._lastBracketKind = 'interpolate';
         return [ss[i - 1], ss[i], span > 0 ? (renderT - ss[i - 1].time) / span : 0];
       }
     }
+    this._lastBracketKind = 'oldest';
     return [ss[0], ss[0], 0];
   };
 
@@ -123,6 +132,10 @@
   InterpBuffer.prototype.sample = function (nowMs) {
     var br = this._bracket(nowMs - this.delay);
     if (!br) return null;
+    this.stats.samples++;
+    if (this._lastBracketKind === 'latest') this.stats.latestClamps++;
+    else if (this._lastBracketKind === 'oldest') this.stats.oldestClamps++;
+    else if (this._lastBracketKind === 'interpolate') this.stats.interpolated++;
     var s0 = br[0], s1 = br[1], t = Math.max(0, Math.min(1, br[2]));
     var out = {};
     for (var id in s1.byId) {

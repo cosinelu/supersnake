@@ -77,12 +77,12 @@ function mkEntry(id, len, x, y) {
 function t1() {
   section('T1 二进制读写器');
   var w = new B.BinWriter(4);                       // 故意给小容量，逼出扩容
-  w.u8(1).u16(65535).u32(4294967295).i8(-128).u8(255);
-  ok(w.length() === 9, '自动扩容后长度正确（9）', '实际 ' + w.length());
+  w.u8(1).u16(65535).u32(4294967295).i8(-128).i16(-32768).u8(255);
+  ok(w.length() === 11, '自动扩容后长度正确（11）', '实际 ' + w.length());
 
   var r = new B.BinReader(w.bytes());
   ok(r.u8() === 1 && r.u16() === 65535 && r.u32() === 4294967295 &&
-    r.i8() === -128 && r.u8() === 255, '各宽度读写往返一致');
+    r.i8() === -128 && r.i16() === -32768 && r.u8() === 255, '各宽度读写往返一致');
   ok(r.overflow === false, '正常读取不置 overflow');
   r.u8();
   ok(r.overflow === true, '越界读取置 overflow（UDP 截断包的防线）');
@@ -238,12 +238,32 @@ function t4() {
   var add = [], del = [];
   for (var i = 0; i < 3; i++) add.push({ bid: i, x: rnd() * M.W, y: rnd() * M.H, color: 'red' });
   for (i = 0; i < 4; i++) del.push(100 + i);
-  var u8 = BP.encSnapBin({ tick: 1, ack: 1, timeMs: 90000, entries: ents, blockAdd: add, blockDel: del });
-  console.log('       18蛇x25节 + 色块增量 = ' + u8.length + ' 字节');
-  // 门槛按「必须单包」倒推，不按理想值拍脑袋：
-  // 1472 是 UDP 安全载荷，1400 是留给组包器的硬约束。
-  ok(u8.length <= UDP_SAFE, '压进单个 UDP datagram（' + u8.length + ' ≤ ' + UDP_SAFE + '）');
-  ok(u8.length <= HARD_CAP, '满足组包硬约束（' + u8.length + ' ≤ ' + HARD_CAP + '）');
+  var meteors = [];
+  for (i = 0; i < cfg.METEOR_MAX; i++) {
+    meteors.push({ x: i ? 4200 : -40, y: 500 + i * 100, vx: i ? -140 : 140, vy: 0,
+      color: 'green', phase: i, trail: [
+        { x: -60 + i * 10, y: 500 }, { x: -55 + i * 10, y: 500 },
+        { x: -50 + i * 10, y: 500 }, { x: -45 + i * 10, y: 500 }
+      ] });
+  }
+  var fullTypical = BP.encSnapBin({
+    tick: 1, ack: 1, timeMs: 90000, entries: ents,
+    blockAdd: add, blockDel: del, meteors: meteors
+  });
+  var typical = BP.encSnapCapped({
+    tick: 1, ack: 1, timeMs: 90000, entries: ents,
+    blockAdd: add, blockDel: del, meteors: meteors
+  }, HARD_CAP);
+  var u8 = typical.bytes;
+  console.log('       18蛇x25节 + 色块增量 + 3流星 = ' + fullTypical.length +
+    ' 字节；组包后 ' + u8.length + ' 字节（降级 ' + typical.degraded + ' 条）');
+  // 门槛按「生产组包器发出的实际字节」断言；encSnapBin 是底层能力，不保证 cap。
+  ok(u8.length <= UDP_SAFE, '生产组包器压进单个 UDP datagram（' + u8.length + ' ≤ ' + UDP_SAFE + '）');
+  ok(!typical.overflow && u8.length <= HARD_CAP,
+    '生产组包器满足硬约束（' + u8.length + ' ≤ ' + HARD_CAP + '）');
+  var typicalDec = BP.decSnapBin(u8);
+  ok(typicalDec && typicalDec.meteors.length === cfg.METEOR_MAX,
+    'LOD 降级不丢移动流星（' + typicalDec.meteors.length + ' 颗）');
 
   // JSON 对照，量化压缩比
   var P = CS.protocol;
@@ -297,35 +317,63 @@ function t4() {
 
 // ---------------- T5 色块增量 ----------------
 function t5() {
-  section('T5 色块增量编解码');
+  section('T5 色块增量与流星编解码');
+  var kinds = ['color', 'wild', 'bomb', 'slow', 'clear', 'clear3', 'rand1', 'rand2', 'rand3', 'grab'];
   var add = [], del = [];
   for (var i = 0; i < 12; i++) {
-    add.push({ bid: 1000 + i, x: rnd() * M.W, y: rnd() * M.H, color: cfg.COLOR_KEYS[i % 8] });
+    var kind = kinds[i % kinds.length];
+    add.push({
+      bid: 1000 + i, x: rnd() * M.W, y: rnd() * M.H,
+      color: kind === 'grab' || kind === 'wild' ? null : cfg.COLOR_KEYS[i % 8],
+      kind: kind
+    });
   }
   for (i = 0; i < 20; i++) del.push(500 + i);
-  var u8 = BP.encSnapBin({ tick: 5, ack: 5, timeMs: 0, entries: [], blockAdd: add, blockDel: del });
+  var meteors = [{
+    x: -40, y: 200, vx: 140, vy: 0, color: 'green', phase: 2.2,
+    trail: [{ x: -55, y: 200 }, { x: -50, y: 200 }, { x: -45, y: 200 }]
+  }];
+  var u8 = BP.encSnapBin({
+    tick: 5, ack: 5, timeMs: 0, entries: [],
+    blockAdd: add, blockDel: del, meteors: meteors
+  });
   var dec = BP.decSnapBin(u8);
-  ok(dec !== null, '空蛇 + 纯色块增量可解码');
+  ok(dec !== null, '空蛇 + 色块增量 + 流星可解码');
   ok(dec.blockAdd.length === 12 && dec.blockDel.length === 20,
     'add/del 数量一致（' + dec.blockAdd.length + '/' + dec.blockDel.length + '）');
   var okAll = true;
   for (i = 0; i < 12; i++) {
     if (dec.blockAdd[i].bid !== add[i].bid) okAll = false;
     if (dec.blockAdd[i].color !== add[i].color) okAll = false;
+    if (dec.blockAdd[i].kind !== add[i].kind) okAll = false;
     if (Math.abs(dec.blockAdd[i].x - add[i].x) > 1) okAll = false;
   }
-  ok(okAll, '色块 id/坐标/颜色往返一致');
+  ok(okAll, '色块 id/坐标/颜色/kind 往返一致（含 null color 彩色星）');
   var okDel = true;
   for (i = 0; i < 20; i++) if (dec.blockDel[i] !== del[i]) okDel = false;
   ok(okDel, '删除列表往返一致');
+  ok(dec.meteors.length === 1 && dec.meteors[0].x === -40 && dec.meteors[0].vx === 140,
+    '流星负坐标/速度/数量往返一致');
+  ok(dec.meteors[0].trail.length === 3 && dec.meteors[0].color === 'green',
+    '流星轨迹与颜色往返一致');
 
   // 峰值体积（四连消除 + 尸体爆发）
   add = []; del = [];
-  for (i = 0; i < 24; i++) add.push({ bid: i, x: rnd() * M.W, y: rnd() * M.H, color: 'red' });
+  for (i = 0; i < 24; i++) add.push({ bid: i, x: rnd() * M.W, y: rnd() * M.H, color: 'red', kind: 'color' });
   for (i = 0; i < 32; i++) del.push(i);
   var peak = BP.encSnapBin({ tick: 1, ack: 1, timeMs: 0, entries: [], blockAdd: add, blockDel: del });
   console.log('       峰值色块增量（add24/del32）= ' + peak.length + ' 字节');
   ok(peak.length <= 300, '色块增量峰值 ≤300 字节（' + peak.length + '）');
+
+  // count 是 u8，超过 255 若静默截断会永久漏状态；组包器必须标 overflow，
+  // 由 room 改发一次 TCP 全量，而不是把截断后的“小包”冒充成功。
+  add = [];
+  for (i = 0; i < 256; i++) add.push({ bid: i + 1, x: i, y: i, color: 'red', kind: 'color' });
+  var tooMany = BP.encSnapCapped({
+    tick: 2, ack: 0, timeMs: 0, entries: [], blockAdd: add, blockDel: []
+  }, 1400);
+  ok(tooMany.overflow === true,
+    '**色块 count>255 明确标记 overflow，禁止静默截断增量**');
 }
 
 // ---------------- T6 上行 Fragment ----------------

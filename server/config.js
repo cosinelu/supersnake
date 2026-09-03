@@ -8,13 +8,14 @@ module.exports = {
   HOST: process.env.HOST || '127.0.0.1',
 
   TICK_MS: 33,              // 房间模拟步长（30Hz 固定步长）
-  SNAP_EVERY: 1,            // 每 N tick 广播一帧快照。**三层频率互相独立**：
-                            //   服务器模拟 30Hz（TICK_MS，不随此值变）
-                            //   快照下行  30Hz / SNAP_EVERY（1=30Hz，2=15Hz）
-                            //   客户端渲染 rAF 60Hz+（永不等网络）
-                            // 客户端插值延迟由 matched.snapIntervalMs 自动推导
-                            // （interpolation.js:deriveDelay），改这个值不需要动客户端。
-                            // 降到 2 即回到 15Hz，带宽减半、延迟自动升到 ~120ms。
+  SNAP_EVERY: 1,            // UDP / WebTransport 二进制快照：30Hz。
+                            // 服务器模拟仍固定 30Hz，客户端渲染仍走 rAF；互不耦合。
+  TCP_SNAP_EVERY: parseInt(process.env.TCP_SNAP_EVERY, 10) > 0
+    ? parseInt(process.env.TCP_SNAP_EVERY, 10) : 2,
+                            // TCP / wss 全量 JSON 保底：默认 15Hz。
+                            // 30Hz JSON 实测约 38KB/s，且 TCP 丢包重传会把快照聚成突发；
+                            // 配 70ms 缓冲会频繁耗尽，表现为停顿后跳跃。15Hz + 119ms
+                            // 恢复 v3.0 的稳定行为，不影响加速通道的 30Hz 实时性。
 
   ROOM_SIZE: 4,             // 满编真人即开
   MIN_HUMANS: 1,            // 超时补位开局的最少真人数（=1：单人也能开局，其余由 AI 补位）

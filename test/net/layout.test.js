@@ -597,8 +597,58 @@ function t9() {
     '端到端：Renderer 随同一次 relayout 更新并清缓存');
 }
 
+// ---------------- T10 在线协议/网络质量在手机真实绘制路径可见 ----------------
+function t10() {
+  section('T10 在线协议与网络质量 HUD（拦截真实 fillText）');
+
+  function capture(W, H) {
+    var texts = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      measureText: function (s) { return { width: String(s).length * 6 }; },
+      fillText: function (s, x, y) { texts.push({ text: String(s), x: x, y: y }); },
+      strokeText: nop,
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: W, height: H }
+    };
+    var g = new CS.Game(W, H);
+    g.startMulti();
+    g.online = {
+      channel: { kind: 'tcp', switches: 0 },
+      netInfo: function () { return { WSS延迟ms: 86, 加速通道延迟ms: 0, 快照迟到率: 18.4, 逻辑帧丢失率: 0 }; },
+      netSummary: function () { return 'WSS · 86ms · 卡 18.4%'; }
+    };
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = W; r.H = H;
+    r.drawPanel(g);
+    return { texts: texts, layout: g.layout() };
+  }
+
+  var port = capture(390, 844);
+  var summary = port.texts.filter(function (x) { return x.text.indexOf('WSS') === 0; });
+  ok(summary.length === 1, '**手机竖屏真实绘制路径固定显示 WSS 网络摘要**');
+  ok(summary.length === 1 && summary[0].x >= 0 && summary[0].x < port.layout.panelW &&
+    summary[0].y >= 0 && summary[0].y < port.layout.panelH,
+    '竖屏网络摘要落在顶部面板内');
+
+  var land = capture(844, 390);
+  var proto = land.texts.filter(function (x) { return x.text === 'TCP · wss'; });
+  var quality = land.texts.filter(function (x) { return x.text.indexOf('RTT 86ms · 迟到 18.4%') === 0; });
+  ok(proto.length === 1, '**手机横屏真实绘制路径固定显示 TCP · wss**');
+  ok(quality.length === 1, '手机横屏显示 RTT 与快照迟到率');
+  ok(proto.length === 1 && quality.length === 1 && quality[0].y > proto[0].y,
+    '横屏协议与网络质量分两行绘制、不互相覆盖');
+}
+
 console.log('横竖屏自适应布局回归（v3.0.2 ~ v3.0.5）');
-t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9();
+t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

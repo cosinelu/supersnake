@@ -30,8 +30,9 @@
  * ---------------------------------------------------------------------------
  * 接口与 UdpEndpoint 同构（这是本文件最重要的设计约束）
  * ---------------------------------------------------------------------------
- * `room.js` 只通过 4 个方法用传输层：offer / isReady / sendFrame / dropSession。
- * 本类实现同样的 4 个方法 ⇒ **room.js 一行都不用改**，
+ * `room.js` 与控制面通过统一接口使用传输层：
+ * offer / isReady / sendFrame / setClientActive / needsTcp / syncInputSeq / dropSession。
+ * 本类实现同样的方法 ⇒ 房间逻辑不用分辨具体管道，
  * 由 `server/transportHub.js` 决定某个连接该走哪条通道。
  *
  * 会话语义也与 `server/udp.js` 保持一致（token 识别、frameId 去重规则），
@@ -69,6 +70,7 @@ function WebTransportEndpoint(config, hooks) {
   this.stats = {
     rx: 0, tx: 0, sessions: 0,
     dropMagic: 0, dropToken: 0, dropCrc: 0, dropSeq: 0,
+    tooBig: 0, writeFail: 0,
     certReloads: 0, certReloadFail: 0
   };
   this._closing = false;
@@ -90,7 +92,8 @@ WebTransportEndpoint.prototype.createSession = function (connId, roomId) {
     writer: null,           // datagrams writer
     lastFrameId: -1,        // 上行去重基线
     lastSeen: Date.now(),
-    verified: false
+    verified: false,
+    clientMode: 1           // 0=TCP，1=加速，2=探测期两条都发
   };
   this.byConn[connId] = token;
   return token;
@@ -105,11 +108,35 @@ WebTransportEndpoint.prototype.dropSession = function (connId) {
   delete this.byConn[connId];
 };
 
-/** 该连接的 WebTransport 是否已打通（未通时上层应走 TCP 或裸 UDP） */
+/** 该连接的 WebTransport 是否已打通且客户端仍愿意接收 */
 WebTransportEndpoint.prototype.isReady = function (connId) {
   var token = this.byConn[connId];
   var s = token != null && this.sessions[token];
-  return !!(s && s.verified && s.writer);
+  return !!(s && s.verified && s.writer && s.clientMode !== 0);
+};
+
+/** 由可靠的 WebSocket 控制通道暂停/恢复加速下行，保证停滞时真能回落 TCP。 */
+WebTransportEndpoint.prototype.setClientActive = function (connId, mode) {
+  var token = this.byConn[connId];
+  var s = token != null && this.sessions[token];
+  if (!s) return false;
+  s.clientMode = mode === 2 ? 2 : (mode ? 1 : 0);
+  return true;
+};
+
+WebTransportEndpoint.prototype.needsTcp = function (connId) {
+  var token = this.byConn[connId];
+  var s = token != null && this.sessions[token];
+  return !s || s.clientMode !== 1;
+};
+
+/** 可靠 TCP 输入被房间采纳后，同步加速端点基线，保证长时间回落后可无缝恢复上行。 */
+WebTransportEndpoint.prototype.syncInputSeq = function (connId, seq) {
+  var token = this.byConn[connId];
+  var s = token != null && this.sessions[token];
+  if (!s || typeof seq !== 'number' || !isFinite(seq)) return false;
+  s.lastFrameId = seq & 0xFFFF;
+  return true;
 };
 
 /**
@@ -203,16 +230,41 @@ WebTransportEndpoint.prototype._makeWriter = function (wt) {
   return null;
 };
 
-/** 单次下行写入（异常一律吞掉：传输层错误不得影响对局） */
+/** 当前 QUIC 会话协商出的 datagram 载荷上限；0 表示库暂未给出。 */
+WebTransportEndpoint.prototype._maxDatagramSize = function (s) {
+  try {
+    var n = Number(s && s.wt && s.wt.datagrams && s.wt.datagrams.maxDatagramSize);
+    return isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  } catch (e) { return 0; }
+};
+
+/** 单次下行写入（异步失败会撤销 ready，使下一 TCP tick 自动接管） */
 WebTransportEndpoint.prototype._rawSend = function (s, bytes) {
   if (!s || !s.writer) return false;
+  var self = this;
+  var writer = s.writer;
   try {
-    // 不 await：datagram 是即发即忘，等 writer 会把 30Hz 的循环拖慢
-    s.writer.write(bytes);
+    // 不 await：datagram 是即发即忘，等 writer 会把 30Hz 的房间循环拖慢。
+    // 但 write() 返回 Promise；必须处理 rejection，否则既会产生未处理拒绝，
+    // 又会让 isReady 长期停留在假阳性并持续抑制 TCP。
+    var pending = writer.write(bytes);
     this.stats.tx++;
+    if (pending && typeof pending.catch === 'function') {
+      pending.catch(function () {
+        self.stats.writeFail++;
+        if (s.writer === writer) {
+          s.writer = null;
+          s.verified = false;
+        }
+      });
+    }
     return true;
   } catch (e) {
-    s.writer = null;   // writer 失效（会话关闭）→ 下次重建
+    this.stats.writeFail++;
+    if (s.writer === writer) {
+      s.writer = null;
+      s.verified = false;
+    }
     return false;
   }
 };
@@ -234,10 +286,17 @@ WebTransportEndpoint.prototype._rawSend = function (s, bytes) {
 WebTransportEndpoint.prototype.sendFrame = function (connId, bytes) {
   var token = this.byConn[connId];
   var s = token != null && this.sessions[token];
-  if (!s || !s.verified || !s.writer) return false;
+  if (!s || !s.verified || !s.writer || s.clientMode === 0) return false;
+  // WebTransport 的上限由 QUIC 会话协商，不等同于以太网 UDP 的 1472B。
+  // 超过后该库会把 `tooBig` 当作一次已完成写入，不能依赖 write rejection 兜底。
+  var maxDatagramSize = this._maxDatagramSize(s);
+  if (maxDatagramSize > 0 && bytes.length > maxDatagramSize) {
+    this.stats.tooBig++;
+    return false; // room.js 同 tick 改发 TCP 全量
+  }
   var dup = this.config.UDP_DUP || 3;
   var interval = (this.config.TICK_MS || 33) * (this.config.SNAP_EVERY || 1);
-  this._rawSend(s, bytes);
+  if (!this._rawSend(s, bytes)) return false;
   if (dup <= 1) return true;
 
   var MIN_GAP = 6;   // 须大于常见定时器抖动，否则跨不过 tick 等于没打散
@@ -249,7 +308,7 @@ WebTransportEndpoint.prototype.sendFrame = function (connId, bytes) {
     var wait = Math.max(MIN_GAP, Math.round((deadline - Date.now()) / left));
     var tm = setTimeout(function () {
       var cur = self.sessions[token];
-      if (!cur || !cur.writer || self._closing) { left = 0; return; }
+      if (!cur || !cur.writer || cur.clientMode === 0 || self._closing) { left = 0; return; }
       self._rawSend(cur, bytes);
       left--;
       scheduleNext();

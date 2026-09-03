@@ -55,7 +55,8 @@ UdpEndpoint.prototype.createSession = function (connId, roomId) {
     addr: null, port: 0,          // 打洞后填充
     lastFrameId: -1,              // 上行去重基线
     lastSeen: Date.now(),
-    verified: false               // 是否完成 hello 握手
+    verified: false,              // 是否完成 hello 握手
+    clientMode: 1                 // 0=TCP，1=加速，2=探测期两条都发
   };
   this.byConn[connId] = token;
   return token;
@@ -68,11 +69,39 @@ UdpEndpoint.prototype.dropSession = function (connId) {
   delete this.byConn[connId];
 };
 
-/** 该连接的 UDP 是否已打通（未打通时上层应走 TCP） */
+/** 该连接的 UDP 是否已打通且客户端仍愿意接收（否则上层必须走 TCP） */
 UdpEndpoint.prototype.isReady = function (connId) {
   var token = this.byConn[connId];
   var s = token != null && this.sessions[token];
-  return !!(s && s.verified && s.addr);
+  return !!(s && s.verified && s.addr && s.clientMode !== 0);
+};
+
+/**
+ * 客户端通过可靠的 WebSocket 控制通道暂停/恢复加速下行。
+ * 不能只看服务端握手状态：单向下行故障时 hello 仍能到达服务器，若服务器继续
+ * 把该连接判为 ready，就会持续抑制 TCP 快照，所谓“回落”实际上收不到任何帧。
+ */
+UdpEndpoint.prototype.setClientActive = function (connId, mode) {
+  var token = this.byConn[connId];
+  var s = token != null && this.sessions[token];
+  if (!s) return false;
+  s.clientMode = mode === 2 ? 2 : (mode ? 1 : 0);
+  return true;
+};
+
+UdpEndpoint.prototype.needsTcp = function (connId) {
+  var token = this.byConn[connId];
+  var s = token != null && this.sessions[token];
+  return !s || s.clientMode !== 1;
+};
+
+/** 可靠 TCP 输入被房间采纳后，同步加速端点基线，保证长时间回落后可无缝恢复上行。 */
+UdpEndpoint.prototype.syncInputSeq = function (connId, seq) {
+  var token = this.byConn[connId];
+  var s = token != null && this.sessions[token];
+  if (!s || typeof seq !== 'number' || !isFinite(seq)) return false;
+  s.lastFrameId = seq & 0xFFFF;
+  return true;
 };
 
 /**
@@ -199,7 +228,7 @@ UdpEndpoint.prototype._sendRaw = function (buf, addr, port) {
 UdpEndpoint.prototype.sendFrame = function (connId, bytes) {
   var token = this.byConn[connId];
   var s = token != null && this.sessions[token];
-  if (!s || !s.verified || !s.addr) return false;
+  if (!s || !s.verified || !s.addr || s.clientMode === 0) return false;
   var dup = this.config.UDP_DUP || 3;
   var interval = (this.config.TICK_MS || 33) * (this.config.SNAP_EVERY || 1);
   var buf = Buffer.from(bytes);

@@ -206,6 +206,50 @@ section('本机预测（SelfPredictor）');
   fake3.colors = ['blue', 'blue'];
   pred.reconcile(fake3);
   ok(pred.snake.colors.length === 2 && pred.snake.colors[0] === 'blue', '颜色序列直接采纳服务器版本');
+
+  // 回归：软校正必须整体平移 trail，不能只挪头。
+  // 只挪 x/y 会让 computeBody 从新头走回旧 trail，视觉上就是「头身分离」。
+  var p2 = new CS.SelfPredictor();
+  p2.attach(snapOf(ref), cfg.COLOR_KEYS.slice(0, 4));
+  p2.snake.speed = 0;
+  var beforeHead = { x: p2.snake.x, y: p2.snake.y };
+  var beforeTrail = { x: p2.snake.trail[5].x, y: p2.snake.trail[5].y };
+  var shifted = snapOf(p2.snake);
+  shifted.x += 40; shifted.y -= 20;
+  p2.reconcile(shifted);
+  p2.update(0);
+  var headDx = p2.snake.x - beforeHead.x, headDy = p2.snake.y - beforeHead.y;
+  var trailDx = p2.snake.trail[5].x - beforeTrail.x;
+  var trailDy = p2.snake.trail[5].y - beforeTrail.y;
+  ok(Math.abs(headDx - trailDx) < 1e-6 && Math.abs(headDy - trailDy) < 1e-6,
+    '**软校正让头与整条 trail 同量平移**（不会把头从身体轨迹上拉开）',
+    'head=(' + headDx + ',' + headDy + ') trail=(' + trailDx + ',' + trailDy + ')');
+
+  // 回归：30Hz 权威帧若持续带同一 15px 时延偏差，最新残差应替换旧值，
+  // 不能每 33ms 累加。旧实现会积到约 79px，并让蛇每帧反向移动 5.4px。
+  var p3 = new CS.SelfPredictor();
+  p3.attach(snapOf(ref), cfg.COLOR_KEYS.slice(0, 4));
+  p3.snake.speed = 150;
+  var prevPX = p3.snake.x, minStep = Infinity, maxPending = 0;
+  for (i = 0; i < 180; i++) {
+    p3.update(16.67, 0);
+    if (i % 2 === 1) {
+      var stale = snapOf(p3.snake);
+      stale.x = p3.snake.x - 15;
+      p3.reconcile(stale);
+    }
+    var stepX = p3.snake.x - prevPX;
+    prevPX = p3.snake.x;
+    if (stepX < minStep) minStep = stepX;
+    if (Math.abs(p3._corr.x) > maxPending) maxPending = Math.abs(p3._corr.x);
+  }
+  ok(maxPending <= 15.1,
+    '**30Hz 重复权威偏差不会积分膨胀**（pending ≤15px，实测 ' + maxPending.toFixed(1) + '）');
+  ok(minStep >= -0.01,
+    '**固定 15px 网络时延下预测蛇不反向抖动**（最小步进 ' + minStep.toFixed(2) + 'px）',
+    '旧实现为 -5.39px/帧');
+  ok(p3.maxNeckGap <= cfg.SEG_SPACING + 0.1,
+    '头到首节间距始终受控（max ' + p3.maxNeckGap.toFixed(1) + 'px）');
   Math.random = orig;
 })();
 

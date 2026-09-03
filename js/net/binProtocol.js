@@ -4,9 +4,9 @@
  *
  * 设计见 docs/architecture/02-udp-transport.md §2、§3。
  *
- * 核心约定（**解码结果与 JSON 路径同构**）：
- *   decSnapBin() 产出的对象与 protocol.decode() 解析 JSON snap 后的结构一致，
- *   因此 netMatch / onlineMatch / renderer 全部零改动，两条通道可随时互换。
+ * 核心约定：decSnapBin() 产出紧凑的传输层对象，WsTransport._mergeMeta()
+ * 必须把它规范化为 JSON snap 的短键结构后才可交给 netMatch / onlineMatch。
+ * 测试必须让规范化结果穿过真实 RemoteMatch.applySnap，不能只比字段列表。
  *
  * 节心编码的关键取舍：不传坐标，只传**每节相对上一节的方向角**（uint8），
  * 长度用 cfg.SEG_SPACING 重建。依据是实测相邻节心间距恒定在 25.92~30.00px
@@ -20,7 +20,8 @@
 
   var MAGIC_SNAP = 0x53;  // 'S'
   var MAGIC_INPUT = 0x49; // 'I'
-  var BIN_VER = 1;
+  // v2：色块补 kind/null-color，快照补移动流星；否则加速路径会丢失道具语义。
+  var BIN_VER = 2;
 
   // flags 位定义
   var F_ALIVE = 1;
@@ -35,6 +36,14 @@
   (function () { for (var i = 0; i < COLOR_IDX.length; i++) COLOR_MAP[COLOR_IDX[i]] = i; })();
   function cIdx(c) { var v = COLOR_MAP[c]; return v == null ? 0 : v; }
   function cName(i) { return COLOR_IDX[i] || 'red'; }
+  function blockColorIdx(c) { return c == null ? 15 : cIdx(c); }
+  function blockColorName(i) { return i === 15 ? null : cName(i); }
+
+  var KIND_IDX = ['color', 'wild', 'bomb', 'slow', 'clear', 'clear3', 'rand1', 'rand2', 'rand3', 'grab'];
+  var KIND_MAP = {};
+  (function () { for (var i = 0; i < KIND_IDX.length; i++) KIND_MAP[KIND_IDX[i]] = i; })();
+  function kindIdx(k) { var v = KIND_MAP[k]; return v == null ? 0 : v; }
+  function kindName(i) { return KIND_IDX[i] || 'color'; }
 
   /**
    * 绝对锚点间隔（节）。
@@ -187,7 +196,7 @@
 
   /**
    * 编码一帧 snap。
-   * @param {object} o { tick, ack, timeMs, entries:[{e, lite}], blockAdd:[], blockDel:[] }
+   * @param {object} o { tick, ack, timeMs, entries:[{e, lite}], blockAdd:[], blockDel:[], meteors:[] }
    * @returns {Uint8Array}
    */
   function encSnapBin(o) {
@@ -202,7 +211,8 @@
     for (var i = 0; i < ents.length && i < 255; i++) {
       encSnake(w, ents[i].e, !!ents[i].lite, o.timeMs || 0);
     }
-    // 色块增量：add 列表 + del 列表
+    // 色块增量：add 列表 + del 列表。kind 与 null-color 不能省：特殊道具和
+    // 彩色星都在 blocks 中，只传坐标/颜色会把它们错误渲染成普通红色色块。
     var add = o.blockAdd || [], del = o.blockDel || [];
     w.u8(Math.min(255, add.length));
     for (i = 0; i < add.length && i < 255; i++) {
@@ -210,10 +220,26 @@
       w.u16(b.bid & 0xFFFF);
       w.u16(B.qCoord16(b.x));
       w.u16(B.qCoord16(b.y));
-      w.u8(cIdx(b.color));
+      w.u8(blockColorIdx(b.color));
+      w.u8(kindIdx(b.kind));
     }
     w.u8(Math.min(255, del.length));
     for (i = 0; i < del.length && i < 255; i++) w.u16(del[i] & 0xFFFF);
+
+    // 移动流星不能放到 1Hz meta：140px/s 下会每次跳约 140px。数量上限 3，
+    // 每颗最多 35 字节，直接随 30Hz 二进制快照发送仍远低于 MTU。
+    var meteors = o.meteors || [];
+    w.u8(Math.min(255, meteors.length));
+    for (i = 0; i < meteors.length && i < 255; i++) {
+      var mt = meteors[i], trail = mt.trail || [];
+      w.i16(mt.x); w.i16(mt.y); w.i16(mt.vx); w.i16(mt.vy);
+      w.u8(cIdx(mt.color));
+      w.u8(Math.round((((mt.phase || 0) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2) * 255));
+      w.u8(Math.min(15, trail.length));
+      for (var ti = Math.max(0, trail.length - 15); ti < trail.length; ti++) {
+        w.i16(trail[ti].x); w.i16(trail[ti].y);
+      }
+    }
     w.finishCrc16();
     return w.bytes();
   }
@@ -241,13 +267,31 @@
     var nAdd = r.u8();
     var add = [];
     for (i = 0; i < nAdd; i++) {
-      add.push({ bid: r.u16(), x: r.u16(), y: r.u16(), color: cName(r.u8()), kind: 'color' });
+      var bid = r.u16(), bx = r.u16(), by = r.u16();
+      var color = blockColorName(r.u8()), kind = kindName(r.u8());
+      add.push({
+        bid: bid, x: bx, y: by, color: color, kind: kind,
+        rarity: cfg.ITEM_RARITY[kind] || null,
+        r: kind === cfg.GRAB_KIND ? cfg.GRAB_RADIUS : 0
+      });
     }
     var nDel = r.u8();
     var del = [];
     for (i = 0; i < nDel; i++) del.push(r.u16());
-    if (r.overflow) return null;
-    return { t: 'snap', tk: tick, ack: ack, tm: timeMs, sn: sn, blockAdd: add, blockDel: del };
+
+    var nMt = r.u8(), meteors = [];
+    for (i = 0; i < nMt; i++) {
+      var mx = r.i16(), my = r.i16(), vx = r.i16(), vy = r.i16();
+      var mc = cName(r.u8()), phase = r.u8() / 255 * Math.PI * 2;
+      var nTrail = r.u8(), trail = [];
+      for (var ti = 0; ti < nTrail; ti++) trail.push({ x: r.i16(), y: r.i16() });
+      meteors.push({ x: mx, y: my, vx: vx, vy: vy, color: mc, phase: phase, trail: trail });
+    }
+    if (r.overflow || r.remain() !== 2) return null;
+    return {
+      t: 'snap', tk: tick, ack: ack, tm: timeMs, sn: sn,
+      blockAdd: add, blockDel: del, meteors: meteors
+    };
   }
 
   // ---------------- 上行 input Fragment（12 字节） ----------------
@@ -297,10 +341,14 @@
    */
   function encSnapCapped(o, cap) {
     var limit = cap || 1400;
+    // u8 count 超限会被 encSnapBin 截断；对增量语义而言静默截断等于永久丢状态，
+    // 必须把它视为 overflow，让房间改发一次 TCP 全量快照。
+    var sourceOverflow = (o.entries || []).length > 255 || (o.blockAdd || []).length > 255 ||
+      (o.blockDel || []).length > 255 || (o.meteors || []).length > 255;
     var ents = (o.entries || []).map(function (x) { return { e: x.e, lite: !!x.lite }; });
     var out = encSnapBin({
       tick: o.tick, ack: o.ack, timeMs: o.timeMs, entries: ents,
-      blockAdd: o.blockAdd, blockDel: o.blockDel
+      blockAdd: o.blockAdd, blockDel: o.blockDel, meteors: o.meteors
     });
     var degraded = 0;
     var i = ents.length - 1;
@@ -309,10 +357,10 @@
       i--;
       out = encSnapBin({
         tick: o.tick, ack: o.ack, timeMs: o.timeMs, entries: ents,
-        blockAdd: o.blockAdd, blockDel: o.blockDel
+        blockAdd: o.blockAdd, blockDel: o.blockDel, meteors: o.meteors
       });
     }
-    return { bytes: out, degraded: degraded, overflow: out.length > limit };
+    return { bytes: out, degraded: degraded, overflow: sourceOverflow || out.length > limit };
   }
 
   CS.binProtocol = {

@@ -343,7 +343,7 @@ function l2Real(done) {
       var recv = [];        // 到达时刻
       var downSeen = 0;     // 代理观测到的服务器发包数（丢弃判定之前）
       var cli = null;
-      var rebuilds = 0;
+      var rebuilds = 0, proxyRebuilds = 0;
       var token = ep.createSession('wc1', 'r1');
       var w = new B.BinWriter(8);
       w.u8(UdpEndpoint.MAGIC_HELLO); w.u32(token); w.finishCrc16();
@@ -351,11 +351,11 @@ function l2Real(done) {
 
       px.onDown = function () { downSeen++; };
 
-      // 打洞需要**整只 socket 重建**而非原地多重试。
-      // Windows 回环 UDP 约 7% 概率一对 socket 完全通不了（永久黑洞，
-      // 裸 dgram 对照同样存在，与本项目代码无关），重试 1 秒也不恢复。
-      // 真实网络没有这种黑洞，所以这只是 CI 环境的适配，不掩盖真实缺陷 ——
-      // 代码真有问题时重建几次也一样失败。
+      // 打洞需要**整条回环 socket 链重建**而非原地多重试。
+      // Windows 回环 UDP 约 7% 概率某只 socket 永久黑洞；本链路有 client、
+      // proxy.sock、proxy.upstream、endpoint 四只，仅重建客户端不能修复代理黑洞。
+      // 真实网络没有这种现象，所以这只是 CI 环境适配，不掩盖真实缺陷 ——
+      // 代码真有问题时整组重建几次也一样失败。
       bindAndPunch();
 
       function bindAndPunch() {
@@ -370,10 +370,19 @@ function l2Real(done) {
           (function punch() {
             if (ep.isReady('wc1')) { afterPunch(); return; }
             if (tries >= 10) {
+              try { cli.close(); } catch (e) {}
               if (rebuilds < 4) {
                 rebuilds++;
-                try { cli.close(); } catch (e) {}
                 bindAndPunch();
+                return;
+              }
+              // 真实链路是 client → proxy.sock → proxy.upstream → endpoint；黑洞可能
+              // 落在代理任一 socket，单独重建客户端仍无效。整组 client+proxy 重建。
+              if (proxyRebuilds < 3) {
+                proxyRebuilds++;
+                rebuilds = 0;
+                px.close();
+                px.listen(function () { bindAndPunch(); });
                 return;
               }
               afterPunch();
@@ -389,7 +398,7 @@ function l2Real(done) {
       function afterPunch() {
         ok(ep.isReady('wc1') === true,
           '经弱网代理完成打洞（服务器会话地址 = 代理地址）',
-          'socket 重建 ' + rebuilds + ' 次后仍失败');
+          '客户端 socket 重建 ' + rebuilds + ' 次、代理重建 ' + proxyRebuilds + ' 次后仍失败');
         if (!ep.isReady('wc1')) { cleanup(); return; }
 
         var frame = BP.encSnapBin({ tick: 7, ack: 1, timeMs: 0, entries: [] });

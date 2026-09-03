@@ -112,8 +112,37 @@ function t1() {
   var t1b = wte.createSession('c1', 'r2');
   ok(wte.sessions[t1a] === undefined, '重建会话时旧令牌被回收（不泄漏）');
   ok(wte.isReady('c1') === false, '未握手时 isReady=false（上层应走 TCP/UDP）');
+  wte.sessions[t1b].verified = true; wte.sessions[t1b].writer = {};
+  ok(wte.isReady('c1') === true, '握手完成后 WT ready');
+  wte.setClientActive('c1', false);
+  ok(wte.isReady('c1') === false, '**客户端请求暂停后 WT 撤销 ready，服务端可回落 TCP**');
+  wte.setClientActive('c1', true);
+  ok(wte.isReady('c1') === true, '客户端恢复后 WT 重新 ready');
+
+  // WebTransport 的 datagram 上限来自 QUIC 会话协商，不能拿 UDP_SNAP_CAP=1400 硬套。
+  var writes = 0;
+  wte.sessions[t1b].wt = { datagrams: { maxDatagramSize: 1200 }, close: function () {} };
+  wte.sessions[t1b].writer = { write: function () { writes++; return Promise.resolve(); } };
+  ok(wte.sendFrame('c1', new Uint8Array(1201)) === false && writes === 0,
+    '**超过协商 maxDatagramSize 时同步拒绝，room 可同 tick 回退 TCP**');
+  ok(wte.sendFrame('c1', new Uint8Array(1200)) === true && writes === 1,
+    '不超过协商上限的 datagram 正常写入');
   wte.dropSession('c1');
   ok(wte.sessions[t1b] === undefined && wte.byConn['c1'] === undefined, 'dropSession 清理干净');
+
+  // write() 是 Promise；异步拒绝必须撤销 ready，否则服务端会持续抑制 TCP。
+  var failEp = new WebTransportEndpoint(testConfig({ UDP_DUP: 1 }), {});
+  var failToken = failEp.createSession('cf', 'rf');
+  var failSession = failEp.sessions[failToken];
+  failSession.verified = true;
+  failSession.wt = { datagrams: { maxDatagramSize: 1200 } };
+  failSession.writer = { write: function () {
+    return { catch: function (reject) { reject(new Error('closed')); } };
+  } };
+  ok(failEp.sendFrame('cf', new Uint8Array(10)) === true,
+    '异步写入已入队时 sendFrame 返回 true');
+  ok(failEp.isReady('cf') === false && failEp.stats.writeFail === 1,
+    '**写入 Promise 拒绝后立即撤销假 ready，下一 TCP tick 自动接管**');
 
   // frameId 去重：**逐条比对两个端点的返回值**。
   // 这是本测试最重要的一组 —— 语义一旦漂移，客户端就得为两条通道分叉。
@@ -143,6 +172,12 @@ function t1() {
   var wa = wte._acceptFrame(ws, 0), ua = ude._acceptFrame(us, 0);
   ok(wa === true && ua === true, '**大幅回退（重连后归零）两端点都接受并重置基线**');
   ok(ws.lastFrameId === 0 && us.lastFrameId === 0, '基线都已拉回');
+
+  // 长时间 TCP 回落期间端点本身收不到上行；可靠输入采纳后必须同步 frameId 基线。
+  wte.syncInputSeq('cx', 1012);
+  ude.syncInputSeq('cx', 1012);
+  ok(wte._acceptFrame(ws, 1013) === true && ude._acceptFrame(us, 1013) === true,
+    '**TCP 回落超过 INPUT_MAX_SEQ_JUMP 后，恢复的首个加速输入仍可连续采纳**');
 }
 
 // ---------------- T2 TransportHub 聚合语义 ----------------
@@ -174,8 +209,8 @@ function t2() {
   try { hubN.dropSession('c1'); } catch (e) { threw = true; }
   ok(!threw, '无通道时 dropSession 不抛异常');
 
-  // 接口同构性：Hub 必须实现 room.js 用到的全部 4 个方法
-  var need = ['offer', 'isReady', 'sendFrame', 'dropSession'];
+  // 接口同构性：Hub 必须实现 room.js 与控制面用到的全部方法
+  var need = ['offer', 'isReady', 'sendFrame', 'setClientActive', 'needsTcp', 'syncInputSeq', 'dropSession'];
   var missing = need.filter(function (m) { return typeof hubN[m] !== 'function'; });
   ok(missing.length === 0,
     '**Hub 实现了 room.js 依赖的全部方法**（' + need.join('/') + '）',

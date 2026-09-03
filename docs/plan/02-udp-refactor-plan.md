@@ -11,12 +11,12 @@
 | **1a** ✅ | 二进制编码 + 下行瘦身 | 仍走 TCP | ✅ 体积/精度可直接量化 |
 | **1b** ✅ | UDP 传输层 + 冗余打散 + 降级 | UDP + TCP 保底 | ✅ 弱网工具对比 |
 | **1c** | 微信小游戏 UDP 适配 | 复用 1b 协议层 | ✅ 真机（需小程序后台） |
-| **1d** | 浏览器 WebTransport 通道 | QUIC datagram + wss 保底 | ✅ 可行性已实测跑通 |
+| **1d** ✅ | 浏览器 WebTransport 通道 | QUIC datagram + wss 保底 | ✅ 已实现并完成 dev 公网验证 |
 | **2** | 预表现与插值增强 | 不涉及 | 以后再说 |
 
-**当前网页版仍走 wss + JSON**：`udpTransport.js` 的 `autoSocketFactory` 在浏览器返回
-`null`（只有 wx / node 两个真实分支）⇒ **1a/1b 的收益网页版一点没吃到**。
-这是 1d 的动机。
+**历史动机**：网页版曾因 `autoSocketFactory` 在浏览器返回 `null` 而全程走 wss + JSON，
+1a/1b 的收益一点没吃到。阶段 1d 已补齐 WebTransport 分支，并保留 wss 作为握手失败、
+中途停滞和换证重建时的可靠保底。
 
 **为什么 1a 必须独立**：实测现状快照 19662 字节会被切成 14 个 IP 分片，
 任一片丢失则整包在内核报废（丢 2% 放大成报废 24.6%）。
@@ -39,7 +39,8 @@
   - `BinReader` 支持带 `byteOffset` 的子视图（DataView 偏移已处理）
 
 - [x] **1a.2** 二进制 snap 编解码 `js/net/binProtocol.js`（**已完成**）
-  - `encSnapBin` / `decSnapBin`，解码结果与 `decode()` **同构**（上层零改动）
+  - `encSnapBin` / `decSnapBin`；解码结果由 `WsTransport._mergeMeta()` 规范化为 JSON snap
+    的 `sn/bl/mt` 短键结构后再交给上层（测试必须穿过真实 `RemoteMatch.applySnap`）
   - 节心用**方向角**编码 + 每 16 节一个绝对坐标锚点
   - `encInputFrag` / `decInputFrag`：上行 12 字节
   - **实测踩到两个会让蛇散架的坑**（详见架构文档 §2）：
@@ -53,10 +54,12 @@
   - `js/net/wsTransport.js` 维护 meta 缓存，与二进制快照合并后交给上层（**字段与 JSON 路径逐个同构**）
   - 回归：`udp.client.test.js` 断言合并结果与 JSON 路径同构
 
-- [x] **1a.4** 色块增量同步（**已完成**）
+- [x] **1a.4** 色块增量同步（**已完成；协议 v2 已补齐语义**）
   - `room._blockDelta` 维护上一帧集合，每帧算出 `add[] / del[]`
+  - 二进制 add 同时携带 `kind` 与可空颜色；否则特殊道具/彩色星会被错误还原成普通红块
+  - 移动流星随 30Hz 二进制快照发送（不能放 1Hz meta），`encSnapCapped` 降级时仍保留
   - **1Hz 全量校正**走 TCP（决策 B）—— 漏收增量会永久偏差，全量必须走可靠通道
-  - 实测（`udp-verify.js` 真机）：稳态帧 **95 字节**，与「1 增 1 删 = 94 字节」精确吻合
+  - v1 公网实测稳态 95B；v2 本地 E2E 补回道具/流星后约 129B、约 14.2KB/s，仍低于预算
 
 - [x] **1a.5a** LOD 编码能力 + 硬约束兜底（**已完成**）
   - `binProtocol.encSnake` 支持 `lite` 档（`F_LITE` 位，`segCount=0`，只发头部）
@@ -368,8 +371,8 @@ JSON 快照(TCP) : 0 帧（全程未降级）
 > 可行性已于 2026-09-03 在本项目服务器上实测跑通，
 > 结论与踩到的坑见 `docs/architecture/02-udp-transport.md` §7.4.1。
 
-**为什么值得做**：网页版是当前唯一有真实用户的形态，而它现在**完全没吃到**
-1a/1b 的收益（二进制编码、冗余打散、48× 压缩全部只在 Node/小游戏路径生效）。
+**为什么值得做**：网页版是当前唯一有真实用户的形态，而阶段 1d 之前完全没吃到
+1a/1b 的收益。现已通过 WebTransport 将二进制编码与冗余打散带到浏览器。
 WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」，
 与本项目 UDP 通道**完全一致** ⇒ `binProtocol` / 冗余打散 / 去重 / 降级逻辑可原样复用，
 只需替换 socket 供给层。
@@ -433,14 +436,14 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
 
 - [x] **1d.1** 服务器：`server/webtransport.js`（**已完成**）
   - `WebTransportEndpoint` 封装 `Http3Server`，接口与 `UdpEndpoint` **完全同构**
-    （offer / isReady / sendFrame / dropSession）
+    （offer / isReady / sendFrame / setClientActive / needsTcp / syncInputSeq / dropSession）
   - 会话语义与 `server/udp.js` 逐条对齐（token 识别、frameId 去重含
     「大幅回退＝重新计数」），测试里**逐分支比对两个端点的返回值**
   - 冗余打散逻辑与 udp.js 相同（剩余窗口/剩余份数 + `MIN_GAP=6`）
   - QUIC 自带连接迁移 ⇒ **不需要** udp.js 那套「地址跟随」
 - [x] **1d.2** 聚合层：`server/transportHub.js`（**已完成，原计划没有这一层**）
   - 把裸 UDP 与 WebTransport 聚合成**一个与 UdpEndpoint 同构的对象**
-    ⇒ `room.js` 只改了 matched 下发字段，判定/广播逻辑**一行未动**
+    ⇒ `room.js` 与控制面只依赖统一的 `offer/isReady/sendFrame/setClientActive/needsTcp/syncInputSeq/dropSession`，不分辨具体管道
   - 若让 room.js 自己分辨通道，判定逻辑会长出两条分支，
     而这两条分支的差异其实只有「管道」（协议/编码/冗余策略完全相同）
   - `matched` 同时下发 `udpPort/udpToken` 与 `wtPort/wtToken/wtPath`，
@@ -453,8 +456,13 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
   - `autoSocketFactory(info)` 改为**接收 matched 信息**：浏览器分支要看
     服务器有没有下发 `wtPort`，且 WT 需要带端口的完整 URL
     ⇒ 工厂只能在 matched 之后选定，不能在 `WsTransport` 构造时定
-- [x] **1d.4** 降级路径（**已完成**）：握手失败 / `closed` reject / 会话中断
-      → 停止收包 → `UdpAccel` 既有的停滞检测回落 wss
+- [x] **1d.4** 降级路径（**已完成并补齐控制面闭环**）：握手失败 / `closed` reject / 会话中断
+      → 停止收包 → `UdpAccel` 停滞检测 → 经可靠 wss 发送 `accel(on=0)`，服务端撤销 ready
+      并恢复 TCP 快照。新的合法 hello_ack 只触发 `accel(on=2)`：TCP 与加速快照双发；
+      客户端收到一帧完整、可解码的二进制 snap 后才发送 `accel(on=1)` 停止 TCP。
+      不能只在客户端改 `active=false`，否则服务端仍会抑制 TCP，形成“假回落”；也不能
+      只凭 7B ACK 恢复，否则“小包可达、大 datagram 被挡”会周期性黑屏。ACK 必须严格
+      校验长度、CRC、token，且坏包不得刷新停滞计时。
 - [x] **1d.5** 证书续期（**已完成**，方案与最初设想不同，见下）
   - **`updateCert` 在 HTTP/3 下是 no-op** —— 这是查源码 + 双向对照实测确认的。
     `Http3Server.updateCert` 的实现是
@@ -481,11 +489,13 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
     - 重建必须复用**当前实际监听端口**而非回读配置（配置可能是 0），
       否则换端口会让已下发的 `wtPort` 全部指向空气。
 
-- [x] **1d.6** 测试 `test/net/webtransport.test.js`（**已完成，50 条断言，已接入 CI**）
+- [x] **1d.6** 测试 `test/net/webtransport.test.js`（**已完成，68 条断言，已接入 CI**）
   - 自签 ECDSA P-256 + 13 天有效期 + `serverCertificateHashes`
     （CI 上没有 letsencrypt 证书；这条路径还顺带避开库那条 experimental 警告）
   - **客户端复用生产的 socket 工厂**，不另写一份 —— 否则测的是测试自己的代码
   - **T1 逐分支比对 WT 与 UDP 两个端点的去重返回值**，语义漂移立刻暴露
+  - 断言协商 `datagrams.maxDatagramSize` 是硬上限，超限同步回退 TCP；
+    `writer.write()` 的 Promise 拒绝必须撤销假 ready，不能持续抑制 TCP
   - 断言 WT 下行字节与裸 UDP 路径**逐字节一致**（编码层确实共用）
   - 畸形输入（空包/长度不足/crc 错/未知 magic/1500 全零）不崩服务
   - **已用故障注入验证断言非空**：打散换成同步连发 → 跨度 0ms 报错；
@@ -520,6 +530,21 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
     **配置正确但代码不认，是最难自证的一类故障**，故改为动配置之前先查
     `WorkingDirectory` 下有无 `server/webtransport.js` 与 WT 依赖，
     缺则拒绝执行且不写入任何配置（已验证：拦下并返回 1）
+- [x] **1d.9** 通道可观测性与流畅度回归（**已完成，待本版 dev 公网复验**）
+  - 手机横/竖屏固定显示实际协议与核心质量：WSS 显示 RTT + 快照迟到率，
+    WebTransport/裸 UDP 显示通道 RTT + 逻辑帧丢失率
+  - `__net()` 提供 RTT p50/p95、RTT 抖动、到达间隔 p50/p95/max、长卡顿、
+    `bufferedAmount`、逻辑帧/副本丢失、插值缓冲耗尽和本机预测校正指标
+  - wss 全量 JSON 恢复 15Hz/119ms；加速通道保持 30Hz/70ms，通道切换同步改插值参数
+  - 修复 `SelfPredictor` 重复累加权威残差和软校正只移动蛇头不移动 `trail` 的头身分离
+  - 二进制协议升级 v2：补齐色块 `kind/null color`、移动流星和 `sn/bl/mt` 真实消费链；
+    外层 `PROTO_VER` 同步升为 2，禁止新旧二进制端在滚动部署期间混跑
+  - 输入 `seq/frameId` 跨 TCP 与加速通道共享；TCP 输入被采纳后同步端点去重基线，
+    防止长时间回落（> `INPUT_MAX_SEQ_JUMP`）后加速上行永久冻结；TCP/meta 全量基线与
+    迟到加速增量按 tick 排序
+  - count/MTU 超限改走 TCP；WT 还遵守会话协商 `maxDatagramSize` 并处理异步写失败
+  - 关键缺陷均做故障注入：残差累加、只移蛇头、TCP 30Hz、手机隐藏协议、未规范化
+    二进制快照、服务端假回落，测试均能准确报错
 
 ### 公网实测（2026-09-03，dev 环境 8093/udp）
 

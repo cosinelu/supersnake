@@ -73,7 +73,9 @@
       kind: 'tcp',                       // 'tcp' | 'wt' | 'udp'
       label: 'TCP（wss + JSON）',
       offered: { udpPort: 0, wtPort: 0 },
-      snapIntervalMs: 0,
+      snapIntervalMs: 0,       // 当前实际通道间隔
+      tcpIntervalMs: 66,
+      accelIntervalMs: 33,
       switches: 0,      // 切换次数 >0 ⇒ 中途降级过，比「当前状态」更能说明问题
       binFrames: 0      // 收到的二进制快照帧数（0 而 kind 非 tcp ⇒ 通道建了但没数据）
     };
@@ -106,6 +108,11 @@
         ch.label = kind === 'wt' ? 'WebTransport（UDP + 二进制）'
           : kind === 'udp' ? '裸 UDP（二进制）'
             : 'TCP（wss + JSON）';
+        ch.snapIntervalMs = kind === 'tcp' ? ch.tcpIntervalMs : ch.accelIntervalMs;
+        // 通道物理特性不同：WT/UDP 30Hz 用 70ms；wss 15Hz 用约 119ms。
+        // 若只改 HUD 不改插值层，就会出现「显示已降级，但仍拿 70ms 缓冲扛 TCP
+        // 队头阻塞」的假修复。这里必须让真实渲染参数同步切换。
+        if (self.remote) self.remote.setSnapInterval(ch.snapIntervalMs);
       },
       over: function (m) { self._finish(m.reason, m.ranks, false); },
       drop: function () { self._finish(P.OVER_REASON.DROPPED, null, true); },
@@ -139,7 +146,10 @@
     //   offered 全 0        ⇒ 服务器侧没开（UDP_ENABLED / WT_ENABLED）
     //   offered 有值但走 tcp ⇒ 客户端没用上（浏览器不支持 / 握手失败 / 端口被封）
     this.channel.offered = { udpPort: m.udpPort || 0, wtPort: m.wtPort || 0 };
-    this.channel.snapIntervalMs = m.snapIntervalMs || 0;
+    this.channel.tcpIntervalMs = m.tcpSnapIntervalMs || m.snapIntervalMs || 66;
+    this.channel.accelIntervalMs = m.accelSnapIntervalMs || m.snapIntervalMs || 33;
+    this.channel.snapIntervalMs = this.channel.kind === 'tcp'
+      ? this.channel.tcpIntervalMs : this.channel.accelIntervalMs;
 
     g.mode = 'multi';
     g.levelCfg = { level: 0, W: m.W, H: m.H, wallSegments: 0, targetScore: 0, speed: cfg.SNAKE_SPEED };
@@ -163,7 +173,9 @@
     // setState('play') 会调 latchExisting()，把仍按住的手指重新接管。
     g.joystick.release();
 
-    this.remote = new CS.RemoteMatch(this.playerId, { snapIntervalMs: m.snapIntervalMs });
+    this.remote = new CS.RemoteMatch(this.playerId, {
+      snapIntervalMs: this.channel.snapIntervalMs
+    });
     g.mp = this.remote;
     // 哑 spawner：blocks/meteors 每帧从快照刷新；grabBlock 供彩色星播报/小地图涟漪
     g.spawner = { blocks: [], meteors: [], grabBlock: null, others: [] };
@@ -180,19 +192,67 @@
     var ch = this.channel;
     var udp = this.transport && this.transport.udp;
     var s = udp && udp.stats;
+    var d = this.transport && typeof this.transport.diagnostics === 'function'
+      ? this.transport.diagnostics(ch.kind) : {};
+    var interp = this.remote && this.remote._interp;
+    var is = interp && interp.stats;
+    var pred = this.predictor;
+    var frameTotal = s ? s.recv + s.missingFrames : 0;
+    var expectedCopies = s ? frameTotal * (udp.expectedDup || 1) : 0;
+    function pct(n, total) { return total > 0 ? Math.round(n * 1000 / total) / 10 : 0; }
     return {
       通道: ch.label,
       kind: ch.kind,
       服务器下发: ch.offered,
-      快照间隔ms: ch.snapIntervalMs,
+      当前快照间隔ms: ch.snapIntervalMs,
+      TCP快照间隔ms: ch.tcpIntervalMs,
+      加速快照间隔ms: ch.accelIntervalMs,
       通道切换次数: ch.switches,
-      // recv 是**去重后**的二进制帧数：>0 才说明加速通道真的在送数据。
-      // 通道 active 但 recv=0 是最需要警惕的状态：握手成功、数据没来。
+      WSS延迟ms: d.rttMs || 0,
+      WSS延迟P50ms: d.rttP50Ms || 0,
+      WSS延迟P95ms: d.rttP95Ms || 0,
+      WSS抖动ms: Math.round((d.rttJitterMs || 0) * 10) / 10,
+      加速通道延迟ms: s ? s.pathRttMs : 0,
+      加速通道抖动ms: s ? Math.round(s.pathRttJitterMs * 10) / 10 : 0,
+      快照到达P50ms: d.arrivalP50Ms || 0,
+      快照到达P95ms: d.arrivalP95Ms || 0,
+      快照最大间隔ms: d.arrivalMaxMs || 0,
+      快照到达抖动ms: Math.round((d.arrivalJitterMs || 0) * 10) / 10,
+      // TCP 可靠传输不称「网络丢包」：这里是应用层快照序号是否缺失。
+      快照缺失率: Math.round((d.frameLossPct || 0) * 10) / 10,
+      快照迟到率: Math.round((d.latePct || 0) * 10) / 10,
+      长卡顿次数: d.stalls || 0,
+      WSS待发送字节: d.wsBufferedBytes || 0,
+      // recv 是去重后的二进制逻辑帧；rawSnaps 含冗余副本。
       二进制帧: s ? s.recv : 0,
+      逻辑帧丢失: s ? s.missingFrames : 0,
+      逻辑帧丢失率: s ? pct(s.missingFrames, frameTotal) : 0,
+      冗余副本包: s ? s.rawSnaps : 0,
+      副本丢失率估算: s ? pct(Math.max(0, expectedCopies - s.rawSnaps), expectedCopies) : 0,
       冗余去重: s ? s.dupDropped : 0,
+      乱序包: s ? s.outOfOrder : 0,
       解码失败: s ? s.decodeFail : 0,
-      降级次数: s ? s.fallbacks : 0
+      降级次数: s ? s.fallbacks : 0,
+      插值延迟ms: interp ? interp.delay : 0,
+      插值缓冲领先ms: interp ? Math.round(interp.lastLeadMs) : 0,
+      插值缓冲耗尽率: is ? pct(is.latestClamps, is.samples) : 0,
+      预测误差px: Math.round((pred.lastErr || 0) * 10) / 10,
+      预测硬校正: pred.hardSnaps || 0,
+      预测最大软校正px: Math.round((pred.maxCorrectionPx || 0) * 10) / 10,
+      头颈最大间距px: Math.round((pred.maxNeckGap || 0) * 10) / 10
     };
+  };
+
+  /** 手机/桌面 HUD 共用的单行摘要；完整明细仍由 __net() 提供。 */
+  OnlineMatch.prototype.netSummary = function () {
+    var n = this.netInfo();
+    var tag = this.channel.kind === 'wt' ? 'WebTransport'
+      : this.channel.kind === 'udp' ? '裸UDP' : 'WSS';
+    var rtt = this.channel.kind === 'tcp' ? n.WSS延迟ms : n.加速通道延迟ms;
+    var quality = this.channel.kind === 'tcp'
+      ? ('卡 ' + n.快照迟到率 + '%')
+      : ('丢 ' + n.逻辑帧丢失率 + '%');
+    return tag + ' · ' + (rtt ? rtt + 'ms' : '--ms') + ' · ' + quality;
   };
 
   /** 快照：应用视图 + 本机 reconcile；首帧挂接预测体并切入 play */

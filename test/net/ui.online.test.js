@@ -115,6 +115,50 @@ g5.startMulti();
 for (var i = 0; i < 60; i++) g5.update(33);
 ok(g5.state === 'play' && g5.mp && g5.mp.playerEntry, '本地多人对战不受影响');
 
+// ---- 8. 通道切换必须同步切换真实插值间隔 ----
+var ft = new CS.TransportBase();
+ft.connect = function () { this._emit('open'); };
+ft.joinMatch = function () {};
+ft.cancelMatch = function () {};
+ft.sendInput = function () {};
+ft.diagnostics = function () {
+  return {
+    rttMs: 48, rttP50Ms: 45, rttP95Ms: 72, rttJitterMs: 6,
+    arrivalP50Ms: 66, arrivalP95Ms: 120, arrivalMaxMs: 180,
+    arrivalJitterMs: 15, frameLossPct: 0, latePct: 12.5,
+    stalls: 2, wsBufferedBytes: 0
+  };
+};
+var g6 = new CS.Game(390, 844);
+var om6 = new CS.OnlineMatch(g6, { transport: ft, nick: '分频测试' });
+g6.online = om6;
+om6.begin();
+ft._emit('matched', {
+  roomId: 'r', playerId: 1, players: [{ id: 1, name: '分频测试' }],
+  countdownMs: 0, W: 2400, H: 1600, walls: [],
+  snapIntervalMs: 66, tcpSnapIntervalMs: 66, accelSnapIntervalMs: 33,
+  tcpSnapEvery: 2, accelSnapEvery: 1, udpDup: 3,
+  udpPort: 8092, wtPort: 8093
+});
+ok(om6.channel.kind === 'tcp' && om6.channel.snapIntervalMs === 66,
+  '初始 TCP 保底采用 66ms 快照间隔');
+ok(om6.remote && om6.remote.interpDelayMs() >= 118,
+  '**wss 使用约 120ms 插值缓冲**（不拿 70ms 硬扛 TCP 队头阻塞）');
+ft._emit('udp', { active: true, kind: 'wt' });
+ok(om6.channel.kind === 'wt' && om6.channel.snapIntervalMs === 33,
+  'WebTransport 激活后切到 33ms 快照间隔');
+ok(om6.remote.interpDelayMs() === 70,
+  '加速通道使用 70ms 低延迟插值缓冲');
+ft._emit('udp', { active: false, kind: 'wt' });
+ok(om6.channel.kind === 'tcp' && om6.remote.interpDelayMs() >= 118,
+  '**中途降级 wss 后真实插值缓冲恢复约 120ms**');
+var ni6 = om6.netInfo();
+ok(ni6.WSS延迟ms === 48 && ni6.快照迟到率 === 12.5 && ni6.插值延迟ms >= 118,
+  'netInfo 暴露 RTT / 快照迟到率 / 当前插值延迟');
+ok(/WSS/.test(om6.netSummary()) && /48ms/.test(om6.netSummary()),
+  '手机 HUD 摘要包含实际协议与延迟（' + om6.netSummary() + '）');
+om6.dispose();
+
 console.log('');
 console.log('========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

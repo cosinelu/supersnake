@@ -197,69 +197,79 @@ function t4(done) {
           ok(ep.stats.dropMagic >= 1, '垃圾 magic 被拒（' + ep.stats.dropMagic + '）');
           ok(ep.stats.dropSeq >= 1, '重复副本被去重（' + ep.stats.dropSeq + '）');
 
-        // 7) 地址跟随：换一个源端口发包，仍应识别为同一玩家
-        var cli2 = dgram.createSocket('udp4');
-        var frames2 = [];
-        cli2.on('message', function (buf) {
-          if (buf[0] !== UdpEndpoint.MAGIC_HACK) frames2.push({ t: Date.now(), len: buf.length });
-        });
-        cli2.bind(0, '127.0.0.1', function () {
-          // 地址跟随：换源端口发同一 token 的包。
-          // 同样要**重试驱动**而非固定延时 —— cli2 也可能撞上回环黑洞。
-          // frameId 每次递增，避免被去重当成重复副本。
-          var fid = 50, t2 = 0;
-          (function push() {
-            if (got.length >= 2 || t2 >= 10) { afterFollow(); return; }
-            t2++;
-            cli2.send(Buffer.from(BP.encInputFrag(token, fid++, 0.5, 1)), port, '127.0.0.1');
-            setTimeout(push, 25);
-          })();
+        // 7) 地址跟随：换一个源端口发包，仍应识别为同一玩家。
+        // Windows 回环黑洞不只可能命中初始 socket 对，第二只 NAT 重绑定 socket
+        // 也会永久收发不了；原地重试 10 轮无用，必须整只 cli2 重建。
+        var cli2 = null, frames2 = [], followAttempt = 0, fid = 50;
+        startFollow();
 
-          function afterFollow() {
-            ok(got.length >= 2, '换源端口后仍被接受（NAT 重绑定/网络切换）',
-              '收到 ' + got.length + ' 条，重试 ' + t2 + ' 轮');
-            ok(got[1] && got[1].connId === 'c1', '地址跟随后仍映射到同一 connId');
-            ok(got[1] && got[1].inp.boost === 1, 'boost 位正确传递');
-
-            // 9) 下行冗余打散。
-            // 注意必须在 cli2 上收：上一步的地址跟随已把会话地址更新为 cli2，
-            // 下行本来就该发往最新地址（NAT 重绑定后旧地址已失效）——
-            // 在 cli 上收不到反而是地址跟随生效的证据。
-            var frame = BP.encSnapBin({ tick: 1, ack: 1, timeMs: 0, entries: [] });
-            frames.length = 0; frames2.length = 0;
-            ep.sendFrame('c1', frame);
-            setTimeout(function () {
-              // 回环偶发丢包（实测约 7%）下不强求 3 份全到，但至少 2 份才能
-              // 校验打散间隔。份数正确性由「≥2 且 ≤3」保证（不会多发）。
-              ok(frames2.length >= 2 && frames2.length <= 3,
-                '下行发出 UDP_DUP=3 份（收到 ' + frames2.length + '，回环允许丢 1）');
-              ok(frames.length === 0, '下行发往**最新地址**，旧地址不再收包（地址跟随生效）',
-                '旧地址收到 ' + frames.length + ' 份');
-              if (frames2.length === 3) {
-                var d1 = frames2[1].t - frames2[0].t;
-                var d2 = frames2[2].t - frames2[0].t;
-                var frameMs = cfg.TICK_MS * (cfg.SNAP_EVERY || 1);
-                console.log('       副本间隔：0 / ' + d1 + ' / ' + d2 +
-                  ' ms（帧窗口 ' + frameMs + 'ms）');
-                // 判据按**真实目的**定：副本要落在**不同的定时器 tick** 上
-                // （这是抗突发丢包的前提），且必须落在本帧窗口内 ——
-                // 溢出到下一帧就不再是本帧的冗余，纯浪费带宽。
-                // 不断言绝对值：Node 的 setTimeout 系统性偏慢（目标 22ms 实测 33ms）。
-                // **要求最小间隔而非仅「严格递增」**：间隔 1ms 跨不过定时器分辨率
-                // （Windows 约 15.6ms），等于没打散。曾实测到 0/24/24 ——
-                // 后两份因原定时刻已过期、wait 被钳到最小值而紧挨着发出。
-                var MIN_GAP = 5;
-                ok(d1 >= MIN_GAP && (d2 - d1) >= MIN_GAP,
-                  '相邻副本间隔 ≥' + MIN_GAP + 'ms（0 / ' + d1 + ' / ' + d2 + '）',
-                  '间隔 ' + d1 + ' 与 ' + (d2 - d1) + 'ms，过近则跨不过定时器 tick');
-                ok(d2 <= frameMs * 1.5, '全部副本落在本帧窗口内（末份 ' + d2 +
-                  'ms ≤ ' + Math.round(frameMs * 1.5) + 'ms）', '溢出到下一帧了');
+        function startFollow() {
+          followAttempt++;
+          cli2 = dgram.createSocket('udp4');
+          cli2.on('message', function (buf) {
+            if (buf[0] !== UdpEndpoint.MAGIC_HACK) frames2.push({ t: Date.now(), len: buf.length });
+          });
+          cli2.bind(0, '127.0.0.1', function () {
+            var gotBefore = got.length, t2 = 0;
+            (function push() {
+              if (got.length > gotBefore) { afterFollow(t2); return; }
+              if (t2 >= 10) {
+                try { cli2.close(); } catch (e) {}
+                if (followAttempt < 4) { startFollow(); return; }
+                afterFollow(t2);
+                return;
               }
-              cli.close(); cli2.close();
-              ep.close(function () { done(); });
-            }, 120);
-          }
-        });
+              t2++;
+              cli2.send(Buffer.from(BP.encInputFrag(token, fid++, 0.5, 1)), port, '127.0.0.1');
+              setTimeout(push, 25);
+            })();
+          });
+        }
+
+        function afterFollow(t2) {
+          ok(got.length >= 2, '换源端口后仍被接受（NAT 重绑定/网络切换）',
+            '收到 ' + got.length + ' 条，socket 重建 ' + followAttempt + ' 次，末轮重试 ' + t2 + ' 次');
+          ok(got[1] && got[1].connId === 'c1', '地址跟随后仍映射到同一 connId');
+          ok(got[1] && got[1].inp.boost === 1, 'boost 位正确传递');
+
+          // 9) 下行冗余打散。
+          // 注意必须在 cli2 上收：上一步的地址跟随已把会话地址更新为 cli2，
+          // 下行本来就该发往最新地址（NAT 重绑定后旧地址已失效）——
+          // 在 cli 上收不到反而是地址跟随生效的证据。
+          var frame = BP.encSnapBin({ tick: 1, ack: 1, timeMs: 0, entries: [] });
+          frames.length = 0; frames2.length = 0;
+          ep.sendFrame('c1', frame);
+          setTimeout(function () {
+            // 回环偶发丢包（实测约 7%）下不强求 3 份全到，但至少 2 份才能
+            // 校验打散间隔。份数正确性由「≥2 且 ≤3」保证（不会多发）。
+            ok(frames2.length >= 2 && frames2.length <= 3,
+              '下行发出 UDP_DUP=3 份（收到 ' + frames2.length + '，回环允许丢 1）');
+            ok(frames.length === 0, '下行发往**最新地址**，旧地址不再收包（地址跟随生效）',
+              '旧地址收到 ' + frames.length + ' 份');
+            if (frames2.length === 3) {
+              var d1 = frames2[1].t - frames2[0].t;
+              var d2 = frames2[2].t - frames2[0].t;
+              var frameMs = cfg.TICK_MS * (cfg.SNAP_EVERY || 1);
+              console.log('       副本间隔：0 / ' + d1 + ' / ' + d2 +
+                ' ms（帧窗口 ' + frameMs + 'ms）');
+              // 判据按**真实目的**定：副本要落在**不同的定时器 tick** 上
+              // （这是抗突发丢包的前提），且必须落在本帧窗口内 ——
+              // 溢出到下一帧就不再是本帧的冗余，纯浪费带宽。
+              // 不断言绝对值：Node 的 setTimeout 系统性偏慢（目标 22ms 实测 33ms）。
+              // **要求最小间隔而非仅「严格递增」**：间隔 1ms 跨不过定时器分辨率
+              // （Windows 约 15.6ms），等于没打散。曾实测到 0/24/24 ——
+              // 后两份因原定时刻已过期、wait 被钳到最小值而紧挨着发出。
+              var MIN_GAP = 5;
+              ok(d1 >= MIN_GAP && (d2 - d1) >= MIN_GAP,
+                '相邻副本间隔 ≥' + MIN_GAP + 'ms（0 / ' + d1 + ' / ' + d2 + '）',
+                '间隔 ' + d1 + ' 与 ' + (d2 - d1) + 'ms，过近则跨不过定时器 tick');
+              ok(d2 <= frameMs * 1.5, '全部副本落在本帧窗口内（末份 ' + d2 +
+                'ms ≤ ' + Math.round(frameMs * 1.5) + 'ms）', '溢出到下一帧了');
+            }
+            cli.close(); cli2.close();
+            ep.close(function () { done(); });
+          }, 120);
+        }
         }
         }
       });

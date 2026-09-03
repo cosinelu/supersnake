@@ -26,6 +26,22 @@
   var CORRECT_RATE = 0.1;  // 每帧收敛剩余偏差的 10%
   var TRAIL_MARGIN = 90;   // 轨迹弧长安全余量（px）：> trimTrail 的 60px，留一档安全垫
 
+  /**
+   * 整体平移预测蛇，而不是只挪头。
+   *
+   * `Snake.computeBody()` 从实时头坐标走向 trail[0] 再沿历史轨迹排身体。
+   * 若软校正只改 x/y，trail 仍留在旧世界坐标，校正量就会变成一段人为的
+   * 「头 → 旧轨迹」折线；连续快照再把误差累加时，视觉上就是蛇头回拉、
+   * 身体滞后甚至像断开。平移整条轨迹才能在修正世界坐标的同时保持蛇形。
+   */
+  function translateSnake(s, dx, dy) {
+    s.x += dx; s.y += dy;
+    for (var i = 0; i < s.trail.length; i++) {
+      s.trail[i].x += dx;
+      s.trail[i].y += dy;
+    }
+  }
+
   /** 身体所需弧长（含恒在的尾巴节） */
   function needArcFor(colorCount) {
     return (colorCount + 1) * cfg.SEG_SPACING;
@@ -121,6 +137,9 @@
     this.lastErr = 0;        // 最近一次 reconcile 的偏差（监控/测试用）
     this.hardSnaps = 0;      // 硬对齐次数（应极少；监控用）
     this.trailRebuilds = 0;  // 轨迹补足次数（监控：频繁触发说明预测与权威长期不同步）
+    this.softCorrections = 0;// 实际应用过的软校正帧数
+    this.maxCorrectionPx = 0;// 单帧最大平移量（明显尖峰说明网络/预测失配）
+    this.maxNeckGap = 0;     // 头到首节最大间距（应约等于 SEG_SPACING）
     this._colorKeys = null;  // 记住色池：hardSnap 内部走 attach 时不丢
   }
 
@@ -154,18 +173,29 @@
     if (!s) return;
     if (typeof angle === 'number') s.setTargetAngle(angle);
     s.update(dtMs);
-    // 软校正：位置/角度各收敛剩余偏差的 10%，收敛到 0.1px 内清零
+    // 软校正：位置/角度各收敛剩余偏差的 10%，收敛到 0.1px 内清零。
+    // 位置必须整体平移头 + trail；只改 x/y 会把头从身体历史轨迹上拉开。
     if (Math.abs(this._corr.x) > 0.1 || Math.abs(this._corr.y) > 0.1) {
-      s.x += this._corr.x * CORRECT_RATE;
-      s.y += this._corr.y * CORRECT_RATE;
-      this._corr.x *= (1 - CORRECT_RATE);
-      this._corr.y *= (1 - CORRECT_RATE);
+      var cx = this._corr.x * CORRECT_RATE;
+      var cy = this._corr.y * CORRECT_RATE;
+      translateSnake(s, cx, cy);
+      this._corr.x -= cx;
+      this._corr.y -= cy;
+      this.softCorrections++;
+      var step = Math.sqrt(cx * cx + cy * cy);
+      if (step > this.maxCorrectionPx) this.maxCorrectionPx = step;
       s.computeBody();
     } else { this._corr.x = 0; this._corr.y = 0; }
     if (Math.abs(this._corrAngle) > 0.001) {
-      s.angle = u.normAngle(s.angle + this._corrAngle * CORRECT_RATE);
-      this._corrAngle *= (1 - CORRECT_RATE);
+      var ca = this._corrAngle * CORRECT_RATE;
+      s.angle = u.normAngle(s.angle + ca);
+      this._corrAngle -= ca;
     } else { this._corrAngle = 0; }
+
+    if (s.segPos.length > 1) {
+      var neck = u.dist(s.segPos[0].x, s.segPos[0].y, s.segPos[1].x, s.segPos[1].y);
+      if (neck > this.maxNeckGap) this.maxNeckGap = neck;
+    }
   };
 
   /**
@@ -200,9 +230,13 @@
       s.trimTrail();
       this.trailRebuilds++;
     }
-    this._corr.x += dx;
-    this._corr.y += dy;
-    this._corrAngle += u.normAngle(d.angle - s.angle);
+    // 这是「当前预测状态 → 最新权威状态」的**残差**，必须替换旧值，不能累加。
+    // 快照从 15Hz 提到 30Hz 后，旧实现每 33ms 把同一段网络时延造成的偏差
+    // 再加一遍，待校正量会积分式膨胀；实测固定 15px 偏差可累到 79px，
+    // 单帧甚至向后移动 5.4px。最新快照已经包含此前信息，覆盖才是正确语义。
+    this._corr.x = dx;
+    this._corr.y = dy;
+    this._corrAngle = u.normAngle(d.angle - s.angle);
   };
 
   /** 当前预测视图（供渲染：与 Snake 同形） */

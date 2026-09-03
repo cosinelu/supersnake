@@ -8,8 +8,9 @@
  * ---------------------------------------------------------------------------
  * 为什么要这一层，而不是在 room.js 里写 if/else
  * ---------------------------------------------------------------------------
- * room.js 只通过 4 个方法用加速通道：offer / isReady / sendFrame / dropSession。
- * 只要保持这 4 个方法的语义，room.js 就**一行都不用改** ——
+ * room.js 与控制面只通过统一接口使用加速通道：
+ * offer / isReady / sendFrame / setClientActive / needsTcp / syncInputSeq / dropSession。
+ * 只要保持这些方法的语义，房间逻辑就不需要分辨裸 UDP 与 WebTransport ——
  * 房间逻辑不该知道「玩家是小游戏还是浏览器」，那是传输层的事。
  *
  * 反过来说：一旦让 room.js 去分辨通道，判定/广播逻辑就会长出两条分支，
@@ -86,6 +87,41 @@ TransportHub.prototype.sendFrame = function (connId, bytes) {
     return this.wt.sendFrame(connId, bytes);
   }
   return false;
+};
+
+/** 客户端停滞回落/恢复：同时更新两种候选端点，实际只有已握手者会 ready。 */
+TransportHub.prototype.setClientActive = function (connId, mode) {
+  var changed = false;
+  if (this.udp && typeof this.udp.setClientActive === 'function') {
+    changed = this.udp.setClientActive(connId, mode) || changed;
+  }
+  if (this.wt && typeof this.wt.setClientActive === 'function') {
+    changed = this.wt.setClientActive(connId, mode) || changed;
+  }
+  return changed;
+};
+
+/** 探测期同时保留 TCP；只有客户端确认收到完整二进制快照后才停 TCP。 */
+TransportHub.prototype.needsTcp = function (connId) {
+  if (this.udp && this.udp.isReady(connId) && typeof this.udp.needsTcp === 'function') {
+    return this.udp.needsTcp(connId);
+  }
+  if (this.wt && this.wt.isReady(connId) && typeof this.wt.needsTcp === 'function') {
+    return this.wt.needsTcp(connId);
+  }
+  return true;
+};
+
+/** TCP 与加速是同一输入流：可靠输入采纳后同步所有候选端点的 frameId 基线。 */
+TransportHub.prototype.syncInputSeq = function (connId, seq) {
+  var changed = false;
+  if (this.udp && typeof this.udp.syncInputSeq === 'function') {
+    changed = this.udp.syncInputSeq(connId, seq) || changed;
+  }
+  if (this.wt && typeof this.wt.syncInputSeq === 'function') {
+    changed = this.wt.syncInputSeq(connId, seq) || changed;
+  }
+  return changed;
 };
 
 /** 连接断开：两条通道的会话都要清，否则令牌泄漏 */
