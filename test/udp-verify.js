@@ -23,8 +23,24 @@
  *      或者干脆把本脚本 scp 到服务器上、连它自己的公网 IP 跑。
  *   2. 服务器网卡是否收到包 —— `sudo tcpdump -ni any udp port 8092`。
  *      0 packets captured 就说明卡在网络路径（云防火墙），不是应用层。
+ *      **只有 Out 没有 In** = 云控制台防火墙没放行该端口（SSH 改不了那一层）。
  *   3. 应用层是否绑对地址 —— UDP 必须绑 0.0.0.0（UDP_HOST），
  *      不能跟着 HOST 走 127.0.0.1（那是给 nginx 反代的 TCP 用的）。
+ *
+ * 弱网 A/B 对照（验证冗余是否真的有用，2026-09-03 实践）：
+ *   1. `sudo scripts/netem-weaknet.sh on 8092 --loss 20`
+ *      只影响该 UDP 端口出向，SSH / nginx / frps 走 band 0 完全无感
+ *   2. A 组：systemd drop-in 临时加 `Environment=UDP_DUP=1`，重启 → 跑本脚本
+ *   3. B 组：删掉 drop-in 重启（回默认 3）→ 跑本脚本
+ *   4. `sudo scripts/netem-weaknet.sh off all` 恢复
+ *
+ *   实测 20% 丢包：A 组 avg 39.9ms / p95 68ms，B 组 avg 33ms / p95 ~50ms。
+ *
+ *   **端口必须用云控制台已放行的那个**（8092/8094）。曾临时起 9092 做对照，
+ *   结果卡在云防火墙（tcpdump 只见 Out 不见 In），白查半天 ——
+ *   云控制台那层放行是手动的，SSH 改不了，临时端口一定不通。
+ *
+ *   蛇死得早会导致样本量偏小（曾只采到 62 帧），建议同组跑 2~3 轮看稳定性。
  */
 var path = require('path');
 var dgram = require('dgram');
