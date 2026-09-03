@@ -449,12 +449,73 @@ capFrames = ceil(2000 / snapIntervalMs)  // 缓冲保留约 2 秒历史
 
 | 平台 | UDP 能力 | 状态 |
 |---|---|---|
-| 微信小游戏 | `wx.createUDPSocket`，**基础库 2.9.4+ 可连任意公网 IP/域名** | 可用 |
-| 浏览器 | 无裸 UDP。WebTransport（QUIC/UDP）2026-03 起进入 Baseline | 二期评估 |
-| 浏览器兜底 | WebSocket / TCP | 始终可用 |
+| 微信小游戏 | `wx.createUDPSocket`，**基础库 2.9.4+ 可连任意公网 IP/域名** | 代码已写，未真机验证（1c） |
+| Node（测试/工具） | `dgram` | ✅ 已跑通 |
+| 浏览器 | 无裸 UDP。**WebTransport（HTTP/3 over QUIC）2026-03 起 Baseline** | 可行性已验证，待实现（1d） |
+| 浏览器兜底 | WebSocket / TCP | ✅ 始终可用 |
+
+> `js/net/udpTransport.js` 的 `autoSocketFactory` 目前只有 wx / node 两个真实分支，
+> **浏览器返回 `null`** ⇒ 网页版全程走 wss + JSON 保底通道。
+> 整套 UDP 逻辑（编解码 / 冗余打散 / 去重 / 地址跟随 / 降级）都是平台无关的，
+> 缺的只是浏览器侧的 socket 供给。
 
 > 微信多处旧文档仍写「UDP 只允许同局域网」，那是 ≤2.9.3 时代的表述，与 `UDPSocket.send`
 > API 页原文矛盾。**上线前必须实测小程序后台能否配置 UDP 域名。**
+
+#### 7.4.1 WebTransport 现状（2026-09-03 实测确认）
+
+原先文档写「二期评估」，该判断**已过时** —— Safari 26.4（2026-03）补齐最后一块，
+WebTransport 进入 Baseline，`caniuse` 全球覆盖 **89.96%**：
+
+| 浏览器 | 支持起始版本 |
+|---|---|
+| Chrome / Edge | 97（2022） |
+| Firefox | 114（2023） |
+| Safari / iOS Safari | 26.4（2026-03） |
+
+**已在本项目服务器上跑通完整闭环**（真 QUIC 握手 + Let's Encrypt 证书 + 双向 datagram）：
+
+```
+quiche 传输就绪 ✓
+[srv] Http3Server ready udp/4443
+[srv] session ready ✓
+[cli] client.ready ✓
+[srv] 收到 datagram: ping-from-client ✓
+[cli] 回程 datagram: pong-from-server ✓
+```
+
+**关键结论：nginx 不能反代 WebTransport，必须让 Node 直接终结 QUIC/TLS。**
+
+- `ngx_http_v3_module`（1.25+，官方标注 **experimental**）只能做 HTTP/3 的**终端**
+- nginx 不通告 `SETTINGS_ENABLE_CONNECT_PROTOCOL` / `SETTINGS_H3_DATAGRAM` /
+  `SETTINGS_WT_ENABLED`（draft-ietf-webtrans-http3 §2.2 要求三者齐备，
+  浏览器看不到就直接拒绝建会话）
+- nginx 主动拒绝 `CONNECT` 方法，也不解析 `:protocol` 伪头
+- 更根本的：nginx **没有 HTTP/3 上游能力**，`proxy_pass` 只能走 h1/h2，
+  H3 DATAGRAM 无法转发
+- **也不能用 `stream{}` 的 UDP 透传**：它按四元组做伪会话，
+  QUIC 的 Connection ID 迁移会直接断连（与 §3 UDP 不走 nginx 同源的理由）
+
+因此目标形态是**双端口并存**（互不干扰，nginx 只占 TCP）：
+
+```
+443/tcp  → nginx（不动）→ 反代 wss 到 Node    ← 回退路径，始终可用
+443/udp  → Node 内 Http3Server 自行终结 QUIC  ← WebTransport
+```
+
+其他已核实的事实：
+
+- **证书可直接复用** `/etc/letsencrypt/live/.../fullchain.pem` + `privkey.pem`，
+  浏览器走标准 Web PKI，**不需要** `serverCertificateHashes`（那套 14 天有效期
+  限制只适用于自签 hashes 路径）。一 TCP 一 UDP，socket 不冲突。
+  但 certbot 续期后需同时 reload nginx 与让 Node 重载证书（加 `renewal-hooks/deploy`）。
+- **`@fails-components/webtransport` 1.6.7 有 linux x64 预编译**，
+  实测 `npm install` 18 秒完成，**不需要 cmake/g++**。native 二进制在独立包
+  `@fails-components/webtransport-transport-http3-quiche`，必须一并安装。
+- **`Alt-Svc` 与 WebTransport 无关** —— 它只让普通 https 请求升级到 h3；
+  WebTransport 客户端直接对 URL 里的 `authority:port` 发起 QUIC 连接。
+- **WebTransport 目前没有 TCP 回退**（IETF 的 WebTransport over HTTP/2 尚未落地浏览器）。
+  UDP 被封的网络下它直接连不上 ⇒ **wss 回退不是可选项，是必需项**。
 
 ### 7.5 服务器侧前置条件
 

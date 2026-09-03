@@ -8,10 +8,15 @@
 
 | 阶段 | 目标 | 传输层 | 可独立验证 |
 |---|---|---|---|
-| **1a** | 二进制编码 + 下行瘦身 | 仍走 TCP | ✅ 体积/精度可直接量化 |
-| **1b** | UDP 传输层 + 冗余打散 + 降级 | UDP + TCP 保底 | ✅ 弱网工具对比 |
-| **1c** | 微信小游戏 UDP 适配 | 复用 1b 协议层 | ✅ 真机 |
+| **1a** ✅ | 二进制编码 + 下行瘦身 | 仍走 TCP | ✅ 体积/精度可直接量化 |
+| **1b** ✅ | UDP 传输层 + 冗余打散 + 降级 | UDP + TCP 保底 | ✅ 弱网工具对比 |
+| **1c** | 微信小游戏 UDP 适配 | 复用 1b 协议层 | ✅ 真机（需小程序后台） |
+| **1d** | 浏览器 WebTransport 通道 | QUIC datagram + wss 保底 | ✅ 可行性已实测跑通 |
 | **2** | 预表现与插值增强 | 不涉及 | 以后再说 |
+
+**当前网页版仍走 wss + JSON**：`udpTransport.js` 的 `autoSocketFactory` 在浏览器返回
+`null`（只有 wx / node 两个真实分支）⇒ **1a/1b 的收益网页版一点没吃到**。
+这是 1d 的动机。
 
 **为什么 1a 必须独立**：实测现状快照 19662 字节会被切成 14 个 IP 分片，
 任一片丢失则整包在内核报废（丢 2% 放大成报废 24.6%）。
@@ -349,10 +354,75 @@ JSON 快照(TCP) : 0 帧（全程未降级）
 ## 阶段 1c：微信小游戏 UDP 适配
 
 - [ ] **1c.1** `js/net/wxUdpTransport.js`：`wx.createUDPSocket` 封装，复用 1b 的协议层
+      （**已存在于 `udpTransport.js` 的 `wxSocketFactory`，待真机验证**）
 - [ ] **1c.2** 运行时能力探测：`wx` 存在 → WxUdp，`WebTransport` 可用 → WT，否则 WS
 - [ ] **1c.3** **上线前必须实测**：小程序后台能否配置 UDP 域名
   > 微信多处旧文档仍写「UDP 只允许同局域网」，那是 ≤2.9.3 的表述，
   > 与 `UDPSocket.send` API 页原文（2.9.4+ 可连任意 IP/域名）矛盾。**以实测为准。**
+  > **需要用户的小程序后台配合，无法独立完成。**
+
+---
+
+## 阶段 1d：浏览器 WebTransport 通道
+
+> 可行性已于 2026-09-03 在本项目服务器上实测跑通，
+> 结论与踩到的坑见 `docs/architecture/02-udp-transport.md` §7.4.1。
+
+**为什么值得做**：网页版是当前唯一有真实用户的形态，而它现在**完全没吃到**
+1a/1b 的收益（二进制编码、冗余打散、48× 压缩全部只在 Node/小游戏路径生效）。
+WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」，
+与本项目 UDP 通道**完全一致** ⇒ `binProtocol` / 冗余打散 / 去重 / 降级逻辑可原样复用，
+只需替换 socket 供给层。
+
+### 关键约束（已核实，不要再走弯路）
+
+1. **nginx 不能反代 WebTransport**，必须 Node 直接终结 QUIC/TLS（见 §7.4.1）。
+   不要尝试 `listen 443 quic`（抢占 UDP 443 且无用）或 `stream{}` UDP 透传
+   （Connection ID 迁移会断连）。
+2. **必须 `await quicheLoaded`** 再建客户端 —— 否则库会**静默回退 HTTP/2**
+   并以 `Opening handshake failed` 失败，堆栈里出现 `http2/node/client.js`
+   就是这个原因（实测踩过，排查方向完全会被带偏）。
+3. **UDP 端口要在两层放行**：ufw + 云控制台。实测 ufw 放行后公网仍不通，
+   证实卡在云控制台那层（与 UDP 9092 那次同一个坑）。
+4. **wss 回退是必需项不是可选项** —— WebTransport 目前无 TCP 回退，
+   UDP 被封的网络下直接连不上。
+
+### 任务
+
+- [ ] **1d.1** 服务器：`server/webtransport.js`
+  - `Http3Server`（`@fails-components/webtransport` 1.6.7 + `-transport-http3-quiche`）
+  - 端口决策：生产用 **443/udp**（nginx 只占 TCP 443，UDP 空闲已核实；
+    企业防火墙对高位 UDP 封禁率远高于 443）。需给 node 加
+    `AmbientCapabilities=CAP_NET_BIND_SERVICE`。**开发环境先用 4443 验证**。
+  - 证书直接读 letsencrypt 的 `fullchain.pem` / `privkey.pem`
+  - **会话与现有 `UdpEndpoint` 的会话表打通**：token 语义、地址跟随、
+    frameId 去重必须与 `server/udp.js` 保持一致，否则同一套客户端逻辑要分叉
+- [ ] **1d.2** 客户端：`udpTransport.js` 增加 `webTransportSocketFactory`
+  - 把 `WebTransport.datagrams` 适配成既有的
+    `{ onMessage, send, close }` 接口 ⇒ `UdpAccel` 零改动
+  - `autoSocketFactory` 补浏览器分支：`typeof WebTransport !== 'undefined'` → WT
+  - **异步握手要处理好**：`new WebTransport()` 后要 `await ready`，
+    而现有 `socketFactory` 是同步返回 ⇒ 需要一层「pending 队列」或改造为异步工厂
+- [ ] **1d.3** 降级路径：WT 握手失败 / `closed` reject / 对局中停滞
+      → 停用旁路走 wss（复用 `UdpAccel` 既有的 `_setActive(false)`）
+- [ ] **1d.4** certbot 续期钩子：`renewal-hooks/deploy` 同时 reload nginx 与重载 Node 证书
+- [ ] **1d.5** 测试
+  - `webtransport.test.js`：真 `Http3Server` + 真客户端，断言 datagram 往返、
+    降级、二进制帧解码同构
+  - **能否进 CI 取决于 native addon 在 CI runner 上能否装** —— 若不能，
+    退化为「本地必跑 + CI 跳过」，并在 `npm test` 里明确标注跳过原因
+  - 弱网复验：`netem-weaknet.sh` 对 WT 端口注入丢包，确认冗余打散同样生效
+- [ ] **1d.6** 云控制台手动放行 UDP 443（**必须用户操作**）
+
+### 待决问题
+
+- **443/udp vs 4443**：443 穿透性最好但需 capability；4443 简单但企业网易被封。
+  倾向 443，开发阶段先 4443 验证。
+- **native addon 与「零构建」的调性冲突**：本项目一直是零构建纯 JS，
+  引入预编译 native 依赖是首次。虽然有 prebuilt 不需要编译工具链，
+  但服务器部署脚本要相应调整（`npm ci --omit=dev` 需能拉到预编译包）。
+- 库作者自称 "duct tape-style solution"，缺 `getStats()` ⇒ **按 beta 对待**，
+  wss 回退必须始终可用。
 
 ---
 
@@ -376,6 +446,9 @@ JSON 快照(TCP) : 0 帧（全程未降级）
 | NAT 映射失效 | 5s keepalive + 服务器地址跟随 |
 | 云控制台未放行 UDP 端口 | 部署清单显式列出该人工步骤（SSH 改不了这一层） |
 | 小游戏 UDP 实际不可用 | 1c 独立阶段，失败不影响 1a/1b 已上线的收益 |
+| WebTransport 库是 "duct tape" 级质量 | 1d 全程保留 wss 回退；WT 只承载幂等流量，停用旁路即恢复 |
+| native addon 在 CI 装不上 | 测试退化为「本地必跑 + CI 跳过并显式标注」，不假装通过 |
+| certbot 续期后 WT 用旧证书 | `renewal-hooks/deploy` 同时 reload nginx 与 Node |
 
 ## 不做的事
 
@@ -383,3 +456,5 @@ JSON 快照(TCP) : 0 帧（全程未降级）
 - **不做 gzip**：实测二进制 31x 远优于 gzip 4.4x，且 gzip 要吃 142% 单核
 - **不做 HMAC / 加密**：判定权全在服务器，伪造上行只能让自己的蛇转向，攻击面近乎为零
 - **不改判定归属**：客户端仍不做任何判定、不上报任何判定结果
+- **不用 nginx 反代 WebTransport**：技术上不可行（§7.4.1），
+  也不用 `stream{}` UDP 透传（QUIC Connection ID 迁移会断连）
