@@ -362,6 +362,11 @@
       if (floorHit) break; // 已决定重置，无需继续连锁
     }
     if (removed.length) this.computeBody(); // 身体由轨迹派生，消除后自然收缩
+    // 标准消除入口同时承担“存活蛇长度不变量”的最终兜底。
+    // clear / clear3 / rand* 会先直接删节，再调用 eliminate；若直接删除已经把颜色节
+    // 降到 minLen 以下，此时 findRuns() 为空，旧代码不会设置 floorHit，蛇可存活到 0 节。
+    // 这会让 renderer 把唯一的 segPos[0] 当尾巴画，玩家看到的就是“头掉了”。
+    if (runLen === cfg.ELIM_RUN && this.colors.length < minLen) floorHit = true;
     // 保底触发：整段消除后，随机补满 REFILL_ON_FLOOR 块「已解锁颜色」砖（保留残余的非消除节），让游戏继续
     if (floorHit) {
       var pool = (this.colorKeys && this.colorKeys.length) ? this.colorKeys : cfg.COLOR_KEYS;

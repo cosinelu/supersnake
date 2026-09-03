@@ -78,6 +78,11 @@
     this.udpFactoryOverride = opts.udpSocketFactory || null;   // 测试可注入
     this.udpFactory = null;    // 由 _setupUdp 依 matched 信息选定
     this.udp = null;
+    this.accelDiag = {
+      state: 'not_attempted', phase: '', reason: '', target: '',
+      webTransportSupported: false, secureContext: true,
+      lastError: '', failedAt: 0, helloSent: 0, ackedAt: 0, firstSnapAt: 0
+    };
     this.meta = {};        // 低频通道缓存：id → { nm, kl, es, ... }
     this._metaTick = -1;
     this._blocksById = {}; // 二进制色块增量的本地基线；1Hz meta / TCP 全量会校正
@@ -250,13 +255,32 @@
    * 两条通道在服务端是**独立的会话表**，token 各用各的，绝不能混。
    */
   WsTransport.prototype._setupUdp = function (msg) {
-    if (!this.udpEnabled || !CS.UdpAccel) return;
+    var hasWT = (typeof WebTransport !== 'undefined') ||
+      (typeof globalThis !== 'undefined' && !!globalThis.WebTransport);
+    var secure = typeof isSecureContext === 'undefined' ? true : !!isSecureContext;
+    this.accelDiag = {
+      state: 'not_attempted', phase: 'offer', reason: '', target: '',
+      webTransportSupported: !!hasWT, secureContext: secure,
+      lastError: '', failedAt: 0, helloSent: 0, ackedAt: 0, firstSnapAt: 0
+    };
+    if (!this.udpEnabled) { this.accelDiag.reason = 'client_disabled'; return; }
+    if (!CS.UdpAccel) { this.accelDiag.reason = 'module_missing'; return; }
 
     var host = null;
     if (typeof location !== 'undefined' && location.hostname) host = location.hostname;
     else if (this.url) {
-      var m = /^wss?:\/\/([^:/]+)/.exec(this.url);
-      if (m) host = m[1];
+      try {
+        host = new URL(this.url).hostname;
+        // URL.hostname 对 IPv6 可能保留方括号；后续统一按裸 host 处理。
+        if (host.charAt(0) === '[' && host.charAt(host.length - 1) === ']') host = host.slice(1, -1);
+      } catch (e) {
+        var m = /^wss?:\/\/(\[[^\]]+\]|[^:/]+)/.exec(this.url);
+        if (m) host = m[1].replace(/^\[|\]$/g, '');
+      }
+    }
+    if (msg && msg.wtPort) {
+      var authority = host && host.indexOf(':') >= 0 && host.charAt(0) !== '[' ? '[' + host + ']' : host;
+      this.accelDiag.target = 'https://' + authority + ':' + msg.wtPort + (msg.wtPath || '/wt');
     }
 
     // 选工厂：注入优先（测试），否则按环境自动选。
@@ -267,7 +291,13 @@
          host: host, wtPort: msg.wtPort, wtPath: msg.wtPath,
          certHashes: msg.wtCertHashes || null   // 仅测试环境会带
        }));
-    if (!this.udpFactory) return;   // 无可用通道（如无 WebTransport 的旧浏览器）
+    if (!this.udpFactory) {
+      this.accelDiag.reason = msg && msg.wtPort
+        ? (hasWT ? 'factory_unavailable' : 'webtransport_unsupported')
+        : 'offer_missing';
+      this.accelDiag.phase = msg && msg.wtPort ? 'factory' : 'offer';
+      return;
+    }
 
     // 走哪条通道就用哪套 port/token。
     //
@@ -283,7 +313,11 @@
       port = msg.wtPort;
       token = msg.wtToken;
     }
-    if (!port || token == null) return;
+    if (!port || token == null) {
+      this.accelDiag.reason = 'invalid_offer';
+      this.accelDiag.phase = 'offer';
+      return;
+    }
 
     var self = this;
     this.udpKind = kind;
@@ -307,6 +341,9 @@
       // 确认 active=true。这样 7B ACK 可达但大 datagram 不通时不会周期性黑屏。
       onProbe: function (probing) { self._send(P.accel(probing ? 2 : 0)); }
     });
+    this.accelDiag = this.udp.diag;
+    this.accelDiag.webTransportSupported = !!hasWT;
+    this.accelDiag.secureContext = secure;
     if (!this.udp.attach({
       udpPort: port, udpToken: token, host: host,
       snapIntervalMs: msg.accelSnapIntervalMs || msg.snapIntervalMs,

@@ -378,14 +378,19 @@ function t6(done) {
   T2._setupUdp({ udpPort: 1234, udpToken: 5 });
   ok(T2.udp === null, '无平台加速能力时静默降级（旧浏览器场景）');
 
-  // 服务器只下发 wt 信息、而平台又拿不到 socket 时，同样必须降级而不是抛错
+  // 服务器只下发 wt 信息、而平台又拿不到 socket 时，同样必须降级而不是抛错。
+  // 注入工厂要自报 wt，否则 _setupUdp 会按裸 UDP 选端口，测试就不再对应此场景。
+  var noWtSocket = function () { return null; };
+  noWtSocket.channelKind = 'wt';
   var T3 = new CS.WsTransport({
     url: 'ws://127.0.0.1:1',
     WebSocketImpl: function () { return fakeWs; },
-    udpSocketFactory: function () { return null; }
+    udpSocketFactory: noWtSocket
   });
   T3._setupUdp({ wtPort: 8093, wtToken: 7, wtPath: '/wt' });
   ok(T3.udp === null, '只有 wt 信息但平台不支持时也静默降级');
+  ok(T3.accelDiag.reason === 'factory_unavailable' && T3.accelDiag.phase === 'factory',
+    '**静默回落仍保留可诊断原因**（' + T3.accelDiag.reason + '）');
 
   T.dispose(); T2.dispose(); T3.dispose();
   done();
@@ -441,10 +446,13 @@ function t7(done) {
   ok(T.udp.frameIntervalMs === 33 && T.udp.tickStep === 1,
     '**加速旁路采用自己的 30Hz 间隔**（不是兼容字段的 TCP 66ms）');
   ok(T.udp.expectedDup === 3, '客户端拿到服务端冗余份数，诊断可计算副本丢失率');
+  ok(T.udp.diag.state === 'connecting' && T.udp.diag.target.indexOf(':8093') >= 0,
+    '建立期间暴露 connecting 状态与实际目标 authority');
 
   // 走**真实的 _setActive** 触发，而不是直接调回调 ——
   // 直接调回调等于绕过实现，那样测的是测试自己的代码。
   T.udp._setActive(true);
+  ok(T.udp.diag.state === 'active', '通道激活后诊断状态切为 active');
   ok(events.length > 0, '状态变化会向上抛 udp 事件');
   ok(events.length > 0 && events[events.length - 1].active === true,
     '事件带 active 状态');
@@ -480,6 +488,20 @@ function t7(done) {
   T2.udp._setActive(true);
   ok(events2.length > 0 && events2[0].kind === 'udp', '事件反映裸 UDP 通道');
   T2.dispose();
+
+  // IPv6 WSS authority 必须完整解析，并在 WT 目标中补回 []；旧正则会只截出一个 '['。
+  var ipv6Factory = function () {
+    return { onMessage: function () {}, send: function () {}, close: function () {} };
+  };
+  ipv6Factory.channelKind = 'wt';
+  var T6 = new CS.WsTransport({
+    url: 'wss://[2001:db8::1]:9443/ws', WebSocketImpl: function () { return fakeWs; },
+    udpSocketFactory: ipv6Factory
+  });
+  T6._setupUdp({ wtPort: 8093, wtToken: 66, wtPath: '/wt' });
+  ok(T6.udp && T6.udp.host === '2001:db8::1' && T6.udp.diag.target === '[2001:db8::1]:8093',
+    '**IPv6 WSS 主机完整解析，不截断为左方括号**（' + (T6.udp && T6.udp.host) + '）');
+  T6.dispose();
 
   done();
 }
@@ -582,6 +604,9 @@ function t8(done) {
     var falseCount = wtStates.filter(function (v) { return v === false; }).length;
     ok(wtAccel.stats.socketErrors === 1 && falseCount === 1,
       '**WebTransport 异步写拒绝只通知一次回落，且无未处理拒绝/定时器重复通知**');
+    ok(wtAccel.diag.state === 'terminal' && wtAccel.diag.reason === 'write_rejected' &&
+      wtAccel.diag.phase === 'write',
+      '**异步写失败留下稳定诊断枚举**（' + wtAccel.diag.reason + '/' + wtAccel.diag.phase + '）');
     wtAccel.dispose();
     done();
   }, 350);

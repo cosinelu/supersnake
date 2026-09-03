@@ -509,8 +509,11 @@ TCP 的可靠有序语义会在丢包重传时产生队头阻塞，多个 30Hz �
 | 浏览器兜底 | WebSocket / TCP | ✅ 始终可用 |
 
 > `js/net/udpTransport.js` 的 `autoSocketFactory` 已包含 wx / node / 浏览器三条真实分支。
-> 浏览器支持且服务端下发 `wtPort` 时选择 WebTransport；否则返回 `null`，静默使用
-> wss + JSON 保底通道。工厂通过 `channelKind` 自报实际通道，HUD 与诊断不再二次猜平台。
+> 浏览器支持且服务端下发 `wtPort` 时选择 WebTransport；否则使用 wss + JSON 保底通道。
+> **回落对玩家静默，但对诊断不得静默**：`__net()` 必须暴露 WebTransport 是否受支持、
+> 是否拿到 offer、目标 authority、当前建立阶段、最后失败原因与错误摘要。仅显示最终的
+> `TCP · wss` 无法区分浏览器不支持、QUIC 端口被运营商拦截、证书/握手失败或应用层 ACK 超时。
+> 工厂通过 `channelKind` 自报实际通道，HUD 与诊断不再二次猜平台。
 
 > 微信多处旧文档仍写「UDP 只允许同局域网」，那是 ≤2.9.3 时代的表述，与 `UDPSocket.send`
 > API 页原文矛盾。**上线前必须实测小程序后台能否配置 UDP 域名。**
@@ -578,6 +581,27 @@ quiche 传输就绪 ✓
   WebTransport 客户端直接对 URL 里的 `authority:port` 发起 QUIC 连接。
 - **WebTransport 目前没有 TCP 回退**（IETF 的 WebTransport over HTTP/2 尚未落地浏览器）。
   UDP 被封的网络下它直接连不上 ⇒ **wss 回退不是可选项，是必需项**。
+- **标准 `443/udp` 的穿透性通常优于高位 UDP 端口**。dev 的 `8093/udp` 便于与 official
+  的 `443/udp` 进程隔离，但不能据此假设手机 4G 一定可达；遇到“移动网络仍是 WSS”时，
+  必须用同一手机测试期间的服务器 `tcpdump` 判定是否有入站 QUIC，并以 `443/udp` 做 A/B。
+  仅凭“换成 4G”或“服务端正在监听”都不能证明公网 WebTransport 已打通。
+
+### 7.4.2 浏览器回落诊断契约
+
+客户端诊断状态使用稳定枚举，不依赖错误文案：
+
+- 阶段：`not_attempted / connecting / active / fallback / terminal`
+- 建立前：`client_disabled / module_missing / offer_missing / webtransport_unsupported /
+  invalid_offer / factory_unavailable / attach_failed`
+- 建立中：`constructor_throw / wt_ready_rejected / datagram_api_error /
+  hello_ack_timeout`
+- 运行中：`socket_error / write_rejected / read_rejected / session_closed /
+  downlink_stall / send_failed`
+
+`__net()` 至少显示：`WebTransport支持`、`安全上下文`、`加速状态`、`加速失败阶段`、
+`加速失败原因`、`加速目标`、`Socket错误`。首次握手从未成功也必须留下失败原因，不能因为
+`fallbacks` 只统计“active → false”而显示成“降级 0 次、原因未知”。错误摘要只保存在本机
+诊断中，不向服务端发送 token、证书或堆栈。
 
 ### 7.5 服务器侧前置条件
 

@@ -145,7 +145,15 @@ var eb = makeSnake(['red', 'red', 'blue', 'blue']);
 var ebNormal = eb.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN); // 需 4 连
 ok(ebNormal.length === 0 && eb.length() === 4, '普通规则：仅 2 连不触发消除');
 var ebBomb = eb.eliminate(2, 2); // 炸弹：≥2 连即消
-ok(ebBomb.length === 2 && eb.colors.join(',') === 'blue,blue', '炸弹规则(2,2)：清除 2 连（剩保底 2 节）', 'removed=' + ebBomb.length);
+ok(ebBomb.length === 2 && eb.colors.join(',') === 'blue,blue', '炸弹底层规则(2,2)：清除 2 连（临时剩 2 节）', 'removed=' + ebBomb.length);
+// 多人拾取路径必须在炸弹后再执行存活蛇统一保底；旧代码漏了本步，真人可存活在 2 节。
+var bombGame = new CS.Game(960, 540); bombGame.startMulti();
+var bombEntry = bombGame.mp.playerEntry;
+bombEntry.snake.colors = ['red', 'red', 'blue', 'blue'];
+bombEntry.snake.computeBody();
+bombGame.mp.applyItem(bombEntry, { kind: 'bomb', color: null, x: bombEntry.snake.x, y: bombEntry.snake.y });
+ok(bombEntry.snake.colors.length === cfg.REFILL_ON_FLOOR,
+  '**多人炸弹后存活蛇补回保底长度**', 'len=' + bombEntry.snake.colors.length);
 // 减速道具：currentSpeed 在 slowUntil 内 ×SLOW_FACTOR
 var sg2 = new CS.Game(960, 540); sg2.startLevel(1);
 var spdNormal = sg2.currentSpeed();
@@ -300,6 +308,20 @@ var s3 = mkSnake(['red', 'blue', 'green', 'orange', 'purple', 'yellow']);
 var before3 = s3.colors.length;
 var r3 = s3.removeRandom(3);
 ok(r3.length === 3 && s3.colors.length === before3 - 3, '随机消 3：移除 3 节、长度 -3', 'rem=' + r3.length);
+
+// 回归：消除类道具是“先直接删节、再调用标准 eliminate”。旧实现仅在 findRuns()
+// 找到四连时设置保底；若道具已把 2~3 节直接删空，findRuns 为空，存活蛇会保持 0 节，
+// renderer 随即把唯一节点当尾巴画，玩家看到“头掉了”。
+var sFloor1 = mkSnake(['red', 'blue']);
+sFloor1.removeRandom(3);
+sFloor1.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+ok(sFloor1.colors.length === cfg.REFILL_ON_FLOOR,
+  '**随机消把短蛇删空后补回保底长度（头不会消失）**', 'len=' + sFloor1.colors.length);
+var sFloor2 = mkSnake(['red', 'red', 'red']);
+sFloor2.removeByColor('red');
+sFloor2.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+ok(sFloor2.colors.length === cfg.REFILL_ON_FLOOR,
+  '**消色道具删空后补回保底长度**', 'len=' + sFloor2.colors.length);
 
 var s4 = mkSnake(['red', 'blue', 'green', 'orange', 'purple']);
 s4.insertAt(2, 'yellow');

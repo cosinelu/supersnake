@@ -60,6 +60,12 @@
       rawSnaps: 0, missingFrames: 0, outOfOrder: 0,
       pathRttMs: 0, pathRttJitterMs: 0, pathRttMinMs: 0, pathRttMaxMs: 0
     };
+    // 玩家侧仍然静默回落 WSS，但工程诊断不能再静默：否则手机只显示 TCP，
+    // 无法区分“不支持 WebTransport”“QUIC/端口被拦”与“运行中断链”。
+    this.diag = {
+      state: 'not_attempted', phase: '', reason: '', target: '',
+      lastError: '', failedAt: 0, helloSent: 0, ackedAt: 0, firstSnapAt: 0
+    };
 
     this._hsTimer = null;
     this._kaTimer = null;
@@ -68,16 +74,35 @@
     this._pending = [];         // 打散发送的定时器句柄，dispose 时清理
   }
 
+  UdpAccel.prototype._markFailure = function (reason, phase, err, terminal) {
+    this.diag.state = terminal ? 'terminal' : 'fallback';
+    this.diag.reason = reason || 'unknown';
+    this.diag.phase = phase || '';
+    this.diag.failedAt = Date.now();
+    this.diag.lastError = err && (err.message || String(err)) || '';
+  };
+
   /**
    * 用 matched 下发的信息建立 UDP 旁路。
    * @param {object} info { udpPort, udpToken, host }
    */
   UdpAccel.prototype.attach = function (info) {
-    if (!info || !info.udpPort || info.udpToken == null) return false;
-    if (!this.socketFactory) return false;
+    if (!info || !info.udpPort || info.udpToken == null) {
+      this._markFailure('invalid_offer', 'offer');
+      return false;
+    }
+    if (!this.socketFactory) {
+      this._markFailure('factory_unavailable', 'factory');
+      return false;
+    }
     this.host = info.host || this._defaultHost();
     this.port = info.udpPort;
     this.token = info.udpToken >>> 0;
+    this.diag.state = 'connecting';
+    this.diag.phase = 'factory';
+    var diagHost = this.host.indexOf(':') >= 0 && this.host.charAt(0) !== '['
+      ? '[' + this.host + ']' : this.host;
+    this.diag.target = diagHost + ':' + this.port;
     if (info.snapIntervalMs) this.frameIntervalMs = info.snapIntervalMs;
     if (info.tickStep > 0) this.tickStep = info.tickStep | 0;
     if (info.expectedDup > 0) {
@@ -88,14 +113,26 @@
     var self = this;
     try {
       this.sock = this.socketFactory();
-    } catch (e) { return false; }
-    if (!this.sock) return false;
+    } catch (e) {
+      this._markFailure('constructor_throw', 'factory', e, true);
+      return false;
+    }
+    if (!this.sock) {
+      var ff = this.socketFactory.lastFailure;
+      this._markFailure(ff && ff.reason || 'factory_unavailable',
+        ff && ff.phase || 'factory', ff && ff.error, true);
+      return false;
+    }
+    if (this.sock.target) this.diag.target = this.sock.target;
 
+    this.diag.phase = 'hello';
     this.sock.onMessage(function (u8) { self._onMessage(u8); });
     if (typeof this.sock.onError === 'function') {
-      this.sock.onError(function () {
+      this.sock.onError(function (err) {
         self.stats.socketErrors++;
         self.available = false;
+        self._markFailure(err && err.transportReason || 'socket_error',
+          err && err.transportPhase || 'runtime', err, true);
         // WebTransport writable/reader/会话关闭属于终止性错误：当前 socket 已不可恢复。
         // 停掉握手、保活、探测和打散定时器，避免每 300ms/5s 重复发送 accel(0)。
         if (self._hsTimer) { clearInterval(self._hsTimer); self._hsTimer = null; }
@@ -115,11 +152,12 @@
       if (self.available) { clearInterval(self._hsTimer); self._hsTimer = null; return; }
       tries++;
       if (tries * 300 >= HANDSHAKE_TIMEOUT_MS) {
-        // 判定 UDP 不可用：静默走 TCP，不打扰玩家（架构文档 §4.3）
+        // 判定 UDP 不可用：玩家无感走 TCP，但把失败阶段留给 __net()。
         clearInterval(self._hsTimer); self._hsTimer = null;
         // 即使 active 从未变成 true，也必须强制上报一次 false：服务端可能已经
         // 收到 hello 并开始发二进制，只是回程 ACK/快照全丢。不上报就会形成
         // 服务端持续抑制 TCP、客户端却等待 TCP 的“假回落”。
+        self._markFailure('hello_ack_timeout', 'hello');
         self._setActive(false, true);
         return;
       }
@@ -137,6 +175,7 @@
     var w = new B.BinWriter(8);
     w.u8(MAGIC_HELLO); w.u32(this.token); w.finishCrc16();
     this._lastHelloAt = Date.now();
+    this.diag.helloSent++;
     this._raw(w.bytes());
   };
 
@@ -146,6 +185,7 @@
       if (this.sock.send(u8, this.host, this.port) === false) {
         this.stats.socketErrors++;
         this.available = false;
+        this._markFailure('send_failed', 'write');
         this._setActive(false, true);
         return false;
       }
@@ -154,6 +194,7 @@
     } catch (e) {
       this.stats.socketErrors++;
       this.available = false;
+      this._markFailure('send_failed', 'write', e);
       this._setActive(false, true);
       return false;
     }
@@ -163,6 +204,10 @@
     if (this.active === v && !forceNotify) return;
     var wasActive = this.active;
     this.active = v;
+    if (v) {
+      this.diag.state = 'active';
+      this.diag.phase = 'snap';
+    }
     if (!v && wasActive) this.stats.fallbacks++;
     this.onStateChange(v);
   };
@@ -180,6 +225,7 @@
       var ackToken = new DataView(u8.buffer, u8.byteOffset, u8.byteLength).getUint32(1, true);
       if (ackToken !== this.token) { this.stats.decodeFail++; return; }
       this.lastRecvAt = Date.now();
+      this.diag.ackedAt = this.lastRecvAt;
       if (this._lastHelloAt > 0) {
         var rtt = Math.max(0, Date.now() - this._lastHelloAt);
         this.stats.pathRttMs = rtt;
@@ -208,6 +254,7 @@
     var dec = BP.decSnapBin(u8);
     if (!dec) { this.stats.decodeFail++; return; }
     this.lastRecvAt = Date.now();
+    if (!this.diag.firstSnapAt) this.diag.firstSnapAt = this.lastRecvAt;
     this.stats.rawSnaps++;
 
     // 下行去重：冗余副本与乱序。tick 是 uint16，需处理环回。
@@ -316,7 +363,10 @@
     if (this._stallTimer) return;
     this._stallTimer = setInterval(function () {
       if (!self.active) return;
-      if (Date.now() - self.lastRecvAt > STALL_MS) self._setActive(false);
+      if (Date.now() - self.lastRecvAt > STALL_MS) {
+        self._markFailure('downlink_stall', 'runtime');
+        self._setActive(false);
+      }
     }, 200);
   };
 
@@ -397,37 +447,58 @@
    */
   function makeWebTransportFactory(info) {
     var f = function () {
+      f.lastFailure = null;
       var WT = (typeof WebTransport !== 'undefined') ? WebTransport
         : (typeof globalThis !== 'undefined' ? globalThis.WebTransport : null);
-      if (!WT || !info || !info.wtPort) return null;
+      if (!WT) {
+        f.lastFailure = { reason: 'webtransport_unsupported', phase: 'factory' };
+        return null;
+      }
+      if (!info || !info.wtPort) {
+        f.lastFailure = { reason: 'invalid_offer', phase: 'offer' };
+        return null;
+      }
 
       var host = info.host ||
         (typeof location !== 'undefined' && location.hostname ? location.hostname : '127.0.0.1');
-      var url = 'https://' + host + ':' + info.wtPort + (info.wtPath || '/wt');
+      var authority = host.indexOf(':') >= 0 && host.charAt(0) !== '[' ? '[' + host + ']' : host;
+      var url = 'https://' + authority + ':' + info.wtPort + (info.wtPath || '/wt');
       var opts = {};
       if (info.certHashes) opts.serverCertificateHashes = info.certHashes;
 
       var wt;
-      try { wt = new WT(url, opts); } catch (e) { return null; }
+      try { wt = new WT(url, opts); } catch (e) {
+        f.lastFailure = { reason: 'constructor_throw', phase: 'factory', error: e };
+        return null;
+      }
 
       var writer = null, reader = null, onMsg = null, onError = null, closed = false;
       var queue = [];   // ready 之前的待发数据（限长，防异常场景无限增长）
 
-      function fail(err) {
+      function taggedError(err, reason, phase) {
+        var out = err instanceof Error ? err : new Error(reason);
+        out.transportReason = reason;
+        out.transportPhase = phase;
+        return out;
+      }
+
+      function fail(err, reason, phase) {
         if (closed) return;
         closed = true;
         queue.length = 0;
-        if (onError) onError(err || new Error('WebTransport datagram closed'));
+        if (onError) onError(taggedError(err, reason || 'socket_error', phase || 'runtime'));
       }
 
       function writeDatagram(u8) {
         if (!writer || closed) return false;
         try {
           var pending = writer.write(u8);
-          if (pending && typeof pending.catch === 'function') pending.catch(fail);
+          if (pending && typeof pending.catch === 'function') {
+            pending.catch(function (e) { fail(e, 'write_rejected', 'write'); });
+          }
           return true;
         } catch (e) {
-          fail(e);
+          fail(e, 'write_rejected', 'write');
           return false;
         }
       }
@@ -444,8 +515,12 @@
         if (closed) return;
         try {
           writer = makeWriter(wt.datagrams);
-          reader = wt.datagrams.readable.getReader();
-        } catch (e) { return; }
+          reader = wt.datagrams && wt.datagrams.readable && wt.datagrams.readable.getReader();
+          if (!writer || !reader) throw new Error('WebTransport datagram API unavailable');
+        } catch (e) {
+          fail(e, 'datagram_api_error', 'datagram_api');
+          return;
+        }
         for (var i = 0; i < queue.length; i++) {
           if (!writeDatagram(queue[i])) break;
         }
@@ -453,19 +528,24 @@
         (function pump() {
           if (closed || !reader) return;
           reader.read().then(function (res) {
-            if (res.done || closed) { if (res.done) fail(); return; }
+            if (res.done || closed) {
+              if (res.done) fail(null, 'session_closed', 'read');
+              return;
+            }
             if (onMsg) {
               var v = res.value;
               onMsg(v instanceof Uint8Array ? v : new Uint8Array(v));
             }
             pump();
-          }).catch(fail);
+          }).catch(function (e) { fail(e, 'read_rejected', 'read'); });
         })();
-      }).catch(fail);
+      }).catch(function (e) { fail(e, 'wt_ready_rejected', 'wt_ready'); });
 
-      wt.closed.then(function () { fail(); }).catch(fail);
+      wt.closed.then(function () { fail(null, 'session_closed', 'session'); })
+        .catch(function (e) { fail(e, 'session_closed', 'session'); });
 
       return {
+        target: url,
         onMessage: function (cb) { onMsg = cb; },
         onError: function (cb) { onError = cb; },
         send: function (u8) {

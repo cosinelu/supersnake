@@ -647,8 +647,35 @@ function t10() {
     '横屏协议与网络质量分两行绘制、不互相覆盖');
 }
 
+// ---------------- T11 异常零颜色快照仍画成可辨识蛇头 ----------------
+function t11() {
+  section('T11 零颜色防御：唯一节点仍是带眼睛的头');
+  var arcs = 0;
+  function nop() {}
+  var ctx = {
+    save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+    beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+    fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+    setTransform: nop, moveTo: nop, lineTo: nop,
+    arc: function () { arcs++; }, ellipse: nop,
+    quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+    createLinearGradient: function () { return { addColorStop: nop }; },
+    fillText: nop, strokeText: nop,
+    font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+    textAlign: '', textBaseline: '', lineJoin: '', lineCap: '', canvas: { width: 400, height: 300 }
+  };
+  var snake = new CS.Snake(100, 100, 1, 0, ['red']);
+  snake.colors = [];
+  snake.computeBody();
+  var r = Object.create(CS.Renderer.prototype);
+  r.ctx = ctx;
+  r.drawSnakeBody(snake, { x: 0, y: 0 }, 400, 300, 200, 0);
+  ok(arcs >= 4,
+    '**零颜色异常态仍绘制两只眼睛，不把唯一节点误画成尾巴**（arc=' + arcs + '）');
+}
+
 console.log('横竖屏自适应布局回归（v3.0.2 ~ v3.0.5）');
-t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10();
+t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

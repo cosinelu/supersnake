@@ -466,6 +466,10 @@
       this.particles.burst(px, py, '#E8552F', 12, 1.5);
       var rem = e.snake.eliminate(2, 2);
       this.scoreChain(e, rem, 1.4, cfg.BOMB_SCORE);
+      // 炸弹自己的 2 连规则允许暂时降到 2 节；多人路径不像单人 Game.update
+      // 那样在本帧末尾统一再跑标准消除，所以必须在这里执行长度保底。
+      var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.scoreChain(e, rem2, 1, 0);
     } else if (b.kind === 'slow') {
       if (CS.audio) CS.audio.playSpecial();
       e.slowUntil = this.timeMs + cfg.SLOW_MS;

@@ -711,7 +711,9 @@
         if (i === 0) drawEyes(ctx, px, py, ss, snake.headDir());
         continue;
       }
-      if (i >= snake.colors.length) { // 尾巴节：深色圆润圆块 + 小尾尖，朝向 = 前一节 → 尾巴节
+      // 正常情况下 colors 至少有 MIN_LENGTH 节；若异常/降级快照只剩 segPos[0]，
+      // i=0 仍必须按“头”画，不能因为 0 >= colors.length 就误画成无眼睛的尾巴。
+      if (i > 0 && i >= snake.colors.length) { // 尾巴节：深色圆润圆块 + 小尾尖，朝向 = 前一节 → 尾巴节
         var prev = snake.segPos[i - 1] ||
           { x: p.x - Math.cos(snake.angle) * cfg.SEG_SPACING, y: p.y - Math.sin(snake.angle) * cfg.SEG_SPACING };
         var tdx = p.x - prev.x, tdy = p.y - prev.y;
@@ -721,7 +723,8 @@
       }
       var rot = (u.hash2(i, 77, 3) - 0.5) * 0.5;
       var wob = i === 0 ? 0.8 : 1.2;
-      drawCrayonBlock(ctx, px - ss / 2, py - ss / 2, ss, cfg.COLORS[snake.colors[i]], seedBase + i, 41, {
+      var color = cfg.COLORS[snake.colors[i]] || cfg.COLORS[cfg.COLOR_KEYS[0]] || '#E8552F';
+      drawCrayonBlock(ctx, px - ss / 2, py - ss / 2, ss, color, seedBase + i, 41, {
         rot: rot, wobble: wob, stroke: cfg.SEG_STROKE
       });
       if (shake > 0) { // 闪白覆盖（纸白蜡笔块，透明度随剩余时间衰减）

@@ -192,6 +192,7 @@
     var ch = this.channel;
     var udp = this.transport && this.transport.udp;
     var s = udp && udp.stats;
+    var ad = udp && udp.diag || this.transport && this.transport.accelDiag || {};
     var d = this.transport && typeof this.transport.diagnostics === 'function'
       ? this.transport.diagnostics(ch.kind) : {};
     var interp = this.remote && this.remote._interp;
@@ -208,6 +209,17 @@
       TCP快照间隔ms: ch.tcpIntervalMs,
       加速快照间隔ms: ch.accelIntervalMs,
       通道切换次数: ch.switches,
+      WebTransport支持: !!ad.webTransportSupported,
+      安全上下文: ad.secureContext !== false,
+      加速状态: ad.state || 'not_attempted',
+      加速失败阶段: ad.phase || '',
+      加速失败原因: ad.reason || '',
+      加速目标: ad.target || '',
+      加速错误摘要: ad.lastError || '',
+      加速Hello次数: ad.helloSent || 0,
+      加速ACK时间: ad.ackedAt || 0,
+      加速首帧时间: ad.firstSnapAt || 0,
+      Socket错误: s ? s.socketErrors : 0,
       WSS延迟ms: d.rttMs || 0,
       WSS延迟P50ms: d.rttP50Ms || 0,
       WSS延迟P95ms: d.rttP95Ms || 0,
@@ -252,6 +264,18 @@
     var quality = this.channel.kind === 'tcp'
       ? ('卡 ' + n.快照迟到率 + '%')
       : ('丢 ' + n.逻辑帧丢失率 + '%');
+    if (this.channel.kind === 'tcp' && n.加速失败原因) {
+      var reasonText = {
+        webtransport_unsupported: '不支持WT', offer_missing: '无WT入口',
+        invalid_offer: 'WT入口异常', factory_unavailable: 'WT不可用',
+        constructor_throw: 'WT创建失败', wt_ready_rejected: 'WT握手失败',
+        datagram_api_error: 'WT接口异常', hello_ack_timeout: 'WT超时',
+        write_rejected: 'WT发送失败', read_rejected: 'WT接收失败',
+        session_closed: 'WT已断开', downlink_stall: 'WT停滞',
+        send_failed: 'WT发送失败', socket_error: 'WT连接错误'
+      };
+      quality = reasonText[n.加速失败原因] || 'WT回落';
+    }
     return tag + ' · ' + (rtt ? rtt + 'ms' : '--ms') + ' · ' + quality;
   };
 

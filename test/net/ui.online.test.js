@@ -121,6 +121,11 @@ ft.connect = function () { this._emit('open'); };
 ft.joinMatch = function () {};
 ft.cancelMatch = function () {};
 ft.sendInput = function () {};
+ft.accelDiag = {
+  state: 'fallback', phase: 'hello', reason: 'hello_ack_timeout',
+  target: 'https://dev-snake.pippocao.top:8093/wt',
+  webTransportSupported: true, secureContext: true, helloSent: 5
+};
 ft.diagnostics = function () {
   return {
     rttMs: 48, rttP50Ms: 45, rttP95Ms: 72, rttJitterMs: 6,
@@ -155,8 +160,11 @@ ok(om6.channel.kind === 'tcp' && om6.remote.interpDelayMs() >= 118,
 var ni6 = om6.netInfo();
 ok(ni6.WSS延迟ms === 48 && ni6.快照迟到率 === 12.5 && ni6.插值延迟ms >= 118,
   'netInfo 暴露 RTT / 快照迟到率 / 当前插值延迟');
-ok(/WSS/.test(om6.netSummary()) && /48ms/.test(om6.netSummary()),
-  '手机 HUD 摘要包含实际协议与延迟（' + om6.netSummary() + '）');
+ok(ni6.WebTransport支持 === true && ni6.加速状态 === 'fallback' &&
+  ni6.加速失败原因 === 'hello_ack_timeout' && ni6.加速目标.indexOf(':8093/wt') >= 0,
+  '**netInfo 暴露 WebTransport 支持、失败阶段/原因和实际目标**');
+ok(/WSS/.test(om6.netSummary()) && /48ms/.test(om6.netSummary()) && /WT超时/.test(om6.netSummary()),
+  '手机 HUD 摘要包含实际协议、延迟与 WT 回落原因（' + om6.netSummary() + '）');
 om6.dispose();
 
 console.log('');
