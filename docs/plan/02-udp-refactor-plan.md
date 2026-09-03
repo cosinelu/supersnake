@@ -403,6 +403,13 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
 - **两层放行**：ufw（脚本可改）+ 云控制台（**必须手动**）。
   待放行：`8093/udp`（dev）、`443/udp`（official）。
 
+> **环境隔离必须靠端口，不能靠域名** —— 这与 wss 路径正好相反。
+> nginx 能按 `server_name` 把同一个 443/tcp 分流到 dev/official 两个后端，
+> 但 `Http3Server` 只接受**单套 cert/privKey、没有 SNI 分流机制**
+> （已查库源码确认），一个进程独占一个 UDP 端口。
+> 好在现有证书的 SAN 同时覆盖 `dev-snake` 与 `snake` 两个域名，
+> 两个环境**共用同一张证书**即可，不需要签发新的。
+
 ### 依赖与构建（澄清一处早先的误判）
 
 `node_modules` 不入库（见 `.gitignore`），**进 git 的只有 `server/package.json`
