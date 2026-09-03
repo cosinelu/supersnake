@@ -50,11 +50,12 @@ function scenarioUdp(next) {
     var cli = dgram.createSocket('udp4');
     var acked = false;
 
-    cli.on('message', function (buf) {
+    cli.on('message', onUdp);
+    function onUdp(buf) {
       if (buf[0] === UdpEndpoint.MAGIC_HACK) { acked = true; return; }
       var dec = BP.decSnapBin(new Uint8Array(buf.buffer, buf.byteOffset, buf.length));
       if (dec) binFrames.push(dec);
-    });
+    }
 
     ws.on('open', function () {
       ws.send(P.encode(P.join('UDP玩家')));
@@ -70,9 +71,33 @@ function scenarioUdp(next) {
         ok(typeof m.udpToken === 'number', 'matched 带回 udpToken');
         ok(typeof m.snapIntervalMs === 'number' && m.snapIntervalMs > 0,
           'matched 带回 snapIntervalMs（' + m.snapIntervalMs + '，客户端据此自适应缓冲）');
-        cli.bind(0, '127.0.0.1', function () {
-          cli.send(mkHello(m.udpToken), m.udpPort, '127.0.0.1');
-        });
+        // 打洞要**重试 + 必要时重建 socket**。
+        // Windows 回环 UDP 约 7% 概率一对 socket 完全通不了（永久黑洞，
+        // 裸 dgram 对照同样存在，与本项目代码无关），重试 1 秒也不恢复，
+        // 唯一有效的是整只 socket 重建。真实网络没有这种黑洞。
+        var rebuilds = 0;
+        bindAndPunch();
+        function bindAndPunch() {
+          cli.bind(0, '127.0.0.1', function () {
+            var t = 0;
+            (function punch() {
+              if (acked) return;
+              if (t >= 8) {
+                if (rebuilds < 3) {
+                  rebuilds++;
+                  try { cli.close(); } catch (e) {}
+                  cli = dgram.createSocket('udp4');
+                  cli.on('message', onUdp);
+                  bindAndPunch();
+                }
+                return;
+              }
+              t++;
+              cli.send(mkHello(m.udpToken), m.udpPort, '127.0.0.1');
+              setTimeout(punch, 25);
+            })();
+          });
+        }
       } else if (m.t === 'start') {
         started = true;
       } else if (m.t === 'meta') {

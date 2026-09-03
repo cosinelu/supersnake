@@ -25,52 +25,71 @@
 
 ### 任务
 
-- [ ] **1a.1** `js/net/binCodec.js` 新建：二进制读写器
-  - `BinWriter` / `BinReader`：uint8/uint16LE/int8 读写，基于 `Uint8Array`（浏览器与 node 通用）
+- [x] **1a.1** `js/net/binCodec.js` 新建：二进制读写器（**已完成**）
+  - `BinWriter` / `BinReader`：uint8/uint16LE/uint32/int8，基于 `Uint8Array` + `DataView`
   - 量化辅助：`qAngle8` / `dqAngle8`（2π/256）、`qAngle16` / `dqAngle16`、`qCoord16`
-  - CRC16 实现（表驱动）
-  - **约束**：不依赖 `Buffer`（小游戏无此对象），统一用 `Uint8Array` + `DataView`
+  - CRC16 表驱动（CCITT-FALSE）
+  - **约束**：不依赖 `Buffer`（小游戏无此对象）。Reader 越界置 `overflow` 而非抛异常 ——
+    UDP 一定会收到截断包和畸形包
+  - `BinReader` 支持带 `byteOffset` 的子视图（DataView 偏移已处理）
 
-- [ ] **1a.2** `js/net/protocol.js` 扩展：二进制 snap 编解码
-  - `encSnapBin(tick, ack, snakes, blockDelta)` → `Uint8Array`
-  - `decSnapBin(u8)` → 与现有 `decode()` **同构的对象**（关键：上层零改动）
-  - 单蛇结构按架构文档 §2.2：`id`1 + `flags`1 + `x`2 + `y`2 + `angle`1 + `segCount`1 + `segAngles`N
-  - 节心用**方向角**编码，解码端用 `SEG_SPACING` 重建坐标
-  - `lite` 档：`flags` bit2 置位，`segCount = 0`
+- [x] **1a.2** 二进制 snap 编解码 `js/net/binProtocol.js`（**已完成**）
+  - `encSnapBin` / `decSnapBin`，解码结果与 `decode()` **同构**（上层零改动）
+  - 节心用**方向角**编码 + 每 16 节一个绝对坐标锚点
+  - `encInputFrag` / `decInputFrag`：上行 12 字节
+  - **实测踩到两个会让蛇散架的坑**（详见架构文档 §2）：
+    1. 角度量化误差沿链累积 —— 25 节 5.4px → 45 节 51.3px → **71 节 838px**
+    2. 出生瞬间节心重叠（间距 0），一律按 `SEG_SPACING` 外推会把尾巴甩出 **450px**
+  - 参数 `ANCHOR_EVERY=16` / `DIST_EPS=1.0` 来自 25 组配置扫描，不是拍脑袋
+  - 实测：19572 → 1336 字节（14.6×），任意长度误差 ≤5.3px（`SEG_RADIUS=13`）
 
-- [ ] **1a.3** 低频通道拆分
-  - `server/room.js`：昵称/计分/排行榜从每帧 snap 移出，改 1Hz 单独消息 `meta`
-  - 客户端 `netMatch.js` 维护一份 meta 缓存，HUD 与排行榜读它
-  - **注意**：`nm` 移出后，`matched` 消息里已有名单，进房即可建立映射
+- [x] **1a.3** 低频通道拆分（**已完成**）
+  - `server/room.js:_sendLowFreq`：昵称/计分/排行榜从每帧 snap 移出，改 1Hz `meta` 走 TCP
+  - `js/net/wsTransport.js` 维护 meta 缓存，与二进制快照合并后交给上层（**字段与 JSON 路径逐个同构**）
+  - 回归：`udp.client.test.js` 断言合并结果与 JSON 路径同构
 
-- [ ] **1a.4** 色块增量同步
-  - `server/room.js`：维护 `blockVersion`，每帧算出 `add[] / del[]`
-  - **1Hz 全量校正**走 TCP（架构文档决策 B）
-  - 客户端：增量应用 + 收到全量时整体替换
-  - **风险点**：漏收增量会永久偏差 → 1Hz 全量兜底，且全量走 TCP 保证不丢
+- [x] **1a.4** 色块增量同步（**已完成**）
+  - `room._blockDelta` 维护上一帧集合，每帧算出 `add[] / del[]`
+  - **1Hz 全量校正**走 TCP（决策 B）—— 漏收增量会永久偏差，全量必须走可靠通道
+  - 实测（`udp-verify.js` 真机）：稳态帧 **95 字节**，与「1 增 1 删 = 94 字节」精确吻合
 
-- [ ] **1a.5** 三档 LOD 视野裁剪
-  - 服务器按每个玩家的相机位置分别组包（视口 1.4 倍范围）
-  - 本机玩家自己的蛇永远完整档
-  - **硬约束兜底**：预估 > 1400 字节时把最远的蛇降级为 lite，直到满足；触发时打点
+- [x] **1a.5a** LOD 编码能力 + 硬约束兜底（**已完成**）
+  - `binProtocol.encSnake` 支持 `lite` 档（`F_LITE` 位，`segCount=0`，只发头部）
+  - `binProtocol.encSnapCapped` 超 `UDP_SNAP_CAP` 时**从最远的蛇开始降级**直到满足
+  - `room._orderForViewer` 按与观察者的距离升序排，本机玩家钉在 index 0 永不降级
+  - 所有蛇都保留头部坐标 ⇒ **小地图永不缺人**，不需要额外的「全局摘要」通道
+  - 回归：`codec.test.js` 覆盖 18 蛇 × 120 节 → 5883 字节降级到 1128
+
+- [ ] **1a.5b** 按相机主动裁剪（**未做；当前无收益，见触发条件**）
+  - 现状只有「超预算才降级」的**被动兜底**，没有「视野外就降级」的**主动裁剪**
+  - 实测稳态 95 字节 / 峰值 475，离 1472 的单包上限差一个数量级 ⇒ 现在做纯属过早优化
+  - **触发条件**（满足任一再做）：
+    1. 真机 `_degradeCount > 0`（说明已在撞硬约束）
+    2. 蛇数上调（当前 18）或长度峰值显著上升
+    3. 30Hz × 3 冗余的实测带宽超出目标
+  - 做法：按每个玩家的相机位置分别组包（视口 1.4 倍内完整档，外面 lite）
 
 - [ ] **1a.6** `SNAP_EVERY` 改为 1（30Hz），客户端插值缓冲改自适应
+  - 现状：`SNAP_EVERY: 2`（15Hz）。`matched` 已下发 `snapIntervalMs`，客户端也已接收，
+    但插值层还没用它推导缓冲 ⇒ **改 30Hz 之前必须先做自适应**，否则缓冲会过长
   - `bufferMs = snapIntervalMs × 1.8`
-  - 服务器在 `matched` 里下发 `snapIntervalMs`，客户端不硬编码
 
-- [ ] **1a.7** 测试 `test/net/codec.test.js`
-  - 编解码往返一致（随机 200 条蛇 × 随机长度）
-  - **精度断言**：节心重建误差 ≤ 4px（实测最大 3.68px），坐标 ≤ 1px，角度 ≤ 1.5°
-  - **体积断言**：18 蛇 × 25 节 + 色块增量 ≤ 700 字节
-  - **硬约束断言**：任意构造下组包结果 ≤ 1400 字节（含 100 节长蛇 × 18 条）
-  - 色块增量：随机增删 1000 轮后与全量一致
+- [x] **1a.7** 测试 `test/net/codec.test.js`（**已完成，50 条断言，已接入 `npm test`**）
+  - 编解码往返一致（随机蛇 × 随机长度）
+  - **精度断言**：节心误差 < `SEG_RADIUS/2`（按物理意义定，不用拍脑袋的固定 px）
+  - **硬约束断言**：用**正式的 `encSnapCapped`** 而非测试里复刻公式
+    （`layout.test.js` 就吃过复刻脱钩的亏 —— 实现改了、测试全绿、线上是坏的）
+  - **畸形输入**：每个偏移截断 + 每个位置单字节篡改，断言返回 null 而非抛异常
+  - **测试构造本身是个坑**：直接 `new Snake(长度)` 再跑几百帧会导致轨迹弧长不足、
+    尾部塌缩，凭空造出不存在的误差。必须**边走边长**，且约束在地图内
+    （越界坐标会被 uint16 截断）
 
 ### 验收
 
-- 全套测试绿（含新增 codec.test.js）
-- 实测体积：后期最坏 ≤ 700 字节
-- develop 部署后真机对战，观感不劣于现在
-- **回滚点**：二进制编码通过配置开关 `USE_BIN_CODEC` 控制，出问题一键切回 JSON
+- [x] 全套测试绿（含新增 `codec.test.js`）
+- [x] 实测体积：稳态 95 字节 / 峰值 475（目标 ≤700）
+- [x] develop 部署后真机验证：`test/udp-verify.js` 通过
+- **回滚点**：`UDP_ENABLED=0` 一键切回纯 TCP/JSON
 
 ---
 
@@ -80,53 +99,57 @@
 
 ### 任务
 
-- [ ] **1b.1** 服务器 UDP 端点 `server/udp.js`
-  - `dgram` 监听独立端口（不与 ws 端口冲突）
-  - 会话表：`token → { connId, roomId, addr, port, lastSeen }`
-  - **地址跟随**：收到合法 token 的包时更新 `addr/port`（应对 NAT 重绑定 / 4G↔WiFi 切换）
-  - 三道校验：`magic` → `token` → `crc16` + 语义（架构文档 §3.5）
-  - 每源限速（防垃圾流量灌入）
-
-- [ ] **1b.2** 上行 Fragment 协议
-  - 12 字节：`magic`1 + `token`4 + `frameId`2 + `angle`2 + `flags`1 + `crc16`2
-  - 服务器去重规则**沿用现有 `room.js:113-122` 语义**（含「大幅回退＝重新计数」这条）
-  - 一个 tick 内收到多个 Fragment：按 frameId 升序消化，只保留最新的生效
-
-- [ ] **1b.3** 客户端 UDP 传输层 `js/net/udpTransport.js`
-  - 实现与 `WsTransport` 相同的接口（`TransportBase` 契约），上层零改动
-  - **冗余打散**：`UDP_DUP` 份，偏移 `frameIntervalMs / UDP_DUP × i`
-    （3 份 → 0/11/22ms）。**份数可配，偏移由公式推导**
-  - 下行去重：`frameId <= lastRecvFrameId` 直接丢弃
-
-- [ ] **1b.4** 握手与降级
-  - TCP `matched` 下发 `{ udpPort, sessionToken }`
-  - 客户端 UDP 打洞：发 `hello(token)` → 等 `hello_ack`
-  - **1.5s 无 ack → 判定 UDP 不可用，全程 TCP**
-  - **对局中连续 500ms 无 UDP 下行 → 回落 TCP，后台继续重试**
-  - TCP 连接全程不断开
-
-- [ ] **1b.5** NAT 保活
-  - 死亡/观战状态下 5 秒一次空 keepalive
-
-- [ ] **1b.6** 服务器与运维
-  - `sysctl net.core.rmem_max` 调大（当前 212992 是默认值）
-  - ufw 放行 UDP 端口
-  - **云轻量控制台防火墙需手动放行**（SSH 改不了，这一步必须人工）
-  - systemd unit 无需改动（同进程内监听）
-
-- [ ] **1b.7** 测试
-  - `test/net/udp.test.js`：Fragment 编解码、CRC 校验、frameId 去重（含大幅回退重置）、
-    地址跟随、限速、握手与降级状态机
-  - `test/net/loss.sim.js`：丢包模拟器，对比 x1 / x3同时 / x3打散 在三种丢包形态下的
-    「未收到新指令帧占比」。**断言打散优于同时发**
+- [x] **1b.1** 服务器 UDP 端点 `server/udp.js`（**已完成**）
+- [x] **1b.2** 上行 Fragment 协议（**已完成**，12 字节）
+- [x] **1b.3** 客户端 UDP 加速层 `js/net/udpTransport.js`（**已完成**）
+  - **实现上偏离了原计划**：`UdpAccel` 不是独立 Transport，而是**挂在 `WsTransport` 上的旁路**。
+    理由：TCP 连接本来就必须留着传 `matched` / `over` / `event`（这些不可替代、丢了没有
+    「下一帧覆盖」来救），而 UDP 只承载幂等流量。于是降级 = 「停用旁路」，
+    不需要对局中切换传输层，状态机小到可以一眼看对。
+- [x] **1b.4** 握手与降级（**已完成**）
+- [x] **1b.5** NAT 保活（**已完成**，5s，hello 兼作 keepalive）
+- [x] **1b.6** 服务器与运维（**已完成**）
+  - 独立 `UDP_HOST`（默认 `0.0.0.0`）—— **不能跟着 `HOST` 走**：生产 `HOST=127.0.0.1`
+    是给 nginx 反代 TCP 用的，UDP 若继承它则公网完全不可达，而且**从任何日志都看不出异常**
+    （端口在监听、CI 全绿、客户端静默降级 TCP）
+  - UDP **不能**走 nginx stream：多一跳且掩盖真实源地址，直接破坏地址跟随
+  - ufw 放行 8092(dev) / 8094(official)
+  - 云轻量控制台防火墙已由用户手动放行 ✓
+- [x] **1b.7** 测试（**已完成**，107 条断言：`udp.test.js` 38 + `udp.client.test.js` 41 +
+  `udp.e2e.test.js` 28，全部接入 `npm test`）
 
 ### 验收
 
-- 全套测试绿
-- 端到端：真 UDP 客户端连测试环境跑完一局
-- **弱网验证**：用 `tc netem` 在服务器侧注入丢包/延迟，对比 TCP 与 UDP 表现
-- **降级验证**：手动封 UDP 端口，确认自动回落 TCP 且游戏可继续
-- **回滚点**：`UDP_ENABLED` 配置开关，关掉即回到纯 TCP（= 1a 的状态）
+- [x] 全套测试绿（865 断言 / 14 文件）
+- [x] 端到端：`test/udp-verify.js` 真实公网跑完一局
+- [x] **降级验证**：UDP 不通时自动回落 TCP，JSON 快照照常送达、游戏无影响
+      （云端口放行前的实测意外验证了这条）
+- [ ] **弱网验证**：`tc netem` 在服务器侧注入丢包/延迟，对比 TCP 与 UDP —— **未做**
+- **回滚点**：`UDP_ENABLED=0` 一键回到纯 TCP
+
+### 真机实测（2026-09-03，dev 环境，公网 UDP）
+
+`node test/udp-verify.js ws://127.0.0.1:8091/ws <公网IP>`：
+
+```
+打洞           : ✓ 成功（<100ms）
+二进制快照(UDP): 174 帧，均 95 / 峰 475 字节
+  冗余副本去重 : 348 个 = 2 × 174，精确对上 UDP_DUP=3
+  帧间隔 avg/p50/p95/max : 65.9 / 67 / 68 / 69 ms（SNAP_EVERY=2 → 66ms 基准）
+  永不分片     : ✓ 峰值 475 ≤ 1472
+JSON 快照(TCP) : 0 帧（全程未降级）
+```
+
+对照 JSON 路径同场景 **4600 字节/帧** ⇒ 稳态 **48× 压缩**。
+均值 95 与「1 增 1 删的色块增量帧 = 94 字节」精确吻合；峰值 475 是开局色块下发。
+
+**排障顺序**（写进 `test/udp-verify.js` 头注释，实践得来）：
+1. **先查本机 UDP 出网**是否被封 —— 很多企业网/代理环境封掉全部 UDP，
+   此时任何本地验证都无意义。判据：`dig @8.8.8.8`（UDP:53）不通即是。
+   绕法：把 `udp-verify.js` scp 到服务器，连它自己的公网 IP 跑。
+2. 服务器网卡是否收到包 —— `sudo tcpdump -ni any udp port <port>`。
+   `0 packets captured` 说明卡在网络路径（云防火墙），与应用层无关。
+3. 应用层绑对地址没 —— `ss -ulnp` 必须是 `0.0.0.0`，不能是 `127.0.0.1`。
 
 ---
 

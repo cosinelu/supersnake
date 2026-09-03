@@ -206,32 +206,37 @@ UdpEndpoint.prototype.sendFrame = function (connId, bytes) {
   this._sendRaw(buf, s.addr, s.port);
   if (dup <= 1) return true;
 
-  // 后续副本按 interval/dup 均分延迟。
+  // 后续副本在本帧窗口内**时间打散**。
   //
-  // **链式调度而非一次性排队**：定时器分辨率在 Windows 上约 15.6ms，
-  // 一次性排 9ms 与 18ms 两个定时器会被合并到同一个 tick 触发，打散完全失效 ——
-  // 那就退化成「同时发」，而同时发在突发丢包下等于没发。
-  // 改为发完一份再排下一份，按「本应发送的时刻」自校正，抵消定时器漂移。
-  // 窗口只用 80%：副本落到下一帧就不再是本帧的冗余，纯浪费带宽。
-  var span = interval * 0.8;
-  var step = span / dup;
+  // 两个坑，都实测踩过：
+  // 1) **不能一次性排多个 setTimeout**：定时器分辨率在 Windows 上约 15.6ms，
+  //    9ms 与 18ms 两个定时器会被合并到同一 tick 触发，打散完全失效 ——
+  //    退化成「同时发」，而同时发在突发丢包下等于没发（副本共命运）。
+  // 2) **不能死守原定时刻**：链式调度时若第 k 份因漂移迟到，第 k+1 份的
+  //    原定时刻可能已经过期，wait 被钳到最小值 → 两份紧挨着发出，又退回坑 1。
+  //
+  // 解法：每发完一份，用**剩余窗口 / 剩余份数**重新均分，并保证最小间隔
+  // MIN_GAP 确实跨越不同的定时器 tick。窗口只是**间隔的参考值**，
+  // **不用来砍份数** —— UDP_DUP 是功能约定（抗丢包），窗口只是带宽优化，
+  // 为省一点带宽而少发一份冗余是本末倒置。
+  var MIN_GAP = 6;                        // 最小副本间隔（ms），须大于常见定时器抖动
+  var deadline = Date.now() + interval * 0.8;
   var self = this;
-  var t0 = Date.now();
-  var n = 1;
-  function next() {
-    var cur = self.sessions[token];
-    if (!cur || !cur.addr || n >= dup) return;
-    // 发送时重新取地址：期间可能发生 NAT 重绑定
-    self._sendRaw(buf, cur.addr, cur.port);
-    n++;
-    if (n >= dup) return;
-    var due = t0 + step * n;
-    var wait = Math.max(1, Math.round(due - Date.now()));
-    var tm = setTimeout(next, wait);
-    if (tm.unref) tm.unref();
+  var left = dup - 1;                     // 还剩几份要发
+  function scheduleNext() {
+    if (left <= 0) return;
+    var wait = Math.max(MIN_GAP, Math.round((deadline - Date.now()) / left));
+    var tm = setTimeout(function () {
+      var cur = self.sessions[token];
+      // 发送时重新取地址：期间可能发生 NAT 重绑定
+      if (!cur || !cur.addr) { left = 0; return; }
+      self._sendRaw(buf, cur.addr, cur.port);
+      left--;
+      scheduleNext();
+    }, wait);
+    if (tm.unref) tm.unref();             // 不阻止进程退出
   }
-  var first = setTimeout(next, Math.max(1, Math.round(step)));
-  if (first.unref) first.unref();   // 不阻止进程退出
+  scheduleNext();
   return true;
 };
 

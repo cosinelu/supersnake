@@ -164,28 +164,35 @@
     this._raw(frag);
     if (this.dup <= 1) return true;
 
-    // 只用帧窗口的 80%：定时器普遍偏慢，副本落到下一帧就不再是本帧的冗余。
+    // 后续副本在本帧窗口内**时间打散**。
     //
-    // **链式调度而非一次性排队**：定时器分辨率在 Windows 上约 15.6ms，
-    // 一次性排 9ms 与 18ms 两个定时器会被合并到同一个 tick 触发
-    // （实测两份都在 23ms 发出），打散完全失效 —— 那就退化成「同时发」，
-    // 而同时发在突发丢包下等于没发（3000 帧实测与 x1 结果完全相同）。
-    // 改为发完一份再排下一份，并按「本应发送的时刻」自校正，抵消定时器漂移。
-    var span = this.frameIntervalMs * 0.8;
-    var step = span / this.dup;
+    // 两个坑，都实测踩过（服务器侧 udp.js:sendFrame 是同一套逻辑、同一组坑）：
+    // 1) **不能一次性排多个 setTimeout**：定时器分辨率在 Windows 上约 15.6ms，
+    //    9ms 与 18ms 会被合并到同一 tick（实测两份都在 23ms 发出），
+    //    打散退化成「同时发」—— 而同时发在突发丢包下等于没发
+    //    （3000 帧模拟与 x1 结果完全相同，因为副本共命运）。
+    // 2) **不能死守原定时刻**：链式调度时若第 k 份因漂移迟到，第 k+1 份的
+    //    原定时刻可能已过期，wait 被钳到最小值 → 两份紧挨着发出，又退回坑 1。
+    //
+    // 解法：每发完一份，用**剩余窗口 / 剩余份数**重新均分，并保证最小间隔
+    // MIN_GAP 确实跨越不同的定时器 tick。窗口只是**间隔的参考值**，
+    // **不用来砍份数** —— UDP_DUP 是功能约定（抗丢包），窗口只是带宽优化，
+    // 为省一点带宽而少发一份冗余是本末倒置（曾因此偶发只发出 2 份）。
+    var MIN_GAP = 6;
+    var deadline = Date.now() + this.frameIntervalMs * 0.8;
     var self = this;
-    var t0 = Date.now();
-    var n = 1;
-    function next() {
-      if (!self.active || !self.sock || n >= self.dup) return;
-      self._raw(frag);
-      n++;
-      if (n >= self.dup) return;
-      var due = t0 + step * n;
-      var wait = Math.max(1, Math.round(due - Date.now()));
-      self._track(setTimeout(next, wait));
+    var left = this.dup - 1;
+    function scheduleNext() {
+      if (left <= 0) return;
+      var wait = Math.max(MIN_GAP, Math.round((deadline - Date.now()) / left));
+      self._track(setTimeout(function () {
+        if (!self.active || !self.sock) { left = 0; return; }
+        self._raw(frag);
+        left--;
+        scheduleNext();
+      }, wait));
     }
-    this._track(setTimeout(next, Math.max(1, Math.round(step))));
+    scheduleNext();
     return true;
   };
 
