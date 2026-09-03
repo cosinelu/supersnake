@@ -44,11 +44,12 @@
   function resetIds() { nextId = 1; }
 
   /** 一条参赛蛇的档案（真人玩家或 AI） */
-  function Entry(snake, name, isPlayer) {
+  function Entry(snake, name, isPlayer, teamId) {
     this.id = nextId++;
     this.snake = snake;
     this.name = name;
     this.isPlayer = !!isPlayer;
+    this.teamId = (teamId != null ? teamId : -1); // 队伍号（-1 = 无队伍，FFA 不影响）
     this.alive = true;
     this.kills = 0;        // 击杀数：其他蛇撞到我方身体节而死（含咬断保底淘汰）
     this.elimScore = 0;    // 消除分（连锁倍率，规则同单人）
@@ -113,8 +114,8 @@
    * 加入一名真人玩家（v3.0）：外部构造好 Snake（出生点由调用方选定）后注册。
    * 首位真人同时成为 playerEntry（本地单机对局的"我"）。
    */
-  Multiplayer.prototype.addPlayer = function (snake, name) {
-    var e = new Entry(snake, name || '我', true);
+  Multiplayer.prototype.addPlayer = function (snake, name, teamId) {
+    var e = new Entry(snake, name || '我', true, teamId);
     this.usedNames[e.name] = true; // 真人昵称整局保留：AI 不复用（kill 只释放 AI 名）
     this.players.push(e);
     this.liveSnakes.push(snake);
@@ -129,6 +130,60 @@
     var startCount = cfg.MP_AI_START_COUNT || cfg.MP_AI_COUNT;
     for (var i = 0; i < startCount; i++) this.spawnBot(0); // 早期 AI，智力普通
     this.spawner.others = this.liveSnakes; // 活引用：重生/淘汰自动反映到刷新避让（含全部真人）
+  };
+
+  /**
+   * 团队模式初始化（2v2v2v2v2）：由调用方先通过 addPlayer/spawnBot 把所有 5×2=10 条蛇
+   * 按队伍建好（addPlayer/spawnBot 已接收 teamId），本方法只负责收尾：
+   *   - 标记 teamMode（禁止 AI 重生、计分按队伍聚合）
+   *   - spawner.others 指向全部活蛇（刷新避让）
+   * 不自动补 AI（编制由调用方一次性凑满 10 槽）。
+   * @param {Array<Array<Entry>>} teamEntries 二维数组：teams[teamId][slot] = Entry
+   */
+  Multiplayer.prototype.setupTeamMode = function (teamEntries) {
+    this.teamMode = true;
+    this.teamEntries = teamEntries || null;
+    this.spawner.others = this.liveSnakes;
+  };
+
+  /** 存活队伍数（团队模式）：含 ≥1 名存活成员的队伍计数 */
+  Multiplayer.prototype.aliveTeamCount = function () {
+    var set = {};
+    var es = this.allEntries();
+    for (var i = 0; i < es.length; i++) {
+      if (es[i].teamId >= 0 && es[i].alive) set[es[i].teamId] = true;
+    }
+    return Object.keys(set).length;
+  };
+
+  /** 队伍总分：该队所有成员（含已阵亡）的（生存分 + 消除分 + 彩色星加成）之和 */
+  Multiplayer.prototype.teamScore = function (teamId) {
+    var s = 0, es = this.allEntries();
+    for (var i = 0; i < es.length; i++) {
+      if (es[i].teamId === teamId) {
+        s += (es[i].survivalScore || 0) + (es[i].elimScore || 0) + (es[i].mpBonusScore || 0);
+      }
+    }
+    return s;
+  };
+
+  /** 某队的存活成员 Entry（用于观战镜头跟随）；无则 null */
+  Multiplayer.prototype.aliveMemberOfTeam = function (teamId) {
+    var es = this.allEntries();
+    for (var i = 0; i < es.length; i++) {
+      if (es[i].teamId === teamId && es[i].alive) return es[i];
+    }
+    return null;
+  };
+
+  /** 队友 Entry（排除自身）；无则 null */
+  Multiplayer.prototype.teammateOf = function (e) {
+    if (e.teamId < 0) return null;
+    var es = this.allEntries();
+    for (var i = 0; i < es.length; i++) {
+      if (es[i] !== e && es[i].teamId === e.teamId) return es[i];
+    }
+    return null;
   };
 
   /** 全部 Entry（真人在前，含已淘汰） */
@@ -217,11 +272,11 @@
    * 生成一条 AI 蛇（边缘安全位、朝向场心、随机昵称/速度档位/性格）。
    * @param {number} smartness 智力等级 0~1（0=开局普通AI，1=后期聪明AI；越高越谨慎、速度越快）
    */
-  Multiplayer.prototype.spawnBot = function (smartness) {
+  Multiplayer.prototype.spawnBot = function (smartness, teamId) {
     var pos = this.findSpawn();
     var angle = Math.atan2(this.walls.H / 2 - pos.y, this.walls.W / 2 - pos.x);
     var snake = new Snake(pos.x, pos.y, cfg.MP_START_LENGTH, angle, this.game.unlockedKeys);
-    var e = new Entry(snake, this.pickName(), false);
+    var e = new Entry(snake, this.pickName(), false, teamId);
 
     // 基础速度：后期 AI 略快（给玩家更大压力）
     var speedRange = cfg.MP_AI_SPEED_MAX - cfg.MP_AI_SPEED_MIN;
@@ -315,6 +370,8 @@
       for (j = i + 1; j < alive.length; j++) {
         var a = alive[i], b = alive[j];
         if (dead[a.id] && dead[b.id]) continue;
+        // 同队头对头免死（团队模式）：两者都存活、可反弹/穿过（FFA 全部 teamId=-1，此分支不触发）
+        if (a.teamId >= 0 && a.teamId === b.teamId) continue;
         if (u.dist(a.snake.x, a.snake.y, b.snake.x, b.snake.y) < hh) {
           if (!dead[a.id]) dead[a.id] = { by: null };
           if (!dead[b.id]) dead[b.id] = { by: null };
@@ -325,6 +382,7 @@
     // 3. 头撞身体（k 从 1 起：跳过对方头部，头对头已在上面判过）
     //    碰撞：尾巴节也算身体（撞上照样淘汰撞者）；
     //    咬断：被咬节 = 判定半径内离 A 头心最近的「颜色节」（排除末尾尾巴节，它不可被咬掉）
+    //    同队头撞身体免死：不写死亡、不计咬断（团队模式专属；FFA teamId=-1 不受影响）
     var hb = cfg.HEAD_HIT_RADIUS + cfg.SEG_RADIUS;
     for (i = 0; i < alive.length; i++) {
       var A = alive[i];
@@ -332,6 +390,7 @@
       for (j = 0; j < alive.length; j++) {
         if (i === j) continue;
         var B = alive[j];
+        if (A.teamId >= 0 && A.teamId === B.teamId) continue; // 同队：头撞身体免死（不咬断）
         var sp = B.snake.segPos;
         var colorN = B.snake.colors.length; // segPos[colorN] 即尾巴节
         var hitK = -1, bestD = hb;          // 碰撞最近节（含尾巴节）
@@ -546,6 +605,8 @@
    *  3) 新补招的 AI 使用 currentSmartness() 智力参数（后期 AI 更聪明）。
    */
   Multiplayer.prototype.processRespawns = function () {
+    // 团队模式：AI 不重生（否则会破坏 10 人固定编制与队伍淘汰逻辑；空位即该队减员）
+    if (this.teamMode) return;
     var now = this.timeMs;
     var sec = this.timeMs / 1000;
     var smartness = this.currentSmartness();

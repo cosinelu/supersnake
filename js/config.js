@@ -168,6 +168,19 @@
     MP_BITE_MIN_LENGTH: 3,      // 咬断保底：被咬后节数低于此值 → 被撞者直接淘汰（计入撞者击杀）
     MP_BITE_FLASH_MS: 300,      // 被咬视觉反馈时长：闪白 + 抖动（毫秒）
 
+    // ---------- 团队战模式（2v2v2v2v2：5 队 × 2 人，纯联机，详见 docs/design/02-team-mode.md）----------
+    // 团队模式复用 MULTI 地图与全部道具/消除/咬断规则，仅碰撞免疫、编制、胜负、观战四处不同。
+    TEAM: { TEAMS: 5, SIZE: 2 }, // 队伍数 / 每队人数（必须与 server/config.TEAM_TEAMS/SIZE 一致）
+    // 5 队蜡笔配色（按队伍号顺序取用）：用于名牌、队伍色环、结算排行。
+    TEAM_COLORS: [
+      '#E8552F', // 队0 红
+      '#4A7FD4', // 队1 蓝
+      '#6FBF4A', // 队2 绿
+      '#F5A623', // 队3 橙
+      '#9B5DE5'  // 队4 紫
+    ],
+    TEAM_NAMES: ['红队', '蓝队', '绿队', '橙队', '紫队'],
+
     // ---------- AI 决策参数（加权转向，见 ai.js）----------
     AI_DIRS: 24,                // 每帧评估的候选方向数（v2.9 起 24：转向更精细、更聪明）
     AI_FOOD_RANGE: 900,         // 寻食感知范围（px，再按贪食性格伸缩）
@@ -320,6 +333,29 @@
     var sec = Math.max(0, ms / 1000);
     var k = Math.min(1, sec / cfg.ITEM_RAMP_SEC);
     return cfg.ITEM_SPECIAL_CHANCE_MIN + (cfg.ITEM_SPECIAL_CHANCE_MAX - cfg.ITEM_SPECIAL_CHANCE_MIN) * k;
+  };
+
+  /**
+   * 取队伍配色（团队模式用）：队号 → 蜡笔色 hex。
+   * 越界队号回退到第 0 队色，避免渲染层拿到 undefined 描边。
+   * @param {number} t teamId
+   * @returns {string} 颜色 hex
+   */
+  cfg.teamColor = function (t) {
+    var i = (t | 0);
+    if (i < 0 || i >= cfg.TEAM_COLORS.length) i = 0;
+    return cfg.TEAM_COLORS[i];
+  };
+
+  /**
+   * 取队伍中文名（团队模式用）。
+   * @param {number} t teamId
+   * @returns {string} 队名
+   */
+  cfg.teamName = function (t) {
+    var i = (t | 0);
+    if (i < 0 || i >= cfg.TEAM_NAMES.length) i = 0;
+    return cfg.TEAM_NAMES[i];
   };
 
   CS.config = cfg;

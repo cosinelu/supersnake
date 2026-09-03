@@ -152,8 +152,12 @@ function createServer(overrides) {
           var oldRoom = conn.roomId && matchmaker.rooms[conn.roomId];
           if (oldRoom && oldRoom.state !== 'over') return; // 对局中重复 join：忽略
           conn.roomId = null; // 上一局已结算（或房间已回收）：允许再次匹配
+          // 透传 mode / teamCode（团队战用；FFA 两者省略，matchmaker 回退 ffa 队列）
+          var joinMode = msg.mode === 'team' ? 'team' : 'ffa';
+          var joinTeamCode = (joinMode === 'team' && msg.teamCode) ? String(msg.teamCode).slice(0, 24) : null;
           matchmaker.add({
             connId: connId, name: conn.name,
+            mode: joinMode, teamCode: joinTeamCode,
             send: function (obj) { send(ws, obj); }
           });
           break;

@@ -36,6 +36,7 @@
       kills: d.kills, elimScore: d.elimScore, elimTotal: d.elimTotal, maxLen: d.maxLen,
       survivalScore: d.survivalScore || 0, mpBonusScore: d.mpBonusScore || 0,
       bittenUntil: d.bittenUntil, slowUntil: d.slowUntil,
+      teamId: (d.teamId != null ? d.teamId : -1), // 队伍号（-1 = 无队伍，FFA 不影响）
       snake: makeSnakeView(d)
     };
   }
@@ -46,6 +47,7 @@
     e.kills = d.kills; e.elimScore = d.elimScore; e.elimTotal = d.elimTotal; e.maxLen = d.maxLen;
     e.survivalScore = d.survivalScore || 0; e.mpBonusScore = d.mpBonusScore || 0;
     e.bittenUntil = d.bittenUntil; e.slowUntil = d.slowUntil;
+    e.teamId = (d.teamId != null ? d.teamId : -1);
     var s = e.snake;
     s.x = d.x; s.y = d.y; s.angle = d.angle; s.targetAngle = d.angle; s.speed = d.speed;
     s.colors = d.colors; s.segPos = d.segPos;
@@ -68,6 +70,10 @@
     this.tick = 0;
     this.lastAck = 0;
     this._byId = {};
+    // 团队模式元数据（matched 下发；FFA 时 mode='ffa'、teams=null、myTeam=-1）
+    this.mode = (opts && opts.mode) || 'ffa';
+    this.teams = (opts && opts.teams) || null;
+    this.myTeam = (opts && typeof opts.myTeam === 'number') ? opts.myTeam : -1;
     var delay = opts && 'interpDelayMs' in opts ? opts.interpDelayMs : 120;
     this._interp = (delay && CS.InterpBuffer) ? new CS.InterpBuffer(delay) : null;
     if (this._interp && opts && opts.snapIntervalMs) {

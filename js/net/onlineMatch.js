@@ -46,6 +46,8 @@
     opts = opts || {};
     this.game = game;
     this.nick = opts.nick || defNick();
+    this.mode = opts.mode === 'team' ? 'team' : 'ffa'; // 团队战 / 自由混战
+    this.teamCode = (this.mode === 'team' && opts.teamCode) ? String(opts.teamCode).slice(0, 24) : null;
     this.transport = opts.transport || new CS.WsTransport({ url: opts.url || store.get(SERVER_KEY, null) || undefined });
     this.remote = null;
     this.predictor = new CS.SelfPredictor();
@@ -54,6 +56,11 @@
     this.status = '正在连接服务器…'; // matching 界面状态行
     this.detail = '';          // 状态行补充（队列位次/对手数）
     this.over = false;
+    this.matchMode = 'ffa';    // 本局模式（matched 回显）
+    this.teams = null;         // 团队编制 [{players:[{id,name,isHuman}]}]
+    this.myTeam = -1;          // 本人所属队伍号
+    this.spectating = false;    // 本人已死、队友存活 → 观战
+    this.spectateTeam = -1;
     this._inputTimer = 0;
     this._attached = false;    // 首帧快照已挂接预测体
     this._finished = false;
@@ -88,7 +95,7 @@
       open: function () {
         if (self._disposed) return;
         self.status = '正在匹配…';
-        self.transport.joinMatch(self.nick);
+        self.transport.joinMatch(self.nick, { mode: self.mode, teamCode: self.teamCode });
       },
       queued: function (m) {
         var cur = m.size || m.pos || 1;
@@ -114,7 +121,7 @@
         // 队头阻塞」的假修复。这里必须让真实渲染参数同步切换。
         if (self.remote) self.remote.setSnapInterval(ch.snapIntervalMs);
       },
-      over: function (m) { self._finish(m.reason, m.ranks, false); },
+      over: function (m) { self._finish(m.reason, m.ranks, false, m.teams); },
       drop: function () { self._finish(P.OVER_REASON.DROPPED, null, true); },
       error: function (m) {
         self.status = '服务器错误：' + (m.msg || m.code || 'unknown');
@@ -174,8 +181,16 @@
     g.joystick.release();
 
     this.remote = new CS.RemoteMatch(this.playerId, {
-      snapIntervalMs: this.channel.snapIntervalMs
+      snapIntervalMs: this.channel.snapIntervalMs,
+      mode: m.mode, teams: m.teams, myTeam: m.myTeam
     });
+    // 团队字段透传给 game（渲染名牌/结算用）
+    this.matchMode = m.mode || 'ffa';
+    this.teams = m.teams || null;
+    this.myTeam = (typeof m.myTeam === 'number') ? m.myTeam : -1;
+    g.myTeam = this.myTeam;
+    g.matchTeams = this.teams;
+    g.matchMode = this.matchMode;
     g.mp = this.remote;
     // 哑 spawner：blocks/meteors 每帧从快照刷新；grabBlock 供彩色星播报/小地图涟漪
     g.spawner = { blocks: [], meteors: [], grabBlock: null, others: [] };
@@ -362,6 +377,14 @@
       case 'toast':
         if (mine) g.setItemToast(m.kind, m.color);
         break;
+      case P.EVENT_KIND.YOU_DIED:
+        // 团队模式：本人死而队友存活 → 转观战（相机跟随存活队友）
+        if (!self.spectating) {
+          self.spectating = true;
+          self.spectateTeam = (typeof m.team === 'number') ? m.team : self.myTeam;
+          self.status = '你已阵亡，正在观战队友…';
+        }
+        break;
     }
   };
 
@@ -414,10 +437,11 @@
   };
 
   /**
-   * 结算：reason ∈ win/dead/timeout/dropped；掉线判负不重连。
+   * 结算：reason ∈ win/dead/timeout/lose/dropped；掉线判负不重连。
    * 合成 mpResult（renderer.drawMultiResult 直接复用；dropped 额外提示）。
+   * teams：团队模式服务器下发的队伍总排行（[{id,rank,score,aliveCount,members}]）。
    */
-  OnlineMatch.prototype._finish = function (reason, ranks, dropped) {
+  OnlineMatch.prototype._finish = function (reason, ranks, dropped, teams) {
     if (this._finished) return;
     this._finished = true;
     var g = this.game, A = CS.audio;
@@ -444,6 +468,27 @@
     var maxLen = e ? e.maxLen : finalLen;
     var rank = myRank ? myRank.rank : (e && this.remote ? this.remote.rankOf(e) : 0);
 
+    // 团队模式：从服务器队伍排行派生本队战绩与全局 outcome
+    var teamResult = null;
+    if (teams && this.matchMode === 'team') {
+      var myTeam = null;
+      for (var ti = 0; ti < teams.length; ti++) {
+        if (teams[ti].id === this.myTeam) { myTeam = teams[ti]; break; }
+      }
+      var outcome; // 'win' | 'elim' | 'lose'
+      if (reason === P.OVER_REASON.WIN) outcome = 'win';
+      else if (myTeam && myTeam.aliveCount === 0) outcome = 'elim';
+      else outcome = 'lose';
+      teamResult = {
+        teams: teams,            // 队伍总排行（已含 rank/score/aliveCount/members）
+        myTeam: this.myTeam,
+        outcome: outcome,
+        myTeamRank: myTeam ? myTeam.rank : 0,
+        myTeamScore: myTeam ? myTeam.score : 0,
+        myTeamAlive: myTeam ? myTeam.aliveCount : 0
+      };
+    }
+
     var best = store.get(ONLINE_BEST_KEY, { len: 0, score: 0 });
     var newBest = maxLen > (best.len | 0) || score > (best.score | 0);
     best = { len: Math.max(best.len | 0, maxLen), score: Math.max(best.score | 0, score) };
@@ -451,6 +496,8 @@
 
     g.mpResult = {
       online: true,
+      team: !!teamResult,
+      teamResult: teamResult,
       dropped: !!dropped,
       surviveSec: surviveSec,
       score: score,

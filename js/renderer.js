@@ -655,14 +655,18 @@
     if (game.mode === 'multi' && game.mp && game.mp.playerEntry) {
       playerFlash = Math.max(0, game.mp.playerEntry.bittenUntil - game.mp.timeMs);
     }
-    this.drawSnakeBody(snake, cam, vw, vh, 200, playerFlash);
+    // 团队模式：按队伍号给蛇头描队伍色环（便于分辨敌我）
+    var teamMode = game.mode === 'multi' && game.mp && game.mp.mode === 'team';
+    var myTeamColor = teamMode ? cfg.teamColor(game.myTeam) : null;
+    this.drawSnakeBody(snake, cam, vw, vh, 200, playerFlash, myTeamColor);
     // 多人对战：AI 蛇（同一套蜡笔渲染）+ 头顶昵称标签
     if (game.mode === 'multi' && game.mp) {
       var bots = game.mp.bots;
       for (i = 0; i < bots.length; i++) {
         if (!bots[i].alive) continue;
         var botFlash = Math.max(0, bots[i].bittenUntil - game.mp.timeMs);
-        this.drawSnakeBody(bots[i].snake, cam, vw, vh, 200 + bots[i].id * 131, botFlash);
+        var botTeamColor = teamMode ? cfg.teamColor(bots[i].teamId >= 0 ? bots[i].teamId : -1) : null;
+        this.drawSnakeBody(bots[i].snake, cam, vw, vh, 200 + bots[i].id * 131, botFlash, botTeamColor);
       }
       this.drawNameLabels(game, cam, vw, vh);
     }
@@ -679,7 +683,7 @@
    * 一眼可辨"这节消不掉"；尾巴节不做闪白覆盖（不可被咬），但随全蛇一起抖动。
    * @param {number} flashMs 被咬反馈剩余毫秒（>0 时全节闪白 + 抖动，幅度随剩余时间衰减）
    */
-  Renderer.prototype.drawSnakeBody = function (snake, cam, vw, vh, seedBase, flashMs) {
+  Renderer.prototype.drawSnakeBody = function (snake, cam, vw, vh, seedBase, flashMs, teamColor) {
     var ctx = this.ctx;
     var ss = cfg.SEG_RADIUS * 2;
     var n = snake.segPos.length; // = colors.length + 1（末尾为尾巴节）
@@ -709,6 +713,15 @@
           ctx.restore();
         }
         if (i === 0) drawEyes(ctx, px, py, ss, snake.headDir());
+        if (teamColor && i === 0) { // 团队模式：蛇头描一圈队伍色环，便于分辨敌我
+          ctx.save();
+          ctx.strokeStyle = teamColor;
+          ctx.lineWidth = 3.5;
+          ctx.beginPath();
+          ctx.arc(px, py, ss * 0.62, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
         continue;
       }
       if (i >= snake.colors.length) { // 尾巴节：深色圆润圆块 + 小尾尖，朝向 = 前一节 → 尾巴节
@@ -733,6 +746,15 @@
         ctx.restore();
       }
       if (i === 0) drawEyes(ctx, px, py, ss, snake.headDir());
+      if (teamColor && i === 0) { // 团队模式：蛇头描一圈队伍色环，便于分辨敌我
+        ctx.save();
+        ctx.strokeStyle = teamColor;
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.arc(px, py, ss * 0.62, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
   };
 
@@ -740,6 +762,8 @@
   Renderer.prototype.drawNameLabels = function (game, cam, vw, vh) {
     var ctx = this.ctx;
     var es = game.mp.allEntries();
+    var teamMode = game.mp.mode === 'team';
+    var myTeam = game.myTeam;
     ctx.save();
     ctx.font = 'bold 12px sans-serif';
     ctx.textAlign = 'center';
@@ -750,11 +774,18 @@
       if (!e.alive) continue;
       var hx = e.snake.x, hy = e.snake.y - cfg.SEG_RADIUS - 8;
       if (hx < cam.x - 40 || hx > cam.x + vw + 40 || hy < cam.y - 40 || hy > cam.y + vh + 40) continue;
+      // 团队模式：名牌用队伍色；同队非本人追加「(队友)」标识
+      var label = e.name;
+      if (teamMode && e.teamId >= 0 && e.teamId === myTeam && !e.isPlayer) label = e.name + '(队友)';
+      var fill;
+      if (e.isPlayer) fill = '#FFD94A';
+      else if (teamMode && e.teamId >= 0) fill = cfg.teamColor(e.teamId);
+      else fill = '#FFFDF5';
       ctx.lineWidth = 3;
       ctx.strokeStyle = cfg.INK;
-      ctx.strokeText(e.name, hx, hy);
-      ctx.fillStyle = e.isPlayer ? '#FFD94A' : '#FFFDF5';
-      ctx.fillText(e.name, hx, hy);
+      ctx.strokeText(label, hx, hy);
+      ctx.fillStyle = fill;
+      ctx.fillText(label, hx, hy);
     }
     ctx.restore();
   };
@@ -1819,6 +1850,76 @@
    * 匹配等待页：标题 + 昵称 + 状态行（连接/排队位次/倒计时，省略号动画）+
    * 规则提示（掉线判负不重连）+ 取消按钮。数据全部来自 game.online（CS.OnlineMatch）。
    */
+  /**
+   * 团队赛开房间界面（team_lobby）：标题 + 昵称 + 好友房号输入框 + 开始/返回。
+   * 「好友房号」框即 game.uiButtons 里的 'team_code' 按钮矩形，renderer 把它的屏幕
+   * 矩形写入 game._lobbyCodeRect，由 main.js 据此在该位置挂载一个 DOM <input> 接收输入。
+   */
+  Renderer.prototype.drawTeamLobby = function (game) {
+    var ctx = this.ctx, W = this.W, H = this.H, cx = W / 2;
+    this.drawOverlay(0.0); // 直接用纸面
+
+    // 记录"好友房号"框矩形（供 main.js 定位 DOM 输入框，坐标为 CSS 逻辑像素）
+    var codeBtn = null;
+    for (var i = 0; i < game.uiButtons.length; i++) {
+      if (game.uiButtons[i].id === 'team_code') { codeBtn = game.uiButtons[i]; break; }
+    }
+    game._lobbyCodeRect = codeBtn ? { x: codeBtn.x, y: codeBtn.y, w: codeBtn.w, h: codeBtn.h } : null;
+
+    // 标题
+    var title = '团队赛 2v2v2v2v2';
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.font = 'bold 36px sans-serif';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText(title, cx, H * 0.16);
+    ctx.fillStyle = '#9B5DE5';
+    ctx.fillText(title, cx, H * 0.16);
+
+    // 昵称
+    ctx.font = '15px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    ctx.globalAlpha = 0.8;
+    ctx.fillText('昵称：' + (game.online ? game.online.nick : (CS.storage.get('crayon_snake_web_nick', '') || '我')), cx, H * 0.26);
+    ctx.globalAlpha = 1;
+
+    // 好友房号标签
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    ctx.fillText('好友房号（选填，留空＝单人随机匹配队友，两人填相同房号组队）', cx, H * 0.36);
+
+    // 输入框（由 main.js 的 <input> 覆盖；这里画边框与占位/内容预览）
+    if (codeBtn) {
+      wobblyRoundRect(ctx, codeBtn.x, codeBtn.y, codeBtn.w, codeBtn.h, 12, Math.round(codeBtn.x), Math.round(codeBtn.y), 2.0);
+      var focused = game.lobbyField === 'code';
+      ctx.fillStyle = focused ? '#FFFDF5' : 'rgba(255,253,245,0.6)';
+      ctx.fill();
+      ctx.strokeStyle = focused ? '#9B5DE5' : cfg.INK;
+      ctx.lineWidth = focused ? 3 : 2;
+      ctx.stroke();
+      ctx.font = '18px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      var txt = game.teamCodeDraft || '';
+      ctx.fillStyle = txt ? cfg.INK : 'rgba(58,50,56,0.45)';
+      ctx.fillText(txt || '点此输入房号', codeBtn.x + codeBtn.w / 2, codeBtn.y + codeBtn.h / 2);
+    }
+
+    // 规则提示
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('5 队 × 2 人 · 同队相撞不死可并肩吃砖 · 撞到异队身体立即出局', cx, H * 0.50);
+    ctx.fillText('单人开局＝你 + 1 AI 队友 + 4 个 AI 队', cx, H * 0.50 + 20);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    this.drawButtons(game); // 开始匹配 / 返回
+  };
+
   Renderer.prototype.drawMatching = function (game) {
     var ctx = this.ctx, W = this.W, H = this.H, cx = W / 2;
     var om = game.online;
@@ -1923,6 +2024,24 @@
       { icon: 'snake', label: '最终节数',     value: r.finalLen + ' 节',     color: '#6FBF4A' }
     ];
 
+    // 团队模式：把"队伍总排行"插到个人统计之前（队伍号 + 总分 + 存活人数，本队高亮）
+    if (r.team && r.teamResult && r.teamResult.teams) {
+      var teamRows = [];
+      var trs = r.teamResult.teams;
+      for (var tri = 0; tri < trs.length; tri++) {
+        var t0 = trs[tri];
+        var tName = cfg.teamName(t0.id);
+        var tMine = (t0.id === r.teamResult.myTeam);
+        teamRows.push({
+          icon: null,
+          label: (tri + 1) + '. ' + tName + (tMine ? '（你）' : ''),
+          value: t0.score + '分 · ' + t0.aliveCount + '存活',
+          color: cfg.teamColor(t0.id)
+        });
+      }
+      rows = teamRows.concat(rows);
+    }
+
     // 卡片几何：矮屏（手机横屏）改**两列统计**，卡片变宽变矮；否则单列 8 行。
     // 原实现单列压到 rowH 下限 24px 后卡片仍需 354px，而横屏只有 360~390px → 照样超出
     // （见 docs/design §3.8.2）。正解是利用富余的横向空间。
@@ -1937,7 +2056,8 @@
     for (var bi = 0; bi < game.uiButtons.length; bi++) btnTop = Math.min(btnTop, game.uiButtons[bi].y);
     var roomH = btnTop - 20 - 12 - vY;            // 卡片可用高度（视口顶到按钮上方）
     var oneColNeed = padV * 2 + titleH + rows.length * 34 + footH;
-    var twoCol = oneColNeed > roomH;              // 单列放不下 → 两列
+    // 团队模式：队伍排行需保持排名顺序，强制单列（其余情况仍按空间两列）
+    var twoCol = (!r.team) && (oneColNeed > roomH); // 单列放不下 → 两列
     var perCol = twoCol ? Math.ceil(rows.length / 2) : rows.length;
 
     var rowH = 34;
@@ -1988,12 +2108,22 @@
     ctx.restore();
 
     // ---- 标题区（按名次变化；掉线判负覆盖）----
-    var title = r.dropped ? '掉线判负' : (r.rank === 1 ? '冠军！' : (r.rank <= 3 ? '很棒！' : '再接再厉'));
-    var titleColor = r.dropped ? '#E8552F' : (r.rank === 1 ? '#C47F17' : (r.rank <= 3 ? '#4A8C3F' : cfg.INK));
+    // 标题按模式/战绩变化：团队模式看本队 outcome（夺冠 / 全队阵亡 / 惜败）
+    var title, titleColor;
+    if (r.team && r.teamResult) {
+      if (r.teamResult.outcome === 'win') { title = '团队冠军！'; titleColor = '#C47F17'; }
+      else if (r.teamResult.outcome === 'elim') { title = '全队阵亡'; titleColor = cfg.INK; }
+      else { title = '惜败'; titleColor = cfg.INK; }
+    } else {
+      title = r.dropped ? '掉线判负' : (r.rank === 1 ? '冠军！' : (r.rank <= 3 ? '很棒！' : '再接再厉'));
+      titleColor = r.dropped ? '#E8552F' : (r.rank === 1 ? '#C47F17' : (r.rank <= 3 ? '#4A8C3F' : cfg.INK));
+    }
     var ty = y + padV + Math.min(50, titleH * 0.52); // 标题基线随 titleH 收缩（极端矮屏）
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    if (r.rank === 1) {
+    // 皇冠：个人第 1 名（非团队）或团队夺冠时显示
+    var showCrown = (r.team && r.teamResult) ? (r.teamResult.outcome === 'win') : (r.rank === 1);
+    if (showCrown) {
       drawCrown(ctx, cx, y + padV + 14, 46, 24);
       starPath(ctx, cx - 76, ty, 12, 0.4);
       ctx.fillStyle = '#FFD94A';
@@ -2016,7 +2146,7 @@
     ctx.font = '12px sans-serif';
     ctx.globalAlpha = aCard * 0.65;
     ctx.fillStyle = cfg.INK;
-    ctx.fillText(r.dropped ? '连接中断，不支持重连' : (r.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场'), cx, ty + 30);
+    ctx.fillText(r.dropped ? '连接中断，不支持重连' : (r.team ? '在线团队赛 · 2v2v2v2v2' : (r.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场')), cx, ty + 30);
     ctx.globalAlpha = aCard;
 
     // ---- 统计行（依次延迟 ~80ms 从左侧滑入；两列时左右并排）----
@@ -2560,6 +2690,7 @@
     if (game.state === 'menu') { this.drawMenu(game); return; }
     if (game.state === 'guide') { this.drawGuide(game); return; }
     if (game.state === 'levels') { this.drawLevels(game); return; }
+    if (game.state === 'team_lobby') { this.drawTeamLobby(game); return; }
     if (game.state === 'matching') { this.drawMatching(game); return; }
     // play / clear / over 都先画对局场景（世界 + 相机）
     this.drawPlay(game);

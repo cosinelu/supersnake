@@ -68,6 +68,11 @@
     this.guidePage = 0;         // 图鉴当前页码（0-based）
     this.guideTab = 'items';    // 图鉴页签：'items'=道具 / 'colors'=颜色解锁顺序
 
+    // ---- 团队赛大厅（team_lobby）状态 ----
+    this.teamCodeDraft = '';    // 好友房号输入草稿（开黑用；空=单人匹配）
+    this.lobbyField = null;     // 当前聚焦的输入字段：'code' | null（由 main.js 据此挂载 DOM 输入框）
+    this._lobbyCodeRect = null; // 大厅"好友房号"输入框的屏幕矩形（renderer 写入，main.js 定位 DOM 用）
+
     this.uiButtons = [];
     this.buildButtons();
     this.syncJoystick();
@@ -210,13 +215,34 @@
     return u.clamp(v, -T, world - view + T);
   }
 
+  /**
+   * 相机跟随目标：团队模式观战（本人阵亡、队友存活）时跟随存活队友，
+   * 其余情况跟随本机蛇。渲染/小地图只读这个返回值，无需关心观战状态。
+   * @returns {object} 带 x/y 的蛇视图或本机蛇
+   */
+  Game.prototype.cameraTarget = function () {
+    if (this.mode === 'multi' && this.online && this.online.spectating &&
+        this.online.myTeam >= 0 && this.mp) {
+      var es = this.mp.allEntries();
+      for (var i = 0; i < es.length; i++) {
+        var e = es[i];
+        if (e.alive && e.teamId === this.online.myTeam && e.id !== this.online.playerId) {
+          return e.snake;
+        }
+      }
+    }
+    return this.snake;
+  };
+
   /** 相机平滑跟随蛇头（帧率无关指数趋近）并钳制在世界边界内 */
   Game.prototype.updateCamera = function (dt) {
     if (!this.snake || !this.walls) return;
     var l = this.layout();
     var vw = l.viewW, vh = l.viewH;
-    var tx = clampCam(this.snake.x - vw / 2, this.walls.W, vw);
-    var ty = clampCam(this.snake.y - vh / 2, this.walls.H, vh);
+    var f = this.cameraTarget();
+    if (!f) return;
+    var tx = clampCam(f.x - vw / 2, this.walls.W, vw);
+    var ty = clampCam(f.y - vh / 2, this.walls.H, vh);
     var k = 1 - Math.exp(-cfg.CAMERA_LERP * dt / 1000); // lerp 系数
     this.camera.x = clampCam(this.camera.x + (tx - this.camera.x) * k, this.walls.W, vw);
     this.camera.y = clampCam(this.camera.y + (ty - this.camera.y) * k, this.walls.H, vh);
@@ -225,8 +251,10 @@
   /** 相机立即就位（开局调用，避免从原点飞入） */
   Game.prototype.snapCamera = function () {
     var l = this.layout();
-    this.camera.x = clampCam(this.snake.x - l.viewW / 2, this.walls.W, l.viewW);
-    this.camera.y = clampCam(this.snake.y - l.viewH / 2, this.walls.H, l.viewH);
+    var f = this.cameraTarget();
+    if (!f) return;
+    this.camera.x = clampCam(f.x - l.viewW / 2, this.walls.W, l.viewW);
+    this.camera.y = clampCam(f.y - l.viewH / 2, this.walls.H, l.viewH);
   };
 
   // ---------------- 对局生命周期 ----------------
@@ -753,7 +781,7 @@
     var top = Math.max(H * 0.35 + 16, tY + tSize * 0.95 + 20);  // 让开副标题与蛇动画
     var bottom = H * 0.89 - 14 - inset.bottom;                  // 让开底部两行信息
     var showStat = true, showSub = true, showAnim = true;
-    var minNeed = 5 * 34 + 4 * 6;
+    var minNeed = 6 * 34 + 5 * 6;   // 菜单 6 个按钮（含在线团队赛）
     if (bottom - top < minNeed) {                               // 极端小屏兜底
       // 空间不足时逐级让位。优先级：**按钮可点 > 蛇动画 > 副标题 > 历史成绩**
       //（点不到的按钮比看不到的装饰严重得多）。
@@ -767,7 +795,12 @@
         showAnim = false;                                       // 蛇动画（纯装饰）让位
         top = Math.max(inset.top + 4, tY + tSize * 0.55 + 6);
       }
-      if (bottom - top < minNeed) top = Math.max(inset.top + 4, bottom - minNeed);
+      if (bottom - top < minNeed) {
+        // 最后兜底：抬顶腾空间，但**不许压到标题**（标题是唯一不让位的品牌层）。
+        // 剩余缺口交给 solveButtonStack 的二次压缩（间距→0、高度→20px 绝对下限）消化。
+        var titleBot = tY + tSize * 0.5 + 4;
+        top = Math.max(inset.top + 4, titleBot, bottom - minNeed);
+      }
     }
     // 蛇动画是纯装饰：只要它的轨道会被按钮区压到，就直接不画（而不是硬挤）。
     // 判据用**实际占用**（轨道下沿 animY+17）与按钮区顶 top 比较 ——
@@ -835,8 +868,8 @@
     var bw = Math.min(220, W * 0.3), bh = 54;
     var i;
     if (this.state === 'menu') {
-      var ids = ['level', 'endless', 'multi', 'online', 'guide'];
-      var labels = ['闯关模式', '无尽模式', 'AI对战', '在线对战', '图鉴'];
+      var ids = ['level', 'endless', 'multi', 'online', 'team', 'guide'];
+      var labels = ['闯关模式', '无尽模式', 'AI对战', '在线对战', '在线团队赛', '图鉴'];
       var ml = this.menuLayout();
 
       if (ml.split) {
@@ -857,6 +890,14 @@
       }
     } else if (this.state === 'matching') {
       this.addButton('online_cancel', cx, Math.min(H * 0.72, H - 40 - inset.bottom), bw, bh, '取消匹配');
+    } else if (this.state === 'team_lobby') {
+      // 团队赛开房间界面：昵称 + 好友房号输入框（team_code，供 main.js 挂载 DOM 输入框）+ 开始/返回
+      var fw = Math.min(360, W * 0.82);
+      this.addButton('team_code', cx, H * 0.44, fw, 48, ''); // 空 label：由 renderer 画"好友房号"提示与输入内容
+      var sBtnW = Math.min(170, W * 0.4);
+      var sY = H * 0.58;
+      this.addButton('team_start', cx - sBtnW / 2 - 10, sY, sBtnW, 54, '开始匹配');
+      this.addButton('team_back', cx + sBtnW / 2 + 10, sY, sBtnW, 54, '返回');
     } else if (this.state === 'guide') {
       // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
       this.addButton('back', W / 2, H - 28 - inset.bottom, 120, 38, '← 返回');
@@ -911,6 +952,10 @@
     else if (id === 'multi') this.startMulti();
     else if (id === 'online') this.startOnline();
     else if (id === 'online_cancel') this.cancelOnline();
+    else if (id === 'team') this.enterTeamLobby();
+    else if (id === 'team_start') this.startOnline({ mode: 'team', teamCode: (this.teamCodeDraft && this.teamCodeDraft.trim()) || null });
+    else if (id === 'team_back') { this.lobbyField = null; this.setState('menu'); }
+    else if (id === 'team_code') { this.lobbyField = (this.lobbyField === 'code' ? null : 'code'); }
     else if (id === 'guide') { this.guidePage = 0; this.guideTab = 'items'; this.setState('guide'); }
     else if (id === 'back') this.setState('menu');
     else if (id === 'menu') { this._teardownOnline(); this.setState('menu'); }
@@ -929,12 +974,19 @@
 
   // ---------------- 在线对战（v3.0：匹配 → 联机对局，见 js/net/onlineMatch.js） ----------------
 
-  /** 进入在线匹配：mode 置 multi（渲染分支复用），状态切 matching，控制器接管后续 */
-  Game.prototype.startOnline = function () {
+  /** 进入在线团队赛开房间界面（team_lobby）：选填好友房号后开始匹配 */
+  Game.prototype.enterTeamLobby = function () {
+    this.lobbyField = null;
+    this.setState('team_lobby');
+  };
+
+  /** 进入在线匹配：mode 置 multi（渲染分支复用），状态切 matching，控制器接管后续
+   *  @param {object} [opts] 透传给 OnlineMatch：{ mode:'ffa'|'team', teamCode } */
+  Game.prototype.startOnline = function (opts) {
     this._teardownOnline();
     if (!CS.OnlineMatch) return; // 联机模块未加载（极端：script 缺失）→ 静默忽略
     this.mode = 'multi';
-    this.online = new CS.OnlineMatch(this, {});
+    this.online = new CS.OnlineMatch(this, opts || {});
     this.setState('matching');
     this.online.begin();
   };

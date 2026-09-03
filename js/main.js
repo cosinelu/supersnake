@@ -106,6 +106,59 @@
       }
     });
 
+    // ---------- 团队赛大厅「好友房号」输入：canvas 收不到键盘，用 DOM <input> 覆盖 ----------
+    // 仅在 team_lobby 且聚焦 team_code 字段时显示，位置/尺寸对齐 renderer 写入的 game._lobbyCodeRect。
+    var lobbyInput = null, lobbyInputActive = false;
+    function ensureLobbyInput() {
+      if (lobbyInput) return lobbyInput;
+      lobbyInput = document.createElement('input');
+      lobbyInput.type = 'text';
+      lobbyInput.maxLength = 24;
+      lobbyInput.placeholder = '点此输入房号';
+      lobbyInput.setAttribute('autocomplete', 'off');
+      lobbyInput.setAttribute('autocorrect', 'off');
+      lobbyInput.setAttribute('autocapitalize', 'off');
+      lobbyInput.setAttribute('spellcheck', 'false');
+      lobbyInput.style.position = 'fixed';
+      lobbyInput.style.display = 'none';
+      lobbyInput.style.zIndex = '10';
+      lobbyInput.style.boxSizing = 'border-box';
+      lobbyInput.style.font = '18px sans-serif';
+      lobbyInput.style.textAlign = 'center';
+      lobbyInput.style.border = 'none';
+      lobbyInput.style.outline = 'none';
+      lobbyInput.style.background = 'transparent';
+      lobbyInput.style.color = '#3A3238';
+      lobbyInput.addEventListener('input', function () { game.teamCodeDraft = lobbyInput.value; });
+      lobbyInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); lobbyInput.blur(); game.onButton('team_start'); }
+        else if (e.key === 'Escape') { e.preventDefault(); lobbyInput.blur(); }
+      });
+      lobbyInput.addEventListener('blur', function () { game.lobbyField = null; });
+      document.body.appendChild(lobbyInput);
+      return lobbyInput;
+    }
+    function syncLobbyInput() {
+      var active = game.state === 'team_lobby' && game.lobbyField === 'code' && game._lobbyCodeRect;
+      if (active) {
+        var inp = ensureLobbyInput();
+        var rect = game._lobbyCodeRect;
+        inp.style.display = 'block';
+        inp.style.left = rect.x + 'px';
+        inp.style.top = rect.y + 'px';
+        inp.style.width = rect.w + 'px';
+        inp.style.height = rect.h + 'px';
+        if (!lobbyInputActive) {
+          inp.value = game.teamCodeDraft || '';
+          setTimeout(function () { try { inp.focus(); } catch (e) {} }, 0);
+        }
+        lobbyInputActive = true;
+      } else if (lobbyInputActive && lobbyInput) {
+        lobbyInput.style.display = 'none';
+        lobbyInputActive = false;
+      }
+    }
+
     // ---------- 主循环 ----------
     var last = 0;
     function loop(ts) {
@@ -116,6 +169,7 @@
       if (dt > 100) dt = 100; // 切后台回来防跳帧
       game.update(dt);
       renderer.draw(game);
+      syncLobbyInput();
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);

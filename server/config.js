@@ -24,6 +24,12 @@ module.exports = {
   MATCH_MAX_MS: 5 * 60 * 1000, // 对局上限，到点按总分结算
   OVER_LINGER_MS: 10000,    // 结算后房间保留时长（供客户端展示结算页）
 
+  // ---------------- 团队战模式（2v2v2v2v2，详见 docs/design/02-team-mode.md） ----------------
+  TEAM_TEAMS: 5,            // 队伍数（须与 js/config.js TEAM.TEAMS 一致）
+  TEAM_SIZE: 2,             // 每队人数（须与 js/config.js TEAM.SIZE 一致）
+  TEAM_MIN_HUMANS: 1,       // 超时补位开局的最少真人数（=1：单人也能开局，其余 AI 补位）
+  TEAM_MATCH_TIMEOUT_MS: 20000, // 团队匹配等待上限：超时以现有真人 + AI 补满 10 槽开局
+
   MAX_MSG_BYTES: 4096,      // 上行消息体积上限（防垃圾流量）
   INPUT_MAX_SEQ_JUMP: 1000, // input seq 异常跳变容忍（超出视为作弊/乱序，忽略）
   INPUT_SEQ_RESET_GAP: 64,  // seq 回退超过该幅度 → 视为客户端重新计数，重置基线
