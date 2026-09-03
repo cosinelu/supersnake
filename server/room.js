@@ -113,10 +113,21 @@ Room.prototype.start = function () {
       W: this.game.W, H: this.game.H, walls: walls,
       snapIntervalMs: this.config.TICK_MS * this.config.SNAP_EVERY // 客户端插值缓冲据此自适应
     };
-    // UDP 会话信息（可选）：客户端据此打洞；拿不到就全程走 TCP（见 02-udp-transport.md §4.3）
+    // 加速通道接入信息（可选）：客户端据此打洞；拿不到就全程走 TCP
+    // （见 02-udp-transport.md §4.3）。
+    // **两条通道都下发**（裸 UDP + WebTransport），由客户端按自身能力挑一条：
+    // 小游戏 wx.createUDPSocket → 裸 UDP，浏览器 → WebTransport，Node → dgram。
+    // 服务器不猜客户端类型，谁打通了就用谁（isReady 按连接实测）。
     if (this.udp) {
       var info = this.udp.offer(c, this.id);
-      if (info) { msg.udpPort = info.port; msg.udpToken = info.token; }
+      if (info) {
+        if (info.port) { msg.udpPort = info.port; msg.udpToken = info.token; }
+        if (info.wtPort) {
+          msg.wtPort = info.wtPort;
+          msg.wtToken = info.wtToken;
+          msg.wtPath = info.wtPath;
+        }
+      }
     }
     h.send(msg);
   }

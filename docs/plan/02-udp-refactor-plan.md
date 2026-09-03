@@ -431,29 +431,62 @@ WebTransport 的 datagram 语义是「不可靠、不有序、有大小上限」
 
 ### 任务
 
-- [ ] **1d.1** 服务器：`server/webtransport.js`
-  - `Http3Server`（`@fails-components/webtransport` 1.6.7 + `-transport-http3-quiche`）
-  - 端口走上表：`WT_PORT` 环境变量，dev 8093 / official 443
-  - 证书直接读 letsencrypt 的 `fullchain.pem` / `privkey.pem`
-  - **会话与现有 `UdpEndpoint` 的会话表打通**：token 语义、地址跟随、
-    frameId 去重必须与 `server/udp.js` 保持一致，否则同一套客户端逻辑要分叉
-- [ ] **1d.2** 客户端：`udpTransport.js` 增加 `webTransportSocketFactory`
-  - 把 `WebTransport.datagrams` 适配成既有的
-    `{ onMessage, send, close }` 接口 ⇒ `UdpAccel` 零改动
-  - `autoSocketFactory` 补浏览器分支：`typeof WebTransport !== 'undefined'` → WT
-  - **异步握手要处理好**：`new WebTransport()` 后要 `await ready`，
-    而现有 `socketFactory` 是同步返回 ⇒ 需要一层「pending 队列」或改造为异步工厂
-- [ ] **1d.3** 降级路径：WT 握手失败 / `closed` reject / 对局中停滞
-      → 停用旁路走 wss（复用 `UdpAccel` 既有的 `_setActive(false)`）
-- [ ] **1d.4** certbot 续期钩子：`renewal-hooks/deploy` 同时 reload nginx 与重载 Node 证书
-- [ ] **1d.5** 测试 `test/net/webtransport.test.js`
-  - 真 `Http3Server` + 真客户端，断言 datagram 往返、降级、二进制帧解码与
-    JSON 路径同构
-  - **进 CI**（三平台预编译已实测可用）。测试内需
-    `await quicheLoaded` 且**自签证书 + `serverCertificateHashes`**，
-    不能依赖 letsencrypt 真证书（CI 上没有）
-  - 弱网复验：`netem-weaknet.sh` 对 WT 端口注入丢包，确认冗余打散同样生效
-- [ ] **1d.6** 云控制台手动放行 UDP（**必须用户操作**）：dev `8093`、official `443`
+- [x] **1d.1** 服务器：`server/webtransport.js`（**已完成**）
+  - `WebTransportEndpoint` 封装 `Http3Server`，接口与 `UdpEndpoint` **完全同构**
+    （offer / isReady / sendFrame / dropSession）
+  - 会话语义与 `server/udp.js` 逐条对齐（token 识别、frameId 去重含
+    「大幅回退＝重新计数」），测试里**逐分支比对两个端点的返回值**
+  - 冗余打散逻辑与 udp.js 相同（剩余窗口/剩余份数 + `MIN_GAP=6`）
+  - QUIC 自带连接迁移 ⇒ **不需要** udp.js 那套「地址跟随」
+- [x] **1d.2** 聚合层：`server/transportHub.js`（**已完成，原计划没有这一层**）
+  - 把裸 UDP 与 WebTransport 聚合成**一个与 UdpEndpoint 同构的对象**
+    ⇒ `room.js` 只改了 matched 下发字段，判定/广播逻辑**一行未动**
+  - 若让 room.js 自己分辨通道，判定逻辑会长出两条分支，
+    而这两条分支的差异其实只有「管道」（协议/编码/冗余策略完全相同）
+  - `matched` 同时下发 `udpPort/udpToken` 与 `wtPort/wtToken/wtPath`，
+    **客户端按自身能力挑**，服务器不猜；`isReady` 按连接实测
+- [x] **1d.3** 客户端：`udpTransport.js` 的 `makeWebTransportFactory`（**已完成**）
+  - 把 `WebTransport.datagrams` 适配成既有 `{onMessage, send, close}` 接口
+    ⇒ `UdpAccel` **零改动**
+  - **握手异步而工厂必须同步返回** ⇒ 立即返回壳，ready 前的发送**排队**、
+    ready 后冲刷。UdpAccel 的打洞本来就带重试，多等几十毫秒无影响
+  - `autoSocketFactory(info)` 改为**接收 matched 信息**：浏览器分支要看
+    服务器有没有下发 `wtPort`，且 WT 需要带端口的完整 URL
+    ⇒ 工厂只能在 matched 之后选定，不能在 `WsTransport` 构造时定
+- [x] **1d.4** 降级路径（**已完成**）：握手失败 / `closed` reject / 会话中断
+      → 停止收包 → `UdpAccel` 既有的停滞检测回落 wss
+- [ ] **1d.5** certbot 续期钩子：`renewal-hooks/deploy` 同时 reload nginx
+      与让 Node 调 `updateCert`（接口已实现，钩子脚本待写）
+- [x] **1d.6** 测试 `test/net/webtransport.test.js`（**已完成，50 条断言，已接入 CI**）
+  - 自签 ECDSA P-256 + 13 天有效期 + `serverCertificateHashes`
+    （CI 上没有 letsencrypt 证书；这条路径还顺带避开库那条 experimental 警告）
+  - **客户端复用生产的 socket 工厂**，不另写一份 —— 否则测的是测试自己的代码
+  - **T1 逐分支比对 WT 与 UDP 两个端点的去重返回值**，语义漂移立刻暴露
+  - 断言 WT 下行字节与裸 UDP 路径**逐字节一致**（编码层确实共用）
+  - 畸形输入（空包/长度不足/crc 错/未知 magic/1500 全零）不崩服务
+  - **已用故障注入验证断言非空**：打散换成同步连发 → 跨度 0ms 报错；
+    去掉「大幅回退重置」→ 两条断言报错
+  - 无 openssl 时**显式 SKIP 并说明**，不假装通过
+- [ ] **1d.7** 云控制台手动放行 UDP（**必须用户操作**）：dev `8093`、official `443`
+- [ ] **1d.8** systemd unit：加 `WT_ENABLED=1` / `WT_PORT` / `WT_CERT` / `WT_KEY`，
+      official 还需 `AmbientCapabilities=CAP_NET_BIND_SERVICE`（绑 443）
+
+### 实现期踩到的坑（都已写进代码注释）
+
+1. **`sessionStream(path)` 直接返回 ReadableStream，不是 Promise** ——
+   照 MDN 浏览器侧示例写会得到 `sessionStream(...).then is not a function`。
+2. **模块解析要手工拼路径**：该包 `exports` 完全封闭（连 `./package.json`
+   都不暴露）⇒ `require.resolve(包名+子路径)` 一律 `ERR_PACKAGE_PATH_NOT_EXPORTED`；
+   而裸 `import(包名)` 以**调用方文件**为解析基准 ⇒ 从 `test/` 下驱动时
+   `ERR_MODULE_NOT_FOUND`。故按 `__dirname` 拼到 `node_modules`，
+   并把该逻辑导出为 `libEntryUrl()` 供测试复用（测试不自己拼，否则会脱钩）。
+3. **`ready` 可能永不 resolve 也不 reject**（证书无效时）⇒ 加 8s 超时保护，
+   否则调用方永久挂住而非拿到明确失败。
+4. **证书路径不能写死**：含域名会被 `check-hygiene.sh` 拦下（防环境串台），
+   改为必须由 `WT_CERT`/`WT_KEY` 环境变量提供，缺失则抛明确错误。
+5. **旧测试断言与新架构脱钩**：`udp.client.test.js` 里 `T2.udpFactory = null`
+   的写法在工厂改为「_setupUdp 内部选定」后失效（赋值被覆盖，断言变空）。
+   改为注入「明确返回 null 的工厂」来模拟无能力平台。
 
 ### 遗留注意点
 

@@ -278,14 +278,110 @@
   }
 
   /**
-   * 按运行环境挑一个可用的 socket 工厂。
-   * 浏览器**没有裸 UDP**（WebTransport 是后续阶段的事），返回 null → 全程 TCP。
+   * 浏览器：WebTransport（HTTP/3 over QUIC）。
+   *
+   * 浏览器没有裸 UDP，这是唯一能让网页版吃到「二进制 + 冗余打散」收益的通道
+   * （2026-03 起 Baseline，Safari 26.4 补齐最后一块，覆盖约 90%）。
+   *
+   * **不可靠 datagram 的语义与裸 UDP 完全一致** ⇒ 上层 `UdpAccel`、
+   * `binProtocol`、冗余打散、去重、降级逻辑**全部原样复用**，这里只换管道。
+   *
+   * 两个适配要点：
+   * 1. **握手是异步的，而 socketFactory 必须同步返回** ——
+   *    故立即返回一个「壳」，把 ready 之前的发送**排队**，ready 后冲刷。
+   *    `UdpAccel` 因此不需要知道任何异步细节（它的打洞本来就带重试，
+   *    多等几十毫秒无影响）。
+   * 2. **地址来自 matched 的 `wtPort`/`wtPath`**，WebTransport 要完整 https URL，
+   *    所以 `send(u8, host, port)` 的后两个参数被忽略 —— URL 在创建时已定。
+   *
+   * @param {object} info { host, wtPort, wtPath, certHashes? }
+   *   `certHashes` 仅测试用（自签证书）；生产走标准 Web PKI，不传。
    */
-  function autoSocketFactory() {
+  function makeWebTransportFactory(info) {
+    return function () {
+      var WT = (typeof WebTransport !== 'undefined') ? WebTransport
+        : (typeof globalThis !== 'undefined' ? globalThis.WebTransport : null);
+      if (!WT || !info || !info.wtPort) return null;
+
+      var host = info.host ||
+        (typeof location !== 'undefined' && location.hostname ? location.hostname : '127.0.0.1');
+      var url = 'https://' + host + ':' + info.wtPort + (info.wtPath || '/wt');
+      var opts = {};
+      if (info.certHashes) opts.serverCertificateHashes = info.certHashes;
+
+      var wt;
+      try { wt = new WT(url, opts); } catch (e) { return null; }
+
+      var writer = null, reader = null, onMsg = null, closed = false;
+      var queue = [];   // ready 之前的待发数据（限长，防异常场景无限增长）
+
+      // datagrams.writable 在 1.6.x 已标记 deprecated，但 createWritable
+      // 未必存在 ⇒ 能力探测，不硬用其中一个
+      function makeWriter(d) {
+        if (d && typeof d.createWritable === 'function') return d.createWritable().getWriter();
+        if (d && d.writable) return d.writable.getWriter();
+        return null;
+      }
+
+      wt.ready.then(function () {
+        if (closed) return;
+        try {
+          writer = makeWriter(wt.datagrams);
+          reader = wt.datagrams.readable.getReader();
+        } catch (e) { return; }
+        for (var i = 0; i < queue.length; i++) {
+          try { writer.write(queue[i]); } catch (e) { break; }
+        }
+        queue.length = 0;
+        (function pump() {
+          if (closed || !reader) return;
+          reader.read().then(function (res) {
+            if (res.done || closed) return;
+            if (onMsg) {
+              var v = res.value;
+              onMsg(v instanceof Uint8Array ? v : new Uint8Array(v));
+            }
+            pump();
+          }).catch(function () { /* 会话结束：停滞检测会让上层回落 TCP */ });
+        })();
+      }).catch(function () {
+        // 握手失败（UDP 被封 / 证书问题 / 服务未起）不抛错：
+        // UdpAccel 收不到 hello_ack，1.5s 后自行判定不可用并静默走 wss。
+        // **这条回退路径是必需项** —— WebTransport 目前没有 TCP 回退。
+        closed = true;
+      });
+
+      wt.closed.then(function () { closed = true; }).catch(function () { closed = true; });
+
+      return {
+        onMessage: function (cb) { onMsg = cb; },
+        send: function (u8) {
+          if (closed) return;
+          if (!writer) { if (queue.length < 32) queue.push(u8); return; }
+          try { writer.write(u8); } catch (e) { closed = true; }
+        },
+        close: function () {
+          closed = true;
+          try { if (wt) wt.close(); } catch (e) {}
+        }
+      };
+    };
+  }
+
+  /**
+   * 按运行环境挑一个可用的 socket 工厂。
+   *
+   * @param {object} [info] matched 下发的接入信息；含 `wtPort` 时浏览器才可能走 WT
+   * @returns {function|null} null ⇒ 无加速通道，全程走 TCP
+   */
+  function autoSocketFactory(info) {
     if (typeof wx !== 'undefined' && wx.createUDPSocket) return wxSocketFactory;
     if (typeof process !== 'undefined' && process.versions && process.versions.node) {
       return nodeSocketFactory;
     }
+    var hasWT = (typeof WebTransport !== 'undefined') ||
+      (typeof globalThis !== 'undefined' && globalThis.WebTransport);
+    if (hasWT && info && info.wtPort) return makeWebTransportFactory(info);
     return null;
   }
 
@@ -293,6 +389,7 @@
   CS.udpSocketFactories = {
     wx: wxSocketFactory,
     node: nodeSocketFactory,
+    webTransport: makeWebTransportFactory,
     auto: autoSocketFactory
   };
   if (typeof module !== 'undefined' && module.exports) {

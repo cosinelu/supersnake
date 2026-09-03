@@ -34,12 +34,16 @@
     this._hbTimer = null;
     this._dropped = false;
 
-    // UDP 加速层（v3.1）：matched 带回接入信息后建立旁路，承载 input/snap。
+    // 加速层（v3.1）：matched 带回接入信息后建立旁路，承载 input/snap。
+    //   裸 UDP（微信小游戏 / Node）或 WebTransport（浏览器）
     // 拿不到 / 打洞失败 / 中途停滞 → 自动走 TCP，对局不受影响。
     // 传 udp:false 可显式关闭（回滚点）。
+    //
+    // **工厂只能在 matched 之后选定**：浏览器分支要看服务器有没有下发 wtPort，
+    // 且 WebTransport 需要带端口的完整 URL ⇒ 构造时还不知道，不能提前定。
     this.udpEnabled = opts.udp !== false;
-    this.udpFactory = opts.udpSocketFactory ||
-      (CS.udpSocketFactories && CS.udpSocketFactories.auto && CS.udpSocketFactories.auto());
+    this.udpFactoryOverride = opts.udpSocketFactory || null;   // 测试可注入
+    this.udpFactory = null;    // 由 _setupUdp 依 matched 信息选定
     this.udp = null;
     this.meta = {};        // 低频通道缓存：id → { nm, kl, es, ... }
   }
@@ -92,27 +96,54 @@
   };
 
   /**
-   * 建立 UDP 旁路（matched 后调用）。
+   * 建立加速旁路（matched 后调用）。
    * 失败不抛错、不提示玩家 —— 静默走 TCP，对局体验不受影响。
+   *
+   * 服务器把**两条通道的接入信息都下发**（udpPort/udpToken + wtPort/wtToken），
+   * 客户端按自身能力挑一条：小游戏/Node 走裸 UDP，浏览器走 WebTransport。
+   * 两条通道在服务端是**独立的会话表**，token 各用各的，绝不能混。
    */
   WsTransport.prototype._setupUdp = function (msg) {
-    if (!this.udpEnabled || !this.udpFactory) return;
-    if (!msg.udpPort || msg.udpToken == null) return;
-    if (!CS.UdpAccel) return;
-    var self = this;
+    if (!this.udpEnabled || !CS.UdpAccel) return;
+
     var host = null;
     if (typeof location !== 'undefined' && location.hostname) host = location.hostname;
     else if (this.url) {
       var m = /^wss?:\/\/([^:/]+)/.exec(this.url);
       if (m) host = m[1];
     }
+
+    // 选工厂：注入优先（测试），否则按环境自动选。
+    // 传入 msg 让浏览器分支能看到 wtPort/wtPath。
+    this.udpFactory = this.udpFactoryOverride ||
+      (CS.udpSocketFactories && CS.udpSocketFactories.auto &&
+       CS.udpSocketFactories.auto({
+         host: host, wtPort: msg.wtPort, wtPath: msg.wtPath,
+         certHashes: msg.wtCertHashes || null   // 仅测试环境会带
+       }));
+    if (!this.udpFactory) return;   // 无可用通道（如无 WebTransport 的旧浏览器）
+
+    // 走哪条通道就用哪套 port/token。
+    // 优先裸 UDP（开销更低）；只有它不可用时才用 WT。
+    var port = msg.udpPort, token = msg.udpToken;
+    var isWx = (typeof wx !== 'undefined' && wx.createUDPSocket);
+    var isNode = (typeof process !== 'undefined' && process.versions && process.versions.node);
+    if (!isWx && !isNode && msg.wtPort) {
+      // 浏览器：走 WebTransport。端口已编进工厂的 URL，
+      // 这里的 udpPort 只是给 UdpAccel 的形式参数，真正要紧的是 token。
+      port = msg.wtPort;
+      token = msg.wtToken;
+    }
+    if (!port || token == null) return;
+
+    var self = this;
     this.udp = new CS.UdpAccel({
       socketFactory: this.udpFactory,
       onSnap: function (dec) { self._emit('snap', self._mergeMeta(dec)); },
       onStateChange: function (active) { self._emit('udp', { active: active }); }
     });
     if (!this.udp.attach({
-      udpPort: msg.udpPort, udpToken: msg.udpToken, host: host,
+      udpPort: port, udpToken: token, host: host,
       snapIntervalMs: msg.snapIntervalMs
     })) {
       this.udp = null;

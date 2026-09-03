@@ -276,17 +276,30 @@ function t6(done) {
   ok(msg && msg.t === 'input' && Math.abs(msg.a - 1.23) < 0.01, 'TCP 输入内容正确');
   ok(T.seq === 1, 'TCP 路径的 seq 正常递增');
 
-  // 没有 socketFactory 时（浏览器无裸 UDP）也应静默走 TCP
+  // 平台无任何加速能力时（旧浏览器：既无裸 UDP 也无 WebTransport）静默走 TCP。
+  //
+  // 注意断言的写法：v3.1 阶段 1d 起 socket 工厂**在 _setupUdp 内部按 matched
+  // 信息选定**（浏览器分支要看服务器有没有下发 wtPort），所以不能像早先那样
+  // 在外面设 `T2.udpFactory = null` —— 那个赋值会被覆盖，断言变成空的。
+  // 正确做法是注入一个「明确返回 null」的工厂来模拟无能力平台。
   var T2 = new CS.WsTransport({
     url: 'ws://127.0.0.1:1',
     WebSocketImpl: function () { return fakeWs; },
-    udpSocketFactory: null
+    udpSocketFactory: function () { return null; }   // 平台无可用 socket
   });
-  T2.udpFactory = null;
   T2._setupUdp({ udpPort: 1234, udpToken: 5 });
-  ok(T2.udp === null, '无平台 UDP 能力时静默降级（浏览器场景）');
+  ok(T2.udp === null, '无平台加速能力时静默降级（旧浏览器场景）');
 
-  T.dispose(); T2.dispose();
+  // 服务器只下发 wt 信息、而平台又拿不到 socket 时，同样必须降级而不是抛错
+  var T3 = new CS.WsTransport({
+    url: 'ws://127.0.0.1:1',
+    WebSocketImpl: function () { return fakeWs; },
+    udpSocketFactory: function () { return null; }
+  });
+  T3._setupUdp({ wtPort: 8093, wtToken: 7, wtPath: '/wt' });
+  ok(T3.udp === null, '只有 wt 信息但平台不支持时也静默降级');
+
+  T.dispose(); T2.dispose(); T3.dispose();
   done();
 }
 

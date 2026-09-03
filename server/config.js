@@ -53,5 +53,32 @@ module.exports = {
   LOWFREQ_MS: 1000,         // 低频通道周期：昵称/计分/排行榜 + 色块全量校正（走 TCP）。
                             // 色块全量是增量同步的兜底 —— 漏收任一增量都会永久偏差。
 
+  // ---------------- WebTransport（v3.1 阶段 1d，浏览器的 UDP 通道） ----------------
+  // 浏览器没有裸 UDP，只能走 WebTransport（HTTP/3 over QUIC，2026-03 起 Baseline）。
+  // datagram 语义与本项目 UDP 通道完全一致 ⇒ 协议层 / 冗余打散 / 去重全部原样复用。
+  // 设计见 docs/architecture/02-udp-transport.md §7.4.1。
+  //
+  // **默认关**：依赖 native addon 与证书文件，本地开发通常两者都缺；
+  // 生产由 systemd 显式设 WT_ENABLED=1。
+  WT_ENABLED: process.env.WT_ENABLED === '1',
+  // 端口规划：official 443（穿透性最好，nginx 只占 TCP 443）/ dev 8093（挨着 8092）。
+  // **环境隔离只能靠端口**：Http3Server 只收单套证书、无 SNI 分流，
+  // 一个进程独占一个 UDP 端口 —— 这与 wss 靠 nginx server_name 分流正好相反。
+  // 用 >= 0 判断而非 ||：0 是「随机空闲端口」的合法值（测试用）。
+  WT_PORT: parseInt(process.env.WT_PORT, 10) >= 0
+    ? parseInt(process.env.WT_PORT, 10) : 8093,
+  WT_HOST: process.env.WT_HOST || '0.0.0.0',   // 同 UDP_HOST：必须直面公网（无反代）
+  // 证书路径：**必须由环境变量提供，代码里不写死**。
+  // 理由与 wsTransport 的服务器地址同源：路径里含域名会让代码与某套部署绑死，
+  // 也是本项目 check-hygiene.sh 明确拦截的「硬编码地址」（会造成环境串台）。
+  // systemd unit 里设 WT_CERT / WT_KEY 指向 letsencrypt 的 pem 即可。
+  //
+  // 与 nginx 共用同一份文件没有冲突（一 TCP 一 UDP，socket 不同、PEM 只读）。
+  // 现有证书 SAN 已同时覆盖 dev 与 official 两个子域，两环境共用即可，无需签新证书。
+  // certbot 续期后需 reload nginx **并** 让本进程 updateCert（renewal-hooks/deploy）。
+  WT_CERT: process.env.WT_CERT || null,
+  WT_KEY: process.env.WT_KEY || null,
+  WT_SECRET: process.env.WT_SECRET || null,    // 缺省随机；仅库内部用
+
   nowFn: Date.now           // 时间源（测试可注入）
 };
