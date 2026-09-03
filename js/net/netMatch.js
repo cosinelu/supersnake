@@ -54,6 +54,8 @@
   /**
    * @param {number} [playerId] 本机玩家 Entry id（matched 消息给出）
    * @param {object} [opts] { interpDelayMs } 传 0/false 关闭插值（默认 120ms，需 js/net/interpolation.js）
+   *   注意：正常路径**不该**依赖这个默认值，而应在 matched 后调用
+   *   setSnapInterval(snapIntervalMs) 让延迟随快照频率自适应（见 interpolation.js:deriveDelay）。
    */
   function RemoteMatch(playerId, opts) {
     this.playerId = playerId || 0;
@@ -68,7 +70,24 @@
     this._byId = {};
     var delay = opts && 'interpDelayMs' in opts ? opts.interpDelayMs : 120;
     this._interp = (delay && CS.InterpBuffer) ? new CS.InterpBuffer(delay) : null;
+    if (this._interp && opts && opts.snapIntervalMs) {
+      this._interp.setSnapInterval(opts.snapIntervalMs);
+    }
   }
+
+  /**
+   * 按服务器下发的快照间隔重算插值延迟（matched.snapIntervalMs）。
+   * 插值关闭时为空操作。
+   */
+  RemoteMatch.prototype.setSnapInterval = function (intervalMs) {
+    if (!this._interp) return false;
+    return this._interp.setSnapInterval(intervalMs);
+  };
+
+  /** 当前生效的渲染延迟（ms），供 HUD/诊断读取 */
+  RemoteMatch.prototype.interpDelayMs = function () {
+    return this._interp ? this._interp.delay : 0;
+  };
 
   /** 应用一帧快照（protocol.snap 结构）；色块/流星取最新，蛇进插值缓冲 */
   RemoteMatch.prototype.applySnap = function (snap, nowMs) {

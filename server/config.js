@@ -8,7 +8,13 @@ module.exports = {
   HOST: process.env.HOST || '127.0.0.1',
 
   TICK_MS: 33,              // 房间模拟步长（30Hz 固定步长）
-  SNAP_EVERY: 2,            // 每 2 tick 广播一帧快照（15Hz）
+  SNAP_EVERY: 1,            // 每 N tick 广播一帧快照。**三层频率互相独立**：
+                            //   服务器模拟 30Hz（TICK_MS，不随此值变）
+                            //   快照下行  30Hz / SNAP_EVERY（1=30Hz，2=15Hz）
+                            //   客户端渲染 rAF 60Hz+（永不等网络）
+                            // 客户端插值延迟由 matched.snapIntervalMs 自动推导
+                            // （interpolation.js:deriveDelay），改这个值不需要动客户端。
+                            // 降到 2 即回到 15Hz，带宽减半、延迟自动升到 ~120ms。
 
   ROOM_SIZE: 4,             // 满编真人即开
   MIN_HUMANS: 1,            // 超时补位开局的最少真人数（=1：单人也能开局，其余由 AI 补位）

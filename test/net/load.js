@@ -6,14 +6,18 @@
  *   node test/net/load.js 100 15     # 100 客户端（≈25 房间）跑 15 秒
  *
  * 度量：
- *   - 匹配成功率、房间数、人均快照速率（标称 15Hz）
+ *   - 匹配成功率、房间数、人均快照速率（标称值由 server/config.js 推导，不写死）
  *   - 下行带宽（人均 KB/s，deflate 后真实线上字节）
  *   - 服务器进程 RSS 增量、tick 推进是否饿死（房间 tickCount 增长）
  *
  * 通过阈值（默认参数下）：
  *   - 全部客户端 matched 且收到快照
- *   - 人均快照速率 ≥ 10 帧/s（15Hz 允许抖动）
- *   - 人均下行 ≤ 40 KB/s（预算见架构文档 §7：deflate 后 ~20 KB/s，留一倍余量）
+ *   - 人均快照速率 ≥ 标称的 65%（定时器抖动容差）
+ *   - 人均下行 ≤ 40 KB/s（预算见架构文档 §7）
+ *
+ * **这条路径量的是 TCP JSON 保底通道**：机器人客户端不打洞，
+ * 所以拿到的是最坏情况带宽。UDP 二进制路径的实测值见
+ * `test/net/udp.e2e.test.js` 场景 D（同为 30Hz 时约为此值的 1/4）。
  */
 var path = require('path');
 var zlib = require('zlib');
@@ -21,6 +25,11 @@ var createServer = require(path.join(__dirname, '..', '..', 'server', 'index.js'
 var BotClient = require(path.join(__dirname, 'botClient.js'));
 require(path.join(__dirname, '..', '..', 'js', 'net', 'protocol.js'));
 var P = globalThis.CS.protocol;
+// 标称快照频率从生产配置推导：SNAP_EVERY 改了这里要跟着变，
+// 写死「15Hz / ≥10 帧」会在提频后变成一条永远通过的空断言。
+var PROD = require(path.join(__dirname, '..', '..', 'server', 'config.js'));
+var NOMINAL_HZ = 1000 / (PROD.TICK_MS * PROD.SNAP_EVERY);
+var MIN_HZ = NOMINAL_HZ * 0.65;
 
 var CLIENTS = parseInt(process.argv[2], 10) || 100;
 var DURATION_S = parseInt(process.argv[3], 10) || 15;
@@ -109,15 +118,18 @@ async function main() {
   console.log('');
   console.log('========== 压测报告 ==========');
   console.log('并发客户端      ' + CLIENTS + '（' + activeRooms + ' 房间，存活端 ' + liveN + ' / 阵亡端 ' + deadN + '）');
-  console.log('存活端人均快照  ' + fmt(perClientSnapRate) + ' 帧/s（标称 15）');
-  console.log('存活端人均下行  ' + fmt(perClientKBsWire) + ' KB/s 线上（解压载荷 ' + fmt(perClientKBsRaw) + ' KB/s × 压缩率 ' + fmt(wireRatio * 100) + '%）');
+  console.log('存活端人均快照  ' + fmt(perClientSnapRate) + ' 帧/s（标称 ' + fmt(NOMINAL_HZ) + '）');
+  console.log('存活端人均下行  ' + fmt(perClientKBsWire) + ' KB/s 线上（解压载荷 ' + fmt(perClientKBsRaw) + ' KB/s × 压缩率 ' + fmt(wireRatio * 100) + '%）  [TCP JSON 保底通道]');
   console.log('服务器 RSS 增量 ' + fmt((rss1 - rss0) / 1048576) + ' MB');
   console.log('tick 饿死房间   ' + starved);
   console.log('客户端错误      ' + errTotal);
 
   var fails = [];
   if (liveN === 0) fails.push('无存活客户端（全部提前阵亡，无法测量）');
-  if (perClientSnapRate < 10) fails.push('存活端人均快照速率 < 10 帧/s');
+  if (perClientSnapRate < MIN_HZ) {
+    fails.push('存活端人均快照速率 ' + fmt(perClientSnapRate) +
+      ' < 标称 ' + fmt(NOMINAL_HZ) + ' 的 65%（' + fmt(MIN_HZ) + '）');
+  }
   if (perClientKBsWire > 40) fails.push('存活端人均下行（线上估算）> 40 KB/s');
   if (starved > 0) fails.push('存在 tick 饿死房间');
   if (errTotal > 0) fails.push('客户端出现协议错误');

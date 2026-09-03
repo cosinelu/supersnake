@@ -22,6 +22,10 @@
   var store = CS.storage;
 
   var INPUT_INTERVAL_MS = 33;   // 上行输入节流（≈30Hz）
+                                // **刻意与下行快照频率解耦**：上行是幂等的绝对角度，
+                                // 12 字节/包成本极低，没有理由跟着下行降频 ——
+                                // 降上行只会让转向响应变钝。三层频率各管各的：
+                                // 上行 30Hz / 下行 SNAP_EVERY 可配 / 渲染 rAF 不锁帧。
   var NICK_KEY = 'crayon_snake_web_nick';
   var SERVER_KEY = 'crayon_snake_web_server';
   var ONLINE_BEST_KEY = 'crayon_snake_web_online_best';
@@ -122,7 +126,7 @@
     // setState('play') 会调 latchExisting()，把仍按住的手指重新接管。
     g.joystick.release();
 
-    this.remote = new CS.RemoteMatch(this.playerId);
+    this.remote = new CS.RemoteMatch(this.playerId, { snapIntervalMs: m.snapIntervalMs });
     g.mp = this.remote;
     // 哑 spawner：blocks/meteors 每帧从快照刷新；grabBlock 供彩色星播报/小地图涟漪
     g.spawner = { blocks: [], meteors: [], grabBlock: null, others: [] };

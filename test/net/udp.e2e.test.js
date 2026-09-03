@@ -17,6 +17,8 @@ var CS = globalThis.CS, B = CS.bin, BP = CS.binProtocol;
 var P = CS.protocol;
 var UdpEndpoint = require(path.join(__dirname, '..', '..', 'server', 'udp.js'));
 
+var UDP_SAFE_MTU = 1472;   // MTU 1500 − IP 20 − UDP 8：超过即触发 IP 分片
+
 var pass = 0, fail = 0;
 function ok(cond, label, detail) {
   if (cond) { pass++; console.log('  PASS ' + label); }
@@ -229,13 +231,168 @@ function scenarioDisabled(next) {
   });
 }
 
+// ---------------- 场景 D：快照频率契约 + 带宽预算（v3.1 1a.6） ----------------
+//
+// 这个场景**故意不用 CFG**，而是加载 server/config.js 的生产真值。
+// 理由是踩过的坑：UDP 曾经绑在 127.0.0.1 上，CI 全绿、日志无异常、
+// 客户端静默降级，公网一个包都不走。凡是「配置项的真实取值」本身就是
+// 交付内容的地方，测试必须读生产配置，不能自己造一份。
+//
+// 断言的是**实测帧率与实测字节数**而不是配置字段：只比对 SNAP_EVERY 的数值，
+// 等于把「取模那行代码写对了」当成前提，而它恰恰是可能写错的地方。
+//
+// 提频到 30Hz 后带宽翻倍，冗余 ×3 又翻三倍，所以必须把预算钉成断言 ——
+// 否则「哪天蛇变长了/蛇数上调了」会悄悄撞上 UDP_SNAP_CAP 触发降级，
+// 表现是远处的蛇没身体，而没有任何报错。
+function scenarioSnapRate(next) {
+  section('D. 快照频率契约 + 带宽预算（用生产 config，断言实测值）');
+  var prod = require(path.join(__dirname, '..', '..', 'server', 'config.js'));
+  var expectInterval = prod.TICK_MS * prod.SNAP_EVERY;
+
+  ok(prod.SNAP_EVERY >= 1 && prod.SNAP_EVERY === Math.floor(prod.SNAP_EVERY),
+    '生产 SNAP_EVERY 是正整数（' + prod.SNAP_EVERY + '）');
+
+  // 客户端插值延迟必须由此间隔推导，且严格大于 1 个间隔
+  require(path.join(__dirname, '..', '..', 'js', 'net', 'interpolation.js'));
+  var delay = CS.deriveInterpDelay(expectInterval);
+  ok(delay > expectInterval,
+    '插值延迟(' + delay + 'ms) > 快照间隔(' + expectInterval + 'ms)，保证有前后两帧可插');
+
+  // 只覆盖时间/端口参数，**保留生产的 TICK_MS / SNAP_EVERY / UDP_DUP / UDP_SNAP_CAP**
+  var cfg = Object.assign({}, prod, {
+    PORT: 0, HOST: '127.0.0.1', UDP_PORT: 0, UDP_HOST: '127.0.0.1',
+    MIN_HUMANS: 1, MATCH_TIMEOUT_MS: 300, COUNTDOWN_MS: 120,
+    MATCH_MAX_MS: 20000, LOWFREQ_MS: 1000
+  });
+  var srv = createServer(cfg);
+  srv.listen(function () {
+    var ws = new WebSocket('ws://127.0.0.1:' + srv.port());
+    var stamps = [], started = false;
+    var udpBytes = 0, udpPkts = 0, maxPkt = 0, uniqTicks = {};
+    var acked = false, matched = null;
+    var cli = dgram.createSocket('udp4');
+
+    cli.on('message', onUdp);
+    function onUdp(buf) {
+      if (buf[0] === UdpEndpoint.MAGIC_HACK) { acked = true; return; }
+      udpBytes += buf.length + 28;   // + IP(20) + UDP(8) 头，量的是真实链路开销
+      udpPkts++;
+      if (buf.length > maxPkt) maxPkt = buf.length;
+      var dec = BP.decSnapBin(new Uint8Array(buf.buffer, buf.byteOffset, buf.length));
+      if (dec) uniqTicks[dec.tk] = 1;
+    }
+
+    ws.on('open', function () { ws.send(P.encode(P.join('频率玩家'))); });
+    ws.on('message', function (data) {
+      var m = P.decode(data.toString());
+      if (!m) return;
+      if (m.t === 'matched') {
+        matched = m;
+        ok(m.snapIntervalMs === expectInterval,
+          'matched.snapIntervalMs 与生产配置一致（' + m.snapIntervalMs + 'ms）',
+          '期望 ' + expectInterval);
+        // 打洞（Windows 回环黑洞需要重建 socket，见场景 A 注释）
+        var rebuilds = 0;
+        bindAndPunch();
+        function bindAndPunch() {
+          cli.bind(0, '127.0.0.1', function () {
+            var t = 0;
+            (function punch() {
+              if (acked) return;
+              if (t >= 8) {
+                if (rebuilds < 3) {
+                  rebuilds++;
+                  try { cli.close(); } catch (e) {}
+                  cli = dgram.createSocket('udp4');
+                  cli.on('message', onUdp);
+                  bindAndPunch();
+                }
+                return;
+              }
+              t++;
+              cli.send(mkHello(m.udpToken), m.udpPort, '127.0.0.1');
+              setTimeout(punch, 25);
+            })();
+          });
+        }
+      } else if (m.t === 'start') { started = true; }
+      else if (m.t === 'snap' && started) stamps.push(Date.now());
+    });
+
+    // 先等打洞完成，再开始计量窗口（否则前半段全走 TCP，带宽数字失真）
+    setTimeout(function () {
+      ok(acked === true, 'UDP 打洞成功（带宽计量前提）');
+      udpBytes = 0; udpPkts = 0; maxPkt = 0; uniqTicks = {};
+      var winStart = Date.now();
+
+      var SAMPLE_MS = 2000;
+      setTimeout(function () {
+        var winSec = (Date.now() - winStart) / 1000;
+        var uniq = Object.keys(uniqTicks).length;
+
+        // ---- 帧率（用 UDP 唯一 tick 数，这是玩家真正拿到的权威帧数）----
+        ok(uniq >= 10, '采样到足够 UDP 快照（' + uniq + ' 个唯一 tick）');
+        if (uniq >= 10) {
+          var measured = (winSec * 1000) / uniq;
+          // 容差 ±35%：定时器抖动 + 序列化开销，比对的是量级不是精度。
+          // 关键在于能区分 33ms 与 66ms —— 相差一倍，任何合理容差都能分开。
+          var lo = expectInterval * 0.65, hi = expectInterval * 1.35;
+          ok(measured >= lo && measured <= hi,
+            '**实测帧间隔 ' + measured.toFixed(1) + 'ms 落在 ' + expectInterval + 'ms 附近**',
+            '允许 ' + lo.toFixed(0) + '~' + hi.toFixed(0));
+          var halfRate = expectInterval * 2;
+          ok(Math.abs(measured - halfRate) > Math.abs(measured - expectInterval),
+            '实测更接近 ' + expectInterval + 'ms 而非 ' + halfRate + 'ms（未隔帧发送）');
+          console.log('       实测下行 ' + (1000 / measured).toFixed(1) + ' Hz，插值延迟 ' + delay + 'ms');
+        }
+
+        // ---- 冗余份数：UDP_DUP 是功能约定，被「省带宽」偷偷砍掉过 ----
+        var dupRatio = uniq ? udpPkts / uniq : 0;
+        ok(dupRatio >= (prod.UDP_DUP - 0.5),
+          '每帧冗余份数 ≈ UDP_DUP(' + prod.UDP_DUP + ')，实测 ' + dupRatio.toFixed(2),
+          udpPkts + ' 包 / ' + uniq + ' 帧');
+
+        // ---- 永不分片：这是 UDP 路径的硬约束，破了比 TCP 还糟 ----
+        ok(maxPkt <= UDP_SAFE_MTU,
+          '**单包永不分片**（峰值 ' + maxPkt + ' ≤ ' + UDP_SAFE_MTU + ' 字节）');
+        ok(maxPkt <= prod.UDP_SNAP_CAP,
+          '峰值未超 UDP_SNAP_CAP(' + prod.UDP_SNAP_CAP + ')，未触发 lite 降级');
+
+        // ---- 带宽预算：30Hz × 3 份的实测人均下行 ----
+        // 预算 40KB/s 与 load.js 的 TCP 阈值同源（架构文档 §7）。
+        // 单人局（1 真人 + AI）是最小场景，满编时会更高，
+        // 所以这里是**下限保护**：连这个都超了，满编必然爆。
+        var kbps = udpBytes / 1024 / winSec;
+        ok(kbps <= 40,
+          '**人均下行 ' + kbps.toFixed(1) + ' KB/s ≤ 40 KB/s 预算**',
+          udpBytes + ' 字节 / ' + winSec.toFixed(2) + 's');
+        console.log('       人均下行 ' + kbps.toFixed(1) + ' KB/s（含 IP+UDP 头，' +
+          prod.UDP_DUP + ' 份冗余），均包 ' +
+          (udpPkts ? Math.round(udpBytes / udpPkts - 28) : 0) + ' 字节');
+
+        // ---- 降级计数：撞硬约束会静默降级，必须显式检查 ----
+        var room = null;
+        for (var rid in srv.matchmaker.rooms) room = srv.matchmaker.rooms[rid];
+        var degrade = room && room._degradeCount || 0;
+        ok(degrade === 0, '未发生 lite 降级（_degradeCount=' + degrade + '）');
+
+        try { cli.close(); } catch (e) {}
+        try { ws.close(); } catch (e) {}
+        srv.close(function () { next(); });
+      }, SAMPLE_MS);
+    }, 900);
+  });
+}
+
 // ---------------- 主流程 ----------------
 console.log('UDP 通道端到端（v3.1 M1b）');
 scenarioUdp(function () {
   scenarioFallback(function () {
     scenarioDisabled(function () {
-      console.log('\n结果：' + pass + ' 通过，' + fail + ' 失败');
-      process.exit(fail === 0 ? 0 : 1);
+      scenarioSnapRate(function () {
+        console.log('\n结果：' + pass + ' 通过，' + fail + ' 失败');
+        process.exit(fail === 0 ? 0 : 1);
+      });
     });
   });
 });

@@ -63,6 +63,81 @@ section('快照插值（InterpBuffer）');
     '节数变化时节心取较新帧、头部正常插值', 'len=' + s3[1].segPos.length + ' x=' + s3[1].x);
 })();
 
+// ---------------- 1b. 插值延迟自适应（v3.1 1a.6） ----------------
+section('插值延迟自适应（deriveDelay / setSnapInterval）');
+(function () {
+  var dd = CS.deriveInterpDelay, dc = CS.deriveInterpCap;
+
+  // 核心回归：15Hz 推导值必须实质等同于旧硬编码 120ms。
+  // 这条断言的意义是「提频改造不得改变提频前的行为」——
+  // 若 15Hz 下手感变了，说明公式跑偏，而不是提频带来的差异。
+  ok(Math.abs(dd(66) - 120) <= 2, '15Hz(66ms) 推导延迟 ≈ 旧硬编码 120ms', 'got=' + dd(66));
+  ok(dd(33) < dd(66), '30Hz 延迟严格小于 15Hz（提频必须换来更低延迟）',
+    '33→' + dd(33) + ' / 66→' + dd(66));
+  ok(dd(33) === 70, '30Hz(33ms) 推导延迟 = 70ms（33×1.5+20）', 'got=' + dd(33));
+
+  // 延迟必须 > 1 个快照间隔，否则渲染时刻常越过最新帧被钳制 → 卡顿
+  [16, 33, 50, 66, 100, 200].forEach(function (iv) {
+    ok(dd(iv) > iv, '间隔 ' + iv + 'ms：延迟 > 1 个间隔（保证有前后两帧可插）',
+      'delay=' + dd(iv));
+  });
+
+  // 边界钳制：极端值不许推出荒谬延迟
+  ok(dd(1) >= 50, '极小间隔被钳到下限 50ms', 'got=' + dd(1));
+  ok(dd(100000) <= 400, '极大间隔被钳到上限 400ms', 'got=' + dd(100000));
+  ok(dd(0) === dd(66) && dd(-5) === dd(66), '非法/缺失间隔回退到 15Hz 默认值');
+
+  // 缓冲窗口按「固定历史时长」折算，不是固定帧数 ——
+  // 写死 30 帧的话，15Hz 是 2 秒历史、30Hz 只剩 1 秒，提频等于悄悄砍窗口
+  ok(dc(33) > dc(66), '快照间隔减半 → 缓冲帧数增加（历史时长恒定）',
+    '33→' + dc(33) + ' / 66→' + dc(66));
+  ok(Math.abs(dc(66) * 66 - dc(33) * 33) <= 66, '两种频率的历史时长基本相等',
+    (dc(66) * 66) + 'ms vs ' + (dc(33) * 33) + 'ms');
+
+  // setSnapInterval：幂等 + 非法值不污染既有状态
+  var b = new CS.InterpBuffer();
+  ok(b.delay === 120 && b.cap === 30, '未调用 setSnapInterval 时保持旧默认（120ms / 30 帧）');
+  ok(b.setSnapInterval(33) === true && b.delay === 70, 'setSnapInterval(33) 生效');
+  b.setSnapInterval(33);
+  ok(b.delay === 70 && b.snapIntervalMs === 33, '重复调用幂等');
+  ok(b.setSnapInterval(0) === false && b.delay === 70, '非法间隔被拒且不改动现值');
+
+  // 调小间隔后已缓存的超额帧要立刻裁掉（否则窗口约束形同虚设）
+  var b2 = new CS.InterpBuffer();
+  b2.setSnapInterval(66);
+  for (var i = 0; i < b2.cap + 5; i++) {
+    b2.push({ tk: i, sn: [fakeSnapSnake(1, i * 10, 0, 0, 3)] }, 1000 + i * 66, P.deSnake);
+  }
+  ok(b2.snaps.length === b2.cap, 'push 超出 cap 时裁掉最旧帧', 'len=' + b2.snaps.length);
+  var before = b2.snaps.length;
+  b2.setSnapInterval(200); // 间隔变大 → cap 变小 → 应立即裁剪
+  ok(b2.snaps.length === b2.cap && b2.snaps.length < before,
+    '调大间隔后立即裁剪到新 cap', before + ' → ' + b2.snaps.length);
+
+  // 30Hz 端到端：同样的两帧间隔（33ms）下插值仍落在中点
+  var b3 = new CS.InterpBuffer();
+  b3.setSnapInterval(33);
+  b3.push({ tk: 1, sn: [fakeSnapSnake(1, 100, 500, 0, 6)] }, 2000, P.deSnake);
+  b3.push({ tk: 2, sn: [fakeSnapSnake(1, 116, 500, 0, 6)] }, 2033, P.deSnake);
+  // renderT = now - 70 → now = 2016.5 + 70 = 2086.5 落在 A/B 中点
+  var s30 = b3.sample(2086.5);
+  ok(s30 && Math.abs(s30[1].x - 108) < 0.6, '30Hz 下插值到两帧中点', 'x=' + (s30 && s30[1].x));
+})();
+
+// ---------------- 1c. RemoteMatch 透传快照间隔 ----------------
+section('RemoteMatch 快照间隔透传');
+(function () {
+  require(path.join(JS, 'net', 'netMatch.js'));
+  var rm = new CS.RemoteMatch(1, { snapIntervalMs: 33 });
+  ok(rm.interpDelayMs() === 70, '构造时传 snapIntervalMs 即生效', 'delay=' + rm.interpDelayMs());
+  var rm2 = new CS.RemoteMatch(1);
+  ok(rm2.interpDelayMs() === 120, '未传时保持旧默认 120ms');
+  ok(rm2.setSnapInterval(33) === true && rm2.interpDelayMs() === 70, '对局中可改（服务器动态调频）');
+  var rm3 = new CS.RemoteMatch(1, { interpDelayMs: 0 });
+  ok(rm3.interpDelayMs() === 0 && rm3.setSnapInterval(33) === false,
+    '插值关闭时 setSnapInterval 为空操作，不抛异常');
+})();
+
 // ---------------- 2. 本机预测 ----------------
 section('本机预测（SelfPredictor）');
 (function () {
