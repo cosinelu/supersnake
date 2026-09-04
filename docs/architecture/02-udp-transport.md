@@ -357,14 +357,14 @@ UDP NAT 映射通常 30 秒无流量即失效。上行 30Hz 天然保活，
 | 上行输入 | 30Hz 固定 | `onlineMatch.INPUT_INTERVAL_MS = 33` | 幂等绝对角度，12B/包，无理由随下行降频 |
 | 服务器模拟 | 30Hz 固定 | `TICK_MS = 33` | 判定步长，**与发包频率解耦** |
 | 下行快照（UDP / WebTransport） | 30Hz 可配 | `TICK_MS × SNAP_EVERY` | 二进制加速通道的带宽旋钮 |
-| 下行快照（TCP / wss 保底） | 15Hz 可配 | `TICK_MS × TCP_SNAP_EVERY` | 全量 JSON；优先稳定与低带宽 |
+| 下行快照（TCP / wss 保底） | 30Hz 可配 | `TICK_MS × TCP_SNAP_EVERY` | 全量 JSON；v3.1.1 起与加速通道同频 |
 | 客户端渲染 | 60Hz+ | `requestAnimationFrame` | 永不等网络；120Hz 屏就跑 120Hz |
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
 | `TICK_MS` | 33 | 服务器模拟步长（30Hz），不变 |
 | `SNAP_EVERY` | **1** | 加速通道每 N tick 广播一帧。1 = 30Hz，2 = 15Hz |
-| `TCP_SNAP_EVERY` | **2** | TCP 保底每 N tick 广播一帧。默认 15Hz，避免 30Hz 全量 JSON + TCP 队头阻塞 |
+| `TCP_SNAP_EVERY` | **1** | TCP 保底每 N tick 广播一帧。v3.1.1 起默认 30Hz：tick 权威时间线 + 短外推已解决突发回放问题，真机 4G A/B 实测更流畅；环境变量可降回 2（15Hz） |
 | `UDP_DUP` | 3 | 冗余副本份数，1 = 关闭冗余。**可用环境变量覆盖**（`UDP_DUP=1` 起实例做 A/B 对照） |
 | `LOWFREQ_MS` | 1000 | 低频通道与色块全量校正间隔 |
 
@@ -535,6 +535,11 @@ TCP 的可靠有序语义会在丢包重传时产生队头阻塞，多个 30Hz �
 > 是否拿到 offer、目标 authority、当前建立阶段、最后失败原因与错误摘要。仅显示最终的
 > `TCP · wss` 无法区分浏览器不支持、QUIC 端口被运营商拦截、证书/握手失败或应用层 ACK 超时。
 > 工厂通过 `channelKind` 自报实际通道，HUD 与诊断不再二次猜平台。
+>
+> **诊断 HUD 按环境显隐（v3.1.1）**：协议/RTT/丢包率/上下行 KB/s 这些行只在
+> 服务器 `matched.debugHud === true` 时绘制（`DEBUG_HUD=1`，dev 开 / official 关）。
+> official 玩家不应看到工程诊断。HUD 数值 1 秒刷新一次（`netInfoHud()` 同秒缓存），
+> 流量速率来自传输层真实字节计数（ws 按 string.length 近似，UDP 计全部到达字节）。
 
 > 微信多处旧文档仍写「UDP 只允许同局域网」，那是 ≤2.9.3 时代的表述，与 `UDPSocket.send`
 > API 页原文矛盾。**上线前必须实测小程序后台能否配置 UDP 域名。**

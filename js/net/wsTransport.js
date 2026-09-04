@@ -83,6 +83,7 @@
       webTransportSupported: false, secureContext: true,
       lastError: '', failedAt: 0, helloSent: 0, ackedAt: 0, firstSnapAt: 0
     };
+    this.bytes = { rx: 0, tx: 0 }; // 真实收发字节计数（HUD 流量速率的唯一数据源）
     this.meta = {};        // 低频通道缓存：id → { nm, kl, es, ... }
     this._metaTick = -1;
     this._blocksById = {}; // 二进制色块增量的本地基线；1Hz meta / TCP 全量会校正
@@ -183,13 +184,15 @@
       self._dropped = false;
       self._emit('open');
       // 首次 RTT 不应等 5 秒心跳周期；联机一建立就测一次，HUD 开局即可显示。
-      if (ws.readyState === 1) ws.send(P.encode(P.ping(Date.now())));
+      self._sendRaw(P.encode(P.ping(Date.now())));
       self._hbTimer = setInterval(function () {
-        if (ws.readyState === 1) ws.send(P.encode(P.ping(Date.now())));
+        self._sendRaw(P.encode(P.ping(Date.now())));
       }, self.heartbeatMs);
     };
     ws.onmessage = function (ev) {
-      var msg = P.decode(typeof ev === 'string' ? ev : ev.data);
+      var data = typeof ev === 'string' ? ev : ev.data;
+      self.bytes.rx += typeof data === 'string' ? data.length : (data && data.byteLength || 0);
+      var msg = P.decode(data);
       if (!msg) return; // 服务器消息畸形：忽略（协议内错误走 error 类型）
       switch (msg.t) {
         case P.S2C.QUEUED: self._emit('queued', msg); break;
@@ -242,8 +245,14 @@
     ws.onerror = function () { /* close 随后触发 drop */ };
   };
 
+  WsTransport.prototype._sendRaw = function (data) {
+    if (!this.ws || this.ws.readyState !== 1) return;
+    this.bytes.tx += typeof data === 'string' ? data.length : (data && data.byteLength || 0);
+    this.ws.send(data);
+  };
+
   WsTransport.prototype._send = function (obj) {
-    if (this.ws && this.ws.readyState === 1) this.ws.send(P.encode(obj));
+    this._sendRaw(P.encode(obj));
   };
 
   /**

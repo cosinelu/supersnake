@@ -119,12 +119,21 @@ IIFE 同时挂 `CS.protocol`（浏览器）与 `module.exports`（server require
 | `t` | 字段 | 说明 |
 |---|---|---|
 | `queued` | `pos, need` | 排队中，当前第几位/需几人 |
-| `matched` | `roomId, playerId, seed, players[], countdownMs` | 匹配成功，含全部玩家名与配色 |
+| `matched` | `roomId, playerId, seed, players[], countdownMs, debugHud` | 匹配成功，含全部玩家名与配色；`debugHud` 见下 |
 | `start` | `tick` | 倒计时结束，对局开始 |
 | `snap` | `tick, ack, snakes[], foods[], items[]` | 快照（`ack` = 已处理到哪个输入 seq，用于校正） |
 | `event` | `kind, …` | 离散事件：消除/咬断/死亡/道具/播报（驱动粒子音效） |
 | `over` | `reason, ranks[]` | 结算（对方全灭/超时/己方死亡且为旁观模式则省略） |
 | `pong` | `ts` | 回心跳 |
+
+`matched.debugHud`（v3.1.1）：网络诊断 HUD（协议/RTT/丢包率/上下行 KB/s）是否对该环境
+开放。由 `DEBUG_HUD=1` 环境变量控制，**dev 开、official 不设（缺省 false）**。
+客户端不猜域名：缺字段的旧服务器等同 false，与 official 目标行为一致；
+渲染层（侧栏与手机顶部行）只在 `online.debugHud === true` 时绘制诊断行，
+official 下手机行 2 回落到颜色格。HUD 数据经 `netInfoHud()` 节流，**1 秒刷新一次**
+（rAF 每帧重绘但数值同秒缓存，避免 RTT/速率逐帧抖动不可读）；
+控制台 `__net()` 仍走实时值。流量字节数直接读传输层真实计数
+（`ws.bytes` / `udp.stats.rxBytes|txBytes`），UDP 侧计全部到达字节（含畸形包与冗余副本）。
 
 快照中蛇的表示（v1 全量，v2 做增量）：
 `{ id, name, color, alive, head:[x,y], angle, boost, trail: 折线关键点数组, colors: 颜色序列, score, segs }`
@@ -147,8 +156,8 @@ onMatched / onStart / onSnap / onEvent / onOver / onDrop  — 回调注册
 
 > **v3.1 起新增加速传输层**：`UdpAccel` 在小游戏/Node 上使用裸 UDP，在浏览器使用
 > WebTransport datagram；两者共用二进制协议与冗余打散，WebSocket 保留为可靠控制面和
-> 15Hz 全量保底。设计见 **`docs/architecture/02-udp-transport.md`**。上层
-> `onlineMatch` 与判定逻辑零改动。
+> 全量 JSON 保底（v3.1.1 起与加速通道同为 30Hz）。设计见 **`docs/architecture/02-udp-transport.md`**。
+> 上层 `onlineMatch` 与判定逻辑零改动。
 
 ### 5.3 服务端房间 `server/room.js` + `headlessGame.js`
 
@@ -159,11 +168,13 @@ onMatched / onStart / onSnap / onEvent / onOver / onDrop  — 回调注册
   AI 补位蛇照旧走 `CS.AI`。
 - **固定步长模拟**：`TICK = 33ms`（30Hz），`multiplayer.update(0.033)`，与渲染解耦，避免本地 RAF 帧率差异影响判定。
 - **快照广播按实际通道分频**，事件仍即时发：UDP / WebTransport 二进制 30Hz，
-  TCP / wss 全量 JSON 保底 15Hz。
-  > `SNAP_EVERY=1` 控制加速通道，`TCP_SNAP_EVERY=2` 控制保底通道；
+  TCP / wss 全量 JSON 保底 30Hz（v3.1.1 起）。
+  > `SNAP_EVERY=1` 控制加速通道，`TCP_SNAP_EVERY=1` 控制保底通道；
   > **服务器模拟频率不随之变化**（恒 30Hz）。`matched` 同时下发两套间隔，
-  > 客户端在通道激活 / 降级时动态切换插值缓冲：加速通道 70ms，wss 119ms。
-  > 这样既保留二进制 30Hz 的实时性，也避免 TCP 队头阻塞把 30Hz JSON 聚成突发。
+  > 客户端在通道激活 / 降级时按实际间隔动态切换插值缓冲（30Hz → 70ms）。
+  > v3.0.x 曾把 TCP 压到 15Hz/119ms 以避免队头阻塞把 30Hz JSON 聚成突发；
+  > v3.1.0 的 tick 权威时间线 + 短外推解决了突发回放问题后，真机 4G A/B 实测
+  > 30Hz 明显更流畅（2026-09-04），故默认提回同频；代价是 JSON 下行约 38KB/s。
   > 公式与实测见 `02-udp-transport.md` §5。
 - 掉线处理：ws close → `kill(entry)`（复用现有死亡/尸体掉落逻辑）→ 广播 event；房间存活真人 ≤1 → 结算解散。
 

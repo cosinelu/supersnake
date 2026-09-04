@@ -621,9 +621,14 @@ function t10() {
     var g = new CS.Game(W, H);
     g.startMulti();
     g.online = {
+      // debugHud=true 模拟 dev 环境（服务器 matched 下发）；official 为 false。
+      debugHud: true,
       channel: { kind: 'tcp', switches: 0 },
-      netInfo: function () { return { WSS延迟ms: 86, 加速通道延迟ms: 0, 快照迟到率: 18.4, 逻辑帧丢失率: 0 }; },
-      netSummary: function () { return 'WSS · 86ms · 卡 18.4%'; }
+      netInfo: function () {
+        return { WSS延迟ms: 86, 加速通道延迟ms: 0, 快照迟到率: 18.4, 逻辑帧丢失率: 0,
+                 下行KBs: 12.3, 上行KBs: 0.8 };
+      },
+      netSummary: function () { return 'WSS · 86ms · 卡 18.4% · ↓12.3K'; }
     };
     var r = Object.create(CS.Renderer.prototype);
     r.ctx = ctx; r.W = W; r.H = H;
@@ -633,7 +638,7 @@ function t10() {
 
   var port = capture(390, 844);
   var summary = port.texts.filter(function (x) { return x.text.indexOf('WSS') === 0; });
-  ok(summary.length === 1, '**手机竖屏真实绘制路径固定显示 WSS 网络摘要**');
+  ok(summary.length === 1, '**手机竖屏真实绘制路径固定显示 WSS 网络摘要（dev）**');
   ok(summary.length === 1 && summary[0].x >= 0 && summary[0].x < port.layout.panelW &&
     summary[0].y >= 0 && summary[0].y < port.layout.panelH,
     '竖屏网络摘要落在顶部面板内');
@@ -641,10 +646,51 @@ function t10() {
   var land = capture(844, 390);
   var proto = land.texts.filter(function (x) { return x.text === 'TCP · wss'; });
   var quality = land.texts.filter(function (x) { return x.text.indexOf('RTT 86ms · 迟到 18.4%') === 0; });
-  ok(proto.length === 1, '**手机横屏真实绘制路径固定显示 TCP · wss**');
+  var flow = land.texts.filter(function (x) { return x.text === '↓12.3 ↑0.8 KB/s'; });
+  ok(proto.length === 1, '**手机横屏真实绘制路径固定显示 TCP · wss（dev）**');
   ok(quality.length === 1, '手机横屏显示 RTT 与快照迟到率');
-  ok(proto.length === 1 && quality.length === 1 && quality[0].y > proto[0].y,
-    '横屏协议与网络质量分两行绘制、不互相覆盖');
+  ok(flow.length === 1, '**手机横屏显示上下行流量 KB/s**');
+  ok(proto.length === 1 && quality.length === 1 && flow.length === 1 &&
+    quality[0].y > proto[0].y && flow[0].y > quality[0].y,
+    '横屏协议/网络质量/流量分三行绘制、不互相覆盖');
+
+  // official 形态：debugHud 缺失/false 时三个 HUD 元素都必须不出现，
+  // 竖屏行 2 回落到颜色格。只测 dev 可见会漏掉「official 也显示」的回归。
+  var gOff = new CS.Game(844, 390);
+  gOff.startMulti();
+  gOff.online = {
+    debugHud: false,
+    channel: { kind: 'tcp', switches: 0 },
+    netInfo: function () { return { WSS延迟ms: 86, 快照迟到率: 18.4, 逻辑帧丢失率: 0, 下行KBs: 1, 上行KBs: 1 }; },
+    netSummary: function () { return 'WSS · 86ms · 卡 18.4% · ↓1K'; }
+  };
+  var offTexts = [];
+  var offCtx = {
+    save: function () {}, restore: function () {}, translate: function () {},
+    rotate: function () {}, scale: function () {}, beginPath: function () {},
+    closePath: function () {}, clip: function () {}, fill: function () {},
+    stroke: function () {}, fillRect: function () {}, strokeRect: function () {},
+    clearRect: function () {}, drawImage: function () {}, setLineDash: function () {},
+    setTransform: function () {}, moveTo: function () {}, lineTo: function () {},
+    arc: function () {}, ellipse: function () {}, quadraticCurveTo: function () {},
+    bezierCurveTo: function () {}, rect: function () {},
+    createLinearGradient: function () { return { addColorStop: function () {} }; },
+    measureText: function (s) { return { width: String(s).length * 6 }; },
+    fillText: function (s, x, y) { offTexts.push(String(s)); },
+    strokeText: function () {},
+    font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+    textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+    canvas: { width: 844, height: 390 }
+  };
+  var rOff = Object.create(CS.Renderer.prototype);
+  rOff.ctx = offCtx; rOff.W = 844; rOff.H = 390;
+  rOff.drawPanel(gOff);
+  var leak = offTexts.filter(function (t) {
+    return t === 'TCP · wss' || t.indexOf('RTT ') === 0 || t.indexOf('WSS ·') === 0 ||
+      t.indexOf('↓') === 0;
+  });
+  ok(leak.length === 0, '**official（debugHud=false）不绘制任何网络诊断 HUD**',
+    leak.join(' | '));
 }
 
 // ---------------- T11 异常零颜色快照仍画成可辨识蛇头 ----------------

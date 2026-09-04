@@ -58,6 +58,9 @@ ok(c1.game.walls.rects.length > 0, 'matched 下发初始墙体（' + c1.game.wal
 ok(c1.game.mp === null || typeof c1.game.mp.leaderboard === 'function', 'mp 为 RemoteMatch 视图');
 ok(/匹配成功|开局/.test(c1.om.status), '状态行显示匹配进展（' + c1.om.status + '）');
 ok(c1.game.spawner && Array.isArray(c1.game.spawner.blocks), '哑 spawner 就位');
+// 诊断 HUD 显隐：matched 缺字段（LocalTransport / 旧服务器）必须等同 false，
+// 与 official 的目标行为一致 —— 显示诊断是 dev 的显式特权，不是缺省。
+ok(c1.om.debugHud === false, 'matched 缺 debugHud 字段时按 false（official 行为）');
 
 // ---- 2. 首帧快照 → play ----
 drive(c1, 3);
@@ -78,6 +81,12 @@ ok(g.mp.bots.length >= 1, '对手视图（AI）非空（' + g.mp.bots.length + '
 ok(typeof g.mp.leaderboard()[0].length === 'number', '排行榜接口可用');
 ok(g.snake.x >= 0 && g.snake.x <= g.walls.W && g.snake.y >= 0 && g.snake.y <= g.walls.H, '预测蛇坐标在地图内');
 ok(isFinite(g.camera.x) && isFinite(g.camera.y), '相机坐标有效');
+
+// ---- 3b. HUD 诊断数据：1 秒节流 + 流量字段 ----
+var hud1 = c1.om.netInfoHud();
+ok(c1.om.netInfoHud() === hud1, 'netInfoHud 同秒返回同一缓存对象（HUD 1 秒刷新一次）');
+ok(typeof hud1.下行KBs === 'number' && typeof hud1.上行KBs === 'number', 'netInfo 含上下行 KB/s');
+ok(/↓\d/.test(c1.om.netSummary()), 'netSummary 单行摘要含下行流量（' + c1.om.netSummary() + '）');
 
 // ---- 4. 掉线判负 ----
 var c2 = makeOnline('掉线君');

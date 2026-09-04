@@ -72,6 +72,11 @@ function t1(done) {
   ok(accel.active === true, 'active=true');
   ok(states[states.length - 1] === true, '状态变化已回调');
 
+  // 流量字节计数（HUD KB/s 数据源）：rx 计全部到达字节（含两次畸形注入），
+  // tx 计 attach 时发出的 hello。语义必须钉死，否则速率显示会悄悄漏掉一类包。
+  ok(accel.stats.rxBytes === 21, 'rxBytes = 3 次注入 × 7B（含畸形包，实际 ' + accel.stats.rxBytes + '）');
+  ok(accel.stats.txBytes === 7, 'txBytes = hello 7B（实际 ' + accel.stats.txBytes + '）');
+
   accel.dispose();
   done();
 }

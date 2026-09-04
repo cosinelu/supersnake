@@ -58,6 +58,7 @@
     this.stats = {
       sent: 0, recv: 0, dupDropped: 0, decodeFail: 0, fallbacks: 0, socketErrors: 0,
       rawSnaps: 0, missingFrames: 0, outOfOrder: 0,
+      rxBytes: 0, txBytes: 0,   // 真实字节计数（HUD 流量速率的数据源）
       pathRttMs: 0, pathRttJitterMs: 0, pathRttMinMs: 0, pathRttMaxMs: 0
     };
     // 玩家侧仍然静默回落 WSS，但工程诊断不能再静默：否则手机只显示 TCP，
@@ -190,6 +191,7 @@
         return false;
       }
       this.stats.sent++;
+      this.stats.txBytes += u8.length;
       return true;
     } catch (e) {
       this.stats.socketErrors++;
@@ -214,6 +216,9 @@
 
   UdpAccel.prototype._onMessage = function (u8) {
     if (!u8 || !u8.length) return;
+    // 流量计数在最外层：ACK / 快照 / 畸形包都是真实到达的字节，
+    // 只统计快照会把冗余副本与握手流量从 HUD 速率里抹掉。
+    this.stats.rxBytes += u8.length;
 
     if (u8[0] === MAGIC_HACK) {
       // ACK 与 hello 一样是 7B 完整帧：magic1 + token4 + crc16。

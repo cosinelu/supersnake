@@ -109,7 +109,8 @@
           : kind === 'udp' ? '裸 UDP（二进制）'
             : 'TCP（wss + JSON）';
         ch.snapIntervalMs = kind === 'tcp' ? ch.tcpIntervalMs : ch.accelIntervalMs;
-        // 通道物理特性不同：WT/UDP 30Hz 用 70ms；wss 15Hz 用约 119ms。
+        // 通道间隔由服务器 matched 下发并随通道切换（v3.1.1 起两通道同为 30Hz/70ms，
+        // 服务器若降配 TCP_SNAP_EVERY=2 则 wss 自动回到 119ms）。
         // 若只改 HUD 不改插值层，就会出现「显示已降级，但仍拿 70ms 缓冲扛 TCP
         // 队头阻塞」的假修复。这里必须让真实渲染参数同步切换。
         if (self.remote) self.remote.setSnapInterval(ch.snapIntervalMs);
@@ -150,6 +151,9 @@
     this.channel.accelIntervalMs = m.accelSnapIntervalMs || m.snapIntervalMs || 33;
     this.channel.snapIntervalMs = this.channel.kind === 'tcp'
       ? this.channel.tcpIntervalMs : this.channel.accelIntervalMs;
+    // 诊断 HUD 显隐由服务器按环境下发（dev 开 / official 关），客户端不猜域名。
+    // 字段缺失（旧服务器）按 false 处理 —— 与 official 的目标行为一致。
+    this.debugHud = m.debugHud === true;
 
     g.mode = 'multi';
     g.levelCfg = { level: 0, W: m.W, H: m.H, wallSegments: 0, targetScore: 0, speed: cfg.SNAKE_SPEED };
@@ -202,6 +206,24 @@
     var frameTotal = s ? s.recv + s.missingFrames : 0;
     var expectedCopies = s ? frameTotal * (udp.expectedDup || 1) : 0;
     function pct(n, total) { return total > 0 ? Math.round(n * 1000 / total) / 10 : 0; }
+
+    // 流量速率：1 秒采样窗口，HUD 每秒跳变一次而不是每帧抖动。
+    // 字节数直接读传输层的真实收发计数（ws.bytes / udp.stats.rxBytes|txBytes），
+    // 不在这里另记一份 —— 复刻计数迟早与真值分叉。
+    // JSON 按 string.length 近似字节（协议载荷几乎全 ASCII，误差可忽略）。
+    var nowMs = Date.now();
+    var rp = this._ratePrev;
+    if (!rp) rp = this._ratePrev = { at: 0, wsRx: 0, wsTx: 0, acRx: 0, acTx: 0, down: 0, up: 0 };
+    if (nowMs - rp.at >= 1000) {
+      var wsB = this.transport && this.transport.bytes || { rx: 0, tx: 0 };
+      var acRx = s ? (s.rxBytes || 0) : 0, acTx = s ? (s.txBytes || 0) : 0;
+      if (rp.at > 0) {
+        var dtS = (nowMs - rp.at) / 1000;
+        rp.down = Math.round(((wsB.rx - rp.wsRx) + (acRx - rp.acRx)) / dtS / 102.4) / 10;
+        rp.up = Math.round(((wsB.tx - rp.wsTx) + (acTx - rp.acTx)) / dtS / 102.4) / 10;
+      }
+      rp.at = nowMs; rp.wsRx = wsB.rx; rp.wsTx = wsB.tx; rp.acRx = acRx; rp.acTx = acTx;
+    }
     return {
       通道: ch.label,
       kind: ch.kind,
@@ -236,6 +258,8 @@
       快照迟到率: Math.round((d.latePct || 0) * 10) / 10,
       长卡顿次数: d.stalls || 0,
       WSS待发送字节: d.wsBufferedBytes || 0,
+      下行KBs: rp.down,
+      上行KBs: rp.up,
       // recv 是去重后的二进制逻辑帧；rawSnaps 含冗余副本。
       二进制帧: s ? s.recv : 0,
       逻辑帧丢失: s ? s.missingFrames : 0,
@@ -257,9 +281,23 @@
     };
   };
 
+  /**
+   * HUD 专用的节流视图：同一秒内返回缓存的 netInfo。
+   * 诊断面板按 rAF 每帧重绘，若数值也每帧变化（RTT 抖动、速率瞬时跳变），
+   * 文字会闪烁不可读；产品要求 HUD 数据 1 秒刷新一次。
+   * __net() 控制台诊断仍走 netInfo() 实时值，不受节流影响。
+   */
+  OnlineMatch.prototype.netInfoHud = function () {
+    var now = Date.now();
+    if (!this._hudCache || now - this._hudCache.at >= 1000) {
+      this._hudCache = { at: now, info: this.netInfo() };
+    }
+    return this._hudCache.info;
+  };
+
   /** 手机/桌面 HUD 共用的单行摘要；完整明细仍由 __net() 提供。 */
   OnlineMatch.prototype.netSummary = function () {
-    var n = this.netInfo();
+    var n = this.netInfoHud();
     var tag = this.channel.kind === 'wt' ? 'WebTransport'
       : this.channel.kind === 'udp' ? '裸UDP' : 'WSS';
     var rtt = this.channel.kind === 'tcp' ? n.WSS延迟ms : n.加速通道延迟ms;
@@ -278,7 +316,8 @@
       };
       quality = reasonText[n.加速失败原因] || 'WT回落';
     }
-    return tag + ' · ' + (rtt ? rtt + 'ms' : '--ms') + ' · ' + quality;
+    return tag + ' · ' + (rtt ? rtt + 'ms' : '--ms') + ' · ' + quality +
+      ' · ↓' + n.下行KBs + 'K';
   };
 
   /** 快照：应用视图 + 本机 reconcile；首帧挂接预测体并切入 play */
