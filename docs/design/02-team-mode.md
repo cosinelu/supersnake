@@ -177,6 +177,7 @@ FFA 模式行为完全不变：`mode` 缺省为 `ffa`、`teamCode` 忽略、`tm`
 | #84 | 入口解析 mode/teamCode | `server/index.js` |
 | #85 | 菜单/大厅/观战/结算/配色 | `js/game.js`、`js/net/onlineMatch.js`、`js/net/netMatch.js`、`js/net/wsTransport.js`、`js/renderer.js` |
 | #86 | 测试 + 全量回归 | `test/net/team.test.js` + `node test/smoke.js` + `cd server && npm test` |
+| #91 | 邀请好友链接（§5.1） | `js/utils.js`（makeTeamCode/parseTeamInvite）、`js/game.js`（team_invite/pendingTeamCode）、`js/main.js`（剪贴板+链接解析）、`js/renderer.js`（大厅布局） |
 
 ---
 
