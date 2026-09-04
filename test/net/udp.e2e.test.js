@@ -333,8 +333,11 @@ function scenarioSnapRate(next) {
   var tcpDelay = CS.deriveInterpDelay(expectTcpInterval);
   ok(delay > expectInterval,
     '加速通道插值延迟(' + delay + 'ms) > 快照间隔(' + expectInterval + 'ms)');
-  ok(tcpDelay >= 118 && tcpDelay <= 121,
-    'TCP 保底恢复约 120ms 缓冲（' + tcpDelay + 'ms），不拿 70ms 硬扛队头阻塞');
+  // v3.1.1 起 TCP 保底默认与加速通道同为 30Hz（真机 4G A/B 实测更流畅），
+  // 缓冲随之回到 70ms。契约不再钉死某个数值，而是钉死「缓冲由真实下发间隔推导」：
+  // 环境变量降配 TCP_SNAP_EVERY=2 时 expectTcpInterval 变 66ms，tcpDelay 必须自动回到 ~119ms。
+  ok(tcpDelay === CS.deriveInterpDelay(expectTcpInterval) && tcpDelay > expectTcpInterval,
+    'TCP 保底缓冲由真实间隔推导（' + expectTcpInterval + 'ms → ' + tcpDelay + 'ms）');
 
   // 只覆盖时间/端口参数，**保留生产的 TICK_MS / SNAP_EVERY / UDP_DUP / UDP_SNAP_CAP**
   var cfg = Object.assign({}, prod, {

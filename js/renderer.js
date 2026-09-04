@@ -1000,9 +1000,9 @@
     var idealMapW = pw - 28;
     var blocks = {
       header: 46,                       // 标题 + 模式
-      // 传输通道诊断：静默降级必须始终可见，否则玩家无法区分 WT 与 wss。
-      // 两行：协议 + RTT/丢帧（或 TCP 迟到率）。
-      channel: (game.mode === 'multi' && game.online) ? 30 : 0,
+      // 传输通道诊断：三行 = 协议 + RTT/丢帧（或 TCP 迟到率）+ 上下行流量。
+      // 只在服务器下发 debugHud 的环境显示（dev）；official 为 0，不占预算。
+      channel: (game.mode === 'multi' && game.online && game.online.debugHud) ? 42 : 0,
       score: 54,                        // 「分数」标签 + 大号分数
       target: 26 + (game.mode === 'level' ? 14 : 0), // 目标/最高（闯关多一条进度条）
       detail: 34,                       // 分数构成 + 速度
@@ -1083,10 +1083,13 @@
     // 走加速通道 = 墨绿，回落 TCP = 赭红（不是错误，但确实没吃到收益）。
     // 取深色调是因为面板底是米白纸色（rgba(255,253,245,.72)），
     // 亮色荧光调在这上面几乎看不见。
-    if (game.mode === 'multi' && game.online && game.online.channel) {
+    // 诊断行只在服务器允许的环境显示（dev 开 / official 关，matched.debugHud 下发）。
+    // official 面向真实玩家：协议/RTT/流量是工程诊断信息，不应出现在正式界面。
+    if (game.mode === 'multi' && game.online && game.online.channel && game.online.debugHud) {
       var ch = game.online.channel;
       var accel = (ch.kind !== 'tcp');
-      var ni = typeof game.online.netInfo === 'function' ? game.online.netInfo() : null;
+      var ni = typeof game.online.netInfoHud === 'function' ? game.online.netInfoHud()
+        : (typeof game.online.netInfo === 'function' ? game.online.netInfo() : null);
       ctx.font = 'bold ' + Math.round(10 * Math.min(1, k + 0.2)) + 'px sans-serif';
       ctx.fillStyle = accel ? '#2e7d6b' : '#a5592b';
       var chText = accel
@@ -1104,6 +1107,9 @@
         ? ('RTT ' + (rtt || '--') + 'ms · 丢 ' + (ni ? ni.逻辑帧丢失率 : 0) + '%')
         : ('RTT ' + (rtt || '--') + 'ms · 迟到 ' + (ni ? ni.快照迟到率 : 0) + '%');
       ctx.fillText(qText, cx, y + 3);
+      adv(12);
+      // 流量速率：netInfo 内部按 1 秒窗口采样，这里读到的就是每秒跳变一次的值
+      ctx.fillText('↓' + (ni ? ni.下行KBs : 0) + ' ↑' + (ni ? ni.上行KBs : 0) + ' KB/s', cx, y + 2);
       ctx.globalAlpha = 1;
       ctx.fillStyle = cfg.INK;   // 必须还原成墨色：面板是浅底，白字会看不见
       adv(16);
@@ -1370,9 +1376,11 @@
     var spdText = '速度 ' + spd + (slow ? ' (减速)' : '');
     ctx.font = '10px sans-serif';
     var spdW = ctx.measureText(spdText).width;
-    if (game.mode === 'multi' && game.online && typeof game.online.netSummary === 'function') {
+    if (game.mode === 'multi' && game.online && game.online.debugHud &&
+        typeof game.online.netSummary === 'function') {
       // 竖屏旧实现完全没有通道行；手机上因此看不到协议。网络诊断优先于颜色格，
       // 直接占用行 2 左侧，且不参与「空间不足就丢弃」逻辑。
+      // 仅 dev 环境显示（debugHud 由服务器 matched 下发）；official 回落到颜色格。
       var netText = game.online.netSummary();
       var maxNetW = Math.max(60, availW - spdW - 12);
       while (netText.length > 4 && ctx.measureText(netText).width > maxNetW) {

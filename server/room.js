@@ -124,7 +124,10 @@ Room.prototype.start = function () {
       accelSnapIntervalMs: this.config.TICK_MS * this.config.SNAP_EVERY,
       tcpSnapEvery: this.config.TCP_SNAP_EVERY,
       accelSnapEvery: this.config.SNAP_EVERY,
-      udpDup: this.config.UDP_DUP
+      udpDup: this.config.UDP_DUP,
+      // 网络诊断 HUD 是否对该环境开放（dev=1 / official 缺省=false）。
+      // 缺省必须是不显示：旧客户端读不到该字段时等同 false，与 official 行为一致。
+      debugHud: this.config.DEBUG_HUD === true
     };
     // 加速通道接入信息（可选）：客户端据此打洞；拿不到就全程走 TCP
     // （见 02-udp-transport.md §4.3）。

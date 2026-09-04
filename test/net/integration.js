@@ -77,6 +77,13 @@ function main() {
         ok(a._log.queued >= 1 && b._log.queued >= 1, '双端收到 queued 位次播报');
         ok(a._log.matched.roomId === b._log.matched.roomId, '双端同房间');
         ok(a._log.matched.players.length === 2, 'matched 含 2 名真人');
+        // 以下两条读的是生产 config 的真值（本测试不覆盖这两个字段）：
+        // 环境变量降配时测试必须跟着红，而不是继续绿。
+        ok(a._log.matched.tcpSnapIntervalMs === 33,
+          '**TCP 快照默认 30Hz（生产 config TCP_SNAP_EVERY=1）**',
+          '实际 ' + a._log.matched.tcpSnapIntervalMs + 'ms');
+        ok(a._log.matched.debugHud === false,
+          '**matched 缺省 debugHud=false（official 行为；DEBUG_HUD 环境变量未设）**');
         // 上行输入 1 秒
         var iv = setInterval(function () {
           a.sendInput(Math.random() * 6.28, false);
@@ -92,6 +99,10 @@ function main() {
           'A 视图中可见 B（bots 含另一真人）');
         ok(a.remote.blocks.length > 0, 'A 视图色块非空');
         ok(a.rtt >= 0 && a.rtt < 5000, '心跳 pong 更新 RTT（' + a.rtt + 'ms）');
+        // 真实链路的字节计数：1 秒快照流 + join/input 之后必须非零。
+        // 这是 HUD KB/s 的唯一数据源，坏了 HUD 会恒显示 0。
+        ok(a.bytes.rx > 1000 && a.bytes.tx > 0,
+          'WsTransport 真实收发字节计数（rx=' + a.bytes.rx + ' tx=' + a.bytes.tx + '）');
         return waitFor(function () { return a._log.over && b._log.over; }, 15000, '双端 over');
       })
       .then(function () {
@@ -105,9 +116,29 @@ function main() {
         ok(a._log.dropped && b._log.dropped, '连接中断双端收到 drop（掉线判负入口）');
         a.dispose(); b.dispose();
         srv.close(function () {
-          console.log('\n========================================');
-          console.log('结果：' + passed + ' 通过，' + failed + ' 失败');
-          process.exit(failed ? 1 : 0);
+          // 第二阶段：DEBUG_HUD=true 的环境（dev 形态），matched 必须下发 true。
+          // 只断言 false 会漏掉「标志永远为 false」的坏实现。
+          var srv2 = createServer({
+            PORT: 0, COUNTDOWN_MS: 100, MATCH_TIMEOUT_MS: 300,
+            MIN_HUMANS: 1, ROOM_SIZE: 4, DEBUG_HUD: true
+          });
+          srv2.listen(function () {
+            var c = makeClient(srv2, '调试员');
+            c.connect();
+            c.on('open', function () { c.joinMatch('调试员'); });
+            waitFor(function () { return !!c._log.matched; }, 8000, 'dev 形态 matched')
+              .then(function () {
+                ok(c._log.matched.debugHud === true,
+                  '**DEBUG_HUD=true 时 matched 下发 debugHud=true（dev 行为）**');
+                c.dispose();
+                srv2.close(function () {
+                  console.log('\n========================================');
+                  console.log('结果：' + passed + ' 通过，' + failed + ' 失败');
+                  process.exit(failed ? 1 : 0);
+                });
+              })
+              .catch(function (e) { console.error(e.message); process.exit(1); });
+          });
         });
       })
       .catch(function (e) {

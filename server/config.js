@@ -11,11 +11,14 @@ module.exports = {
   SNAP_EVERY: 1,            // UDP / WebTransport 二进制快照：30Hz。
                             // 服务器模拟仍固定 30Hz，客户端渲染仍走 rAF；互不耦合。
   TCP_SNAP_EVERY: parseInt(process.env.TCP_SNAP_EVERY, 10) > 0
-    ? parseInt(process.env.TCP_SNAP_EVERY, 10) : 2,
-                            // TCP / wss 全量 JSON 保底：默认 15Hz。
-                            // 30Hz JSON 实测约 38KB/s，且 TCP 丢包重传会把快照聚成突发；
-                            // 配 70ms 缓冲会频繁耗尽，表现为停顿后跳跃。15Hz + 119ms
-                            // 恢复 v3.0 的稳定行为，不影响加速通道的 30Hz 实时性。
+    ? parseInt(process.env.TCP_SNAP_EVERY, 10) : 1,
+                            // TCP / wss 全量 JSON 保底：默认 30Hz（v3.1.1 起）。
+                            // v3.0.x 时期 30Hz JSON + 按收包时刻回放会因 TCP 队头阻塞
+                            // 表现为停顿后跳跃，故曾压到 15Hz；v3.1.0 改为 tick 权威时间线
+                            // + 缓冲耗尽短外推后，突发到达被均匀摊开，真机 4G A/B 实测
+                            // 30Hz 明显更流畅（2026-09-04，用户真机确认）。
+                            // 代价：JSON 下行约 38KB/s（15Hz 约 19KB/s），4G 带宽可承受。
+                            // 若某网络下插值缓冲耗尽率显著上升，用环境变量降回 2。
 
   ROOM_SIZE: 4,             // 满编真人即开
   MIN_HUMANS: 1,            // 超时补位开局的最少真人数（=1：单人也能开局，其余由 AI 补位）
@@ -52,6 +55,11 @@ module.exports = {
                             // 一旦分片，缺任一片则整包在内核报废，
                             // 单片丢 2% 会放大成整帧报废 24.6%（14 片时），比 TCP 还糟。
   LOWFREQ_MS: 1000,         // 低频通道周期：昵称/计分/排行榜 + 色块全量校正（走 TCP）。
+
+  // 联机 HUD 的网络诊断行（协议/RTT/丢包/流量）：只对 dev 开放。
+  // official 面向真实玩家，显示诊断信息只会造成困惑；显隐由服务器 matched
+  // 下发，客户端不猜域名（硬编码域名会造成环境串台，check-hygiene 拦截）。
+  DEBUG_HUD: process.env.DEBUG_HUD === '1',
                             // 色块全量是增量同步的兜底 —— 漏收任一增量都会永久偏差。
 
   // ---------------- WebTransport（v3.1 阶段 1d，浏览器的 UDP 通道） ----------------
