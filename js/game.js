@@ -72,6 +72,9 @@
     this.teamCodeDraft = '';    // 好友房号输入草稿（开黑用；空=单人匹配）
     this.lobbyField = null;     // 当前聚焦的输入字段：'code' | null（由 main.js 据此挂载 DOM 输入框）
     this._lobbyCodeRect = null; // 大厅"好友房号"输入框的屏幕矩形（renderer 写入，main.js 定位 DOM 用）
+    this.pendingTeamCode = null; // 邀请链接带入的房号（main.js 解析 ?team= 写入；进大厅时消费）
+    this.inviteRequested = false; // 「邀请好友」点击标志：main.js（DOM 层）据此复制邀请链接
+    this.inviteNotice = null;   // 邀请操作结果提示 {text, until}（main.js 写入，renderer 绘制）
 
     this.uiButtons = [];
     this.buildButtons();
@@ -891,11 +894,13 @@
     } else if (this.state === 'matching') {
       this.addButton('online_cancel', cx, Math.min(H * 0.72, H - 40 - inset.bottom), bw, bh, '取消匹配');
     } else if (this.state === 'team_lobby') {
-      // 团队赛开房间界面：昵称 + 好友房号输入框（team_code，供 main.js 挂载 DOM 输入框）+ 开始/返回
+      // 团队赛开房间界面：昵称 + 好友房号输入框（team_code，供 main.js 挂载 DOM 输入框）
+      // + 邀请好友（生成房号并复制邀请链接）+ 开始/返回
       var fw = Math.min(360, W * 0.82);
-      this.addButton('team_code', cx, H * 0.44, fw, 48, ''); // 空 label：由 renderer 画"好友房号"提示与输入内容
+      this.addButton('team_code', cx, H * 0.42, fw, 48, ''); // 空 label：由 renderer 画"好友房号"提示与输入内容
+      this.addButton('team_invite', cx, H * 0.53, Math.min(240, W * 0.5), 40, '邀请好友（复制链接）');
       var sBtnW = Math.min(170, W * 0.4);
-      var sY = H * 0.58;
+      var sY = H * 0.66;
       this.addButton('team_start', cx - sBtnW / 2 - 10, sY, sBtnW, 54, '开始匹配');
       this.addButton('team_back', cx + sBtnW / 2 + 10, sY, sBtnW, 54, '返回');
     } else if (this.state === 'guide') {
@@ -956,6 +961,14 @@
     else if (id === 'team_start') this.startOnline({ mode: 'team', teamCode: (this.teamCodeDraft && this.teamCodeDraft.trim()) || null });
     else if (id === 'team_back') { this.lobbyField = null; this.setState('menu'); }
     else if (id === 'team_code') { this.lobbyField = (this.lobbyField === 'code' ? null : 'code'); }
+    else if (id === 'team_invite') {
+      // 邀请好友（§5.1）：没房号就先自动生成一个，再置标志让 main.js（DOM 层）复制邀请链接。
+      // 已有房号（手填或链接带入）直接复用——重复点邀请不会换号，避免好友拿到不同链接。
+      if (!this.teamCodeDraft || !this.teamCodeDraft.trim()) {
+        this.teamCodeDraft = CS.utils.makeTeamCode();
+      }
+      this.inviteRequested = true;
+    }
     else if (id === 'guide') { this.guidePage = 0; this.guideTab = 'items'; this.setState('guide'); }
     else if (id === 'back') this.setState('menu');
     else if (id === 'menu') { this._teardownOnline(); this.setState('menu'); }
@@ -977,6 +990,12 @@
   /** 进入在线团队赛开房间界面（team_lobby）：选填好友房号后开始匹配 */
   Game.prototype.enterTeamLobby = function () {
     this.lobbyField = null;
+    this.inviteNotice = null;
+    // 邀请链接带入的房号：进大厅时消费一次（好友点开 ?team=CODE 链接直达大厅，房号已填好）
+    if (this.pendingTeamCode) {
+      this.teamCodeDraft = this.pendingTeamCode;
+      this.pendingTeamCode = null;
+    }
     this.setState('team_lobby');
   };
 

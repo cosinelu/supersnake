@@ -66,6 +66,49 @@
     }
     resize();
 
+    // ---------- 团队赛邀请链接（docs/design/02-team-mode.md §5.1）----------
+    // 好友点开 ?team=CODE 链接：进大厅并把房号填好（发起人那边点「邀请好友」复制的正是这个链接）。
+    var inviteCode = CS.utils.parseTeamInvite(location.search);
+    if (inviteCode) {
+      game.pendingTeamCode = inviteCode;
+      game.enterTeamLobby();
+    }
+
+    // 「邀请好友」按钮只置 game.inviteRequested 标志（逻辑层不碰 DOM）；
+    // 这里消费标志：拼出邀请链接并写剪贴板，结果写回 game.inviteNotice 给 renderer 画提示。
+    function syncInviteRequest() {
+      if (!game.inviteRequested) return;
+      game.inviteRequested = false;
+      var code = (game.teamCodeDraft || '').trim();
+      var url = location.origin + location.pathname + '?team=' + encodeURIComponent(code);
+      function done(ok, msg) {
+        game.inviteNotice = {
+          text: ok ? '邀请链接已复制，粘贴到微信发给好友（房号 ' + code + '）'
+                   : (msg || '复制失败，请手动把房号 ' + code + ' 发给好友'),
+          until: Date.now() + 3000
+        };
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () { done(true); }, function () { fallbackCopy(url, done); });
+      } else {
+        fallbackCopy(url, done);
+      }
+    }
+    // 旧浏览器/非安全上下文兜底：隐藏 textarea + execCommand('copy')
+    function fallbackCopy(text, done) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        done(!!ok);
+      } catch (e) { done(false); }
+    }
+
     // ---------- 触摸输入 ----------
     canvas.addEventListener('touchstart', function (e) {
       e.preventDefault();
@@ -170,6 +213,7 @@
       game.update(dt);
       renderer.draw(game);
       syncLobbyInput();
+      syncInviteRequest();
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);

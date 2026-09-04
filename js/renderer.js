@@ -1889,7 +1889,7 @@
     // 好友房号标签
     ctx.font = '14px sans-serif';
     ctx.fillStyle = cfg.INK;
-    ctx.fillText('好友房号（选填，留空＝单人随机匹配队友，两人填相同房号组队）', cx, H * 0.36);
+    ctx.fillText('好友房号：点「邀请好友」自动生成并复制链接发微信；也可手填相同房号', cx, H * 0.35);
 
     // 输入框（由 main.js 的 <input> 覆盖；这里画边框与占位/内容预览）
     if (codeBtn) {
@@ -1908,13 +1908,22 @@
       ctx.fillText(txt || '点此输入房号', codeBtn.x + codeBtn.w / 2, codeBtn.y + codeBtn.h / 2);
     }
 
-    // 规则提示
+    // 规则提示（挪到开始/返回按钮之下，邀请按钮上方另有邀请结果提示）
     ctx.font = '12px sans-serif';
     ctx.fillStyle = cfg.INK;
     ctx.globalAlpha = 0.6;
-    ctx.fillText('5 队 × 2 人 · 同队相撞不死可并肩吃砖 · 撞到异队身体立即出局', cx, H * 0.50);
-    ctx.fillText('单人开局＝你 + 1 AI 队友 + 4 个 AI 队', cx, H * 0.50 + 20);
+    ctx.fillText('5 队 × 2 人 · 同队相撞不死可并肩吃砖 · 撞到异队身体立即出局', cx, H * 0.75);
+    ctx.fillText('留空房号＝单人随机匹配队友（你 + 1 AI 队友 + 4 个 AI 队兜底）', cx, H * 0.75 + 20);
     ctx.globalAlpha = 1;
+
+    // 邀请结果提示（复制成功/失败），3 秒淡出
+    if (game.inviteNotice && game.inviteNotice.until > Date.now()) {
+      ctx.font = '13px sans-serif';
+      ctx.fillStyle = '#9B5DE5';
+      ctx.globalAlpha = Math.min(1, (game.inviteNotice.until - Date.now()) / 600);
+      ctx.fillText(game.inviteNotice.text, cx, H * 0.605);
+      ctx.globalAlpha = 1;
+    }
     ctx.restore();
 
     this.drawButtons(game); // 开始匹配 / 返回

@@ -855,6 +855,41 @@ pe0.mpBonusScore = 0;
 mg.mp.applyItem(botE, { x: botE.snake.x, y: botE.snake.y, kind: 'grab', color: null });
 ok(pe0.mpBonusScore === 0 && mg.spawner.grabBlock === null, 'AI 吃到彩色星：仅消费道具、玩家不加分');
 
+// ---------------- 团队赛邀请链接（docs/design/02-team-mode.md §5.1） ----------------
+section('团队赛邀请链接（房号生成 / 链接解析 / 大厅联动）');
+var code1 = u.makeTeamCode(u.makeRng(42));
+ok(code1.length === cfg.TEAM_CODE_LEN, '房号长度 = TEAM_CODE_LEN(' + cfg.TEAM_CODE_LEN + ')，实际 ' + code1);
+ok(/^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]+$/.test(code1), '房号只含无歧义字符集：' + code1);
+ok(u.makeTeamCode(u.makeRng(42)) === code1, '同种子房号可复现（确定性）');
+ok(u.makeTeamCode(u.makeRng(43)) !== code1, '异种子房号不同（基本随机性）');
+
+ok(u.parseTeamInvite('?team=K7Q2') === 'K7Q2', '解析 ?team=K7Q2');
+ok(u.parseTeamInvite('?x=1&team=k7q2') === 'K7Q2', '多参数 + 小写转大写');
+ok(u.parseTeamInvite('team=ab23') === 'AB23', '容忍裸 query（无 ?）');
+ok(u.parseTeamInvite('?team=k7q2!!') === 'K7Q2', '非法字符被剥离');
+ok(u.parseTeamInvite('?team=') === null && u.parseTeamInvite('') === null &&
+   u.parseTeamInvite(null) === null && u.parseTeamInvite('?x=1') === null, '空/无 team 参数 → null');
+ok(u.parseTeamInvite('?team=' + 'A9'.repeat(15)) === 'A9'.repeat(12), '超长截断到 24 字符');
+
+// 大厅联动：邀请链接 → pendingTeamCode → 进大厅自动填好；邀请按钮 → 生成房号并置 DOM 标志
+var gInv = new CS.Game(800, 600);
+gInv.pendingTeamCode = 'K7Q2';
+gInv.enterTeamLobby();
+ok(gInv.state === 'team_lobby' && gInv.teamCodeDraft === 'K7Q2' && gInv.pendingTeamCode === null,
+  '邀请链接进大厅：房号自动填好且只消费一次');
+var invBtn = null;
+gInv.uiButtons.forEach(function (b) { if (b.id === 'team_invite') invBtn = b; });
+ok(!!invBtn, '大厅有「邀请好友」按钮');
+var gSolo = new CS.Game(800, 600);
+gSolo.enterTeamLobby();
+ok(gSolo.teamCodeDraft === '', '无邀请链接时房号默认留空（=单人匹配）');
+gSolo.onButton('team_invite');
+ok(gSolo.teamCodeDraft.length === cfg.TEAM_CODE_LEN && gSolo.inviteRequested === true,
+  '点邀请：自动生成房号并置 inviteRequested 标志');
+var codeBefore = gSolo.teamCodeDraft;
+gSolo.onButton('team_invite');
+ok(gSolo.teamCodeDraft === codeBefore, '重复点邀请不换号（避免好友拿到不同链接）');
+
 // ---------------- 汇总 ----------------
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');
