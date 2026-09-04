@@ -20,8 +20,8 @@
 
   var MAGIC_SNAP = 0x53;  // 'S'
   var MAGIC_INPUT = 0x49; // 'I'
-  // v2：色块补 kind/null-color，快照补移动流星；否则加速路径会丢失道具语义。
-  var BIN_VER = 2;
+  // v3：移动流星补稳定 mid，客户端跨快照关联轨迹并按速度连续渲染。
+  var BIN_VER = 3;
 
   // flags 位定义
   var F_ALIVE = 1;
@@ -232,6 +232,7 @@
     w.u8(Math.min(255, meteors.length));
     for (i = 0; i < meteors.length && i < 255; i++) {
       var mt = meteors[i], trail = mt.trail || [];
+      w.u16((mt.mid != null ? mt.mid : 0) & 0xFFFF);
       w.i16(mt.x); w.i16(mt.y); w.i16(mt.vx); w.i16(mt.vy);
       w.u8(cIdx(mt.color));
       w.u8(Math.round((((mt.phase || 0) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2) * 255));
@@ -281,11 +282,12 @@
 
     var nMt = r.u8(), meteors = [];
     for (i = 0; i < nMt; i++) {
+      var mid = r.u16();
       var mx = r.i16(), my = r.i16(), vx = r.i16(), vy = r.i16();
       var mc = cName(r.u8()), phase = r.u8() / 255 * Math.PI * 2;
       var nTrail = r.u8(), trail = [];
       for (var ti = 0; ti < nTrail; ti++) trail.push({ x: r.i16(), y: r.i16() });
-      meteors.push({ x: mx, y: my, vx: vx, vy: vy, color: mc, phase: phase, trail: trail });
+      meteors.push({ mid: mid, x: mx, y: my, vx: vx, vy: vy, color: mc, phase: phase, trail: trail });
     }
     if (r.overflow || r.remain() !== 2) return null;
     return {

@@ -240,7 +240,7 @@ function t4() {
   for (i = 0; i < 4; i++) del.push(100 + i);
   var meteors = [];
   for (i = 0; i < cfg.METEOR_MAX; i++) {
-    meteors.push({ x: i ? 4200 : -40, y: 500 + i * 100, vx: i ? -140 : 140, vy: 0,
+    meteors.push({ mid: 900 + i, x: i ? 4200 : -40, y: 500 + i * 100, vx: i ? -140 : 140, vy: 0,
       color: 'green', phase: i, trail: [
         { x: -60 + i * 10, y: 500 }, { x: -55 + i * 10, y: 500 },
         { x: -50 + i * 10, y: 500 }, { x: -45 + i * 10, y: 500 }
@@ -330,7 +330,7 @@ function t5() {
   }
   for (i = 0; i < 20; i++) del.push(500 + i);
   var meteors = [{
-    x: -40, y: 200, vx: 140, vy: 0, color: 'green', phase: 2.2,
+    mid: 1234, x: -40, y: 200, vx: 140, vy: 0, color: 'green', phase: 2.2,
     trail: [{ x: -55, y: 200 }, { x: -50, y: 200 }, { x: -45, y: 200 }]
   }];
   var u8 = BP.encSnapBin({
@@ -352,8 +352,9 @@ function t5() {
   var okDel = true;
   for (i = 0; i < 20; i++) if (dec.blockDel[i] !== del[i]) okDel = false;
   ok(okDel, '删除列表往返一致');
-  ok(dec.meteors.length === 1 && dec.meteors[0].x === -40 && dec.meteors[0].vx === 140,
-    '流星负坐标/速度/数量往返一致');
+  ok(dec.meteors.length === 1 && dec.meteors[0].mid === 1234 &&
+    dec.meteors[0].x === -40 && dec.meteors[0].vx === 140,
+    '流星稳定 id/负坐标/速度/数量往返一致');
   ok(dec.meteors[0].trail.length === 3 && dec.meteors[0].color === 'green',
     '流星轨迹与颜色往返一致');
 

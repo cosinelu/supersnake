@@ -244,15 +244,15 @@ function t5(done) {
     tick: 9, ack: 1, timeMs: 5000, entries: [{ e: e, lite: false }],
     blockAdd: [{ bid: 2, x: 30, y: 40, color: null, kind: 'grab' }],
     blockDel: [1],
-    meteors: [{ x: -40, y: 300, vx: 140, vy: 0, color: 'green', phase: 1.2,
+    meteors: [{ mid: 77, x: -40, y: 300, vx: 140, vy: 0, color: 'green', phase: 1.2,
       trail: [{ x: -50, y: 300 }, { x: -45, y: 300 }] }]
   }));
   ok(dec.sn[0].name === null, '二进制快照本身不含昵称（已移出每帧）');
   ok(dec.sn[0].kills === 0, '二进制快照不含计分（已移出每帧）');
   ok(dec.blockAdd[0].kind === 'grab' && dec.blockAdd[0].color === null,
     '二进制色块保留特殊 kind 与 null color');
-  ok(dec.meteors.length === 1 && dec.meteors[0].x === -40,
-    '二进制快照保留移动流星及负坐标');
+  ok(dec.meteors.length === 1 && dec.meteors[0].mid === 77 && dec.meteors[0].x === -40,
+    '二进制快照保留移动流星稳定 id 及负坐标');
 
   // UDP/WT 与 wss 无跨通道顺序保证：首个二进制帧可能先于 1Hz meta。
   var Tpre = new CS.WsTransport({ url: 'ws://127.0.0.1:1', WebSocketImpl: function () {
@@ -271,8 +271,9 @@ function t5(done) {
   ok(mergedSnake.maxLen === 25 && mergedSnake.mpBonusScore === 5, '规范化后全部计分字段回填');
   ok(merged.bl.length === 1 && CS.protocol.deBlock(merged.bl[0]).kind === 'grab',
     '色块增量合成为 JSON 路径可消费的全量 bl');
-  ok(merged.mt.length === 1 && CS.protocol.deMeteor(merged.mt[0]).color === 'green',
-    '流星规范化为 JSON 路径可消费的 mt');
+  var mergedMeteor = CS.protocol.deMeteor(merged.mt[0]);
+  ok(merged.mt.length === 1 && mergedMeteor.mid === 77 && mergedMeteor.color === 'green',
+    '流星规范化为 JSON 路径可消费的 mt（保留稳定 mid）');
 
   // 最终判据必须进入真实消费者，而不是只比较两份字段列表。
   var rm = new CS.RemoteMatch(3, { interpDelayMs: 0 });
@@ -282,6 +283,22 @@ function t5(done) {
   ok(rm.playerEntry && rm.playerEntry.name === '蜡笔小新', 'RemoteMatch 已建立本机 Entry');
   ok(rm.blocks.length === 1 && rm.blocks[0].kind === 'grab', 'RemoteMatch 保留特殊道具语义');
   ok(rm.meteors.length === 1 && rm.meteors[0].vx === 140, 'RemoteMatch 保留移动流星');
+
+  // 关键链路不能只停在「字段存在」：二进制解码 → meta 合并 → RemoteMatch →
+  // InterpBuffer 必须产出连续流星位置，否则浏览器仍会以快照频率闪跳。
+  var dec2 = BP.decSnapBin(BP.encSnapBin({
+    tick: 10, ack: 1, timeMs: 5033, entries: [],
+    blockAdd: [], blockDel: [],
+    meteors: [{ mid: 77, x: -31, y: 300, vx: 140, vy: 0, color: 'green', phase: 1.2,
+      trail: [{ x: -41, y: 300 }, { x: -36, y: 300 }] }]
+  }));
+  var rmSmooth = new CS.RemoteMatch(3, { interpDelayMs: 70, tickMs: 33 });
+  rmSmooth.applySnap(T._mergeMeta(dec), 5000);
+  rmSmooth.applySnap(T._mergeMeta(dec2), 5033);
+  rmSmooth.renderSample(5087); // renderT=5017：tick9/tick10 中点附近
+  ok(rmSmooth.meteors.length === 1 && Math.abs(rmSmooth.meteors[0].x + 35.5) < 0.8,
+    '**二进制 → 合并 → InterpBuffer 真实链路连续渲染流星**',
+    'x=' + (rmSmooth.meteors[0] && rmSmooth.meteors[0].x));
 
   // 迟到的旧 meta 不得把较新的二进制增量回滚。
   T._onMeta({ t: 'meta', tk: 8, sn: [],

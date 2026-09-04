@@ -13,13 +13,13 @@
  *            co[colors], sg[[x,y]节心含尾巴节], kl(kills), es(elimScore), et(elimTotal),
  *            ml(maxLen), bt(bittenUntil), sl(slowUntil) }
  *   block: { x, y, c(color|null), k(kind), r(rarity|null), ph(phase), ttl, rr(收集半径) }
- *   meteor:{ x, y, vx, vy, c, ph, tr[[x,y]轨迹] }
+ *   meteor:{ id(mid), x, y, vx, vy, c, ph, tr[[x,y]轨迹] }
  */
 (function (root) {
   var CS = root.CS = root.CS || {};
 
-  // v2：二进制快照升级为 BIN_VER=2（kind/null color/meteors），不允许新旧两端混跑。
-  var PROTO_VER = 2;
+  // v3：流星补稳定实体 id（mid），客户端才能跨快照做连续轨迹；不允许新旧两端混跑。
+  var PROTO_VER = 3;
 
   // ---------------- 消息类型 ----------------
   // 客户端 → 服务器
@@ -142,7 +142,8 @@
   function serMeteor(m) {
     var tr = [];
     for (var i = 0; i < (m.trail || []).length; i++) tr.push(qCoord(m.trail[i].x), qCoord(m.trail[i].y));
-    return { x: qCoord(m.x), y: qCoord(m.y), vx: qCoord(m.vx), vy: qCoord(m.vy), c: cShort(m.color), ph: Math.round((m.phase || 0) * 100) / 100, tr: tr };
+    var mid = m.mid != null ? m.mid : (m.id != null ? m.id : 0);
+    return { id: mid & 0xFFFF, x: qCoord(m.x), y: qCoord(m.y), vx: qCoord(m.vx), vy: qCoord(m.vy), c: cShort(m.color), ph: Math.round((m.phase || 0) * 100) / 100, tr: tr };
   }
 
   /** 组装一帧快照 */
@@ -184,7 +185,7 @@
   function deMeteor(d) {
     var tr = [];
     for (var i = 0; i + 1 < (d.tr || []).length; i += 2) tr.push({ x: d.tr[i], y: d.tr[i + 1] });
-    return { x: d.x, y: d.y, vx: d.vx, vy: d.vy, color: cLong(d.c), phase: d.ph, trail: tr };
+    return { mid: d.id || 0, x: d.x, y: d.y, vx: d.vx, vy: d.vy, color: cLong(d.c), phase: d.ph, trail: tr };
   }
 
   CS.protocol = {

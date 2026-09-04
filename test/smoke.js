@@ -343,6 +343,7 @@ msp.unlockedKeys = ['red', 'blue', 'green', 'orange', 'purple'];
 var lenBefore = ms.colors.length;
 msp.spawnMeteor(ms);
 var mm = msp.meteors[0];
+ok(mm.mid > 0, '流星生成即带稳定实体 id（联机跨快照关联用）');
 var mseg = ms.segPos[3];
 mm.x = mseg.x; mm.y = mseg.y; mm.vx = 0; mm.vy = 0; // 直接放到第 3 节上
 msp.meteorTimer = 1e9; // 防止本帧额外生成，保持测试纯净
@@ -356,11 +357,13 @@ ok(ms.colors.length === lenBefore + 1, '流星注入：身体长度 +1（中段�
 var m2 = mkSnake(['red', 'blue']);
 var m2sp = new CS.Spawner(new CS.Walls(2400, 1600, { x: 1200, y: 800 }), m2);
 m2sp.unlockedKeys = ['red', 'blue'];
-var cardinalOK = true, straightOK = true;
+var cardinalOK = true, straightOK = true, midOK = true, prevMid = 0;
 for (var mi = 0; mi < 40; mi++) {
   m2sp.meteors = [];
   m2sp.spawnMeteor({ x: 1200, y: 800 });
   var mo = m2sp.meteors[0];
+  if (mo.mid <= prevMid) midOK = false;
+  prevMid = mo.mid;
   if (!(Math.abs(mo.vx) < 1e-9 || Math.abs(mo.vy) < 1e-9)) cardinalOK = false; // 必为水平或垂直
   var ax0 = Math.atan2(mo.vy, mo.vx);
   mo.x += mo.vx * 0.1; mo.y += mo.vy * 0.1; // 不调 updateMeteors，避免被回收
@@ -369,6 +372,7 @@ for (var mi = 0; mi < 40; mi++) {
 }
 ok(cardinalOK, '流星：40 次生成全部为上下左右正方向（水平或垂直）');
 ok(straightOK, '流星：飞行朝向恒定，无归向蛇头（直线飞向对侧）');
+ok(midOK, '流星：实体 id 单调递增，重生不与旧流星混淆');
 
 // ---------------- 9. Game 流程 ----------------
 section('Game 流程');

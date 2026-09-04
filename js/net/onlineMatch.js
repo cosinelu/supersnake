@@ -174,7 +174,8 @@
     g.joystick.release();
 
     this.remote = new CS.RemoteMatch(this.playerId, {
-      snapIntervalMs: this.channel.snapIntervalMs
+      snapIntervalMs: this.channel.snapIntervalMs,
+      tickMs: m.tickMs || cfg.SERVER_TICK_MS
     });
     g.mp = this.remote;
     // 哑 spawner：blocks/meteors 每帧从快照刷新；grabBlock 供彩色星播报/小地图涟漪
@@ -248,6 +249,7 @@
       插值延迟ms: interp ? interp.delay : 0,
       插值缓冲领先ms: interp ? Math.round(interp.lastLeadMs) : 0,
       插值缓冲耗尽率: is ? pct(is.latestClamps, is.samples) : 0,
+      远端短外推率: is ? pct(is.extrapolated || 0, is.samples) : 0,
       预测误差px: Math.round((pred.lastErr || 0) * 10) / 10,
       预测硬校正: pred.hardSnaps || 0,
       预测最大软校正px: Math.round((pred.maxCorrectionPx || 0) * 10) / 10,
@@ -308,11 +310,12 @@
   OnlineMatch.prototype._syncSpawner = function () {
     var g = this.game, r = this.remote;
     if (!g.spawner || !r) return;
-    g.spawner.blocks = r.blocks;
-    g.spawner.meteors = r.meteors;
+    var blocks = r.blocks || [], meteors = r.meteors || [];
+    g.spawner.blocks = blocks;
+    g.spawner.meteors = meteors;
     var grab = null;
-    for (var i = 0; i < r.blocks.length; i++) {
-      if (r.blocks[i].kind === cfg.GRAB_KIND) { grab = r.blocks[i]; break; }
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].kind === cfg.GRAB_KIND) { grab = blocks[i]; break; }
     }
     g.spawner.grabBlock = grab;
   };
@@ -410,6 +413,7 @@
     // 本机预测 + 他机插值
     if (this._attached) this.predictor.update(dt, ang === null ? undefined : ang);
     r.renderSample(Date.now());
+    this._syncSpawner(); // renderSample 会推进流星显示态；spawner 必须每帧跟随
 
     // 本机 Entry 视图与预测体对齐（名牌/排行榜/小地图读它）
     // colors/segPos 必须拷贝：早期按引用赋值会让视图与预测体共享同一数组，
