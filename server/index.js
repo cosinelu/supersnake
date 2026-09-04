@@ -11,6 +11,7 @@
  *   cancel → matchmaker.remove
  *   input  → 所在房间 handleInput
  *   ping   → pong
+ *   accel  → 客户端暂停/恢复加速下行（停滞时真正回落 TCP）
  * 连接关闭 → 队列中则移除；对局中则 room.handleDrop（掉线判负）。
  * 畸形/超大消息 → error 回复并断开（1002）。
  */
@@ -25,6 +26,9 @@ var P = globalThis.CS.protocol;
 
 var baseConfig = require('./config');
 var Matchmaker = require('./matchmaker');
+var UdpEndpoint = require('./udp');
+var WebTransportEndpoint = require('./webtransport');
+var TransportHub = require('./transportHub');
 
 var nextConnId = 1;
 
@@ -74,7 +78,37 @@ function createServer(overrides) {
   });
   var conns = {}; // connId → { id, ws, name, roomId }
 
+  // 加速通道（v3.1）：上下行走二进制 + 冗余打散；TCP 全程保留作控制/保底通道。
+  //   裸 UDP（udp.js）        → 微信小游戏 / Node
+  //   WebTransport（webtransport.js）→ 浏览器（无裸 UDP 能力）
+  // 两者由 TransportHub 聚合成**与 UdpEndpoint 同构**的一个对象 ⇒ room.js 零改动。
+  // UDP_ENABLED=0 / WT_ENABLED=0 可分别关掉，全关即回退纯 TCP（回滚点，§4.3）。
+  var onAccelInput = function (connId, inp) {
+    var c = conns[connId];
+    var room = c && c.roomId && matchmaker.rooms[c.roomId];
+    // 复用 TCP 路径同一个入口：frameId 就是客户端跨 TCP/加速通道共享的输入 seq。
+    // 不能在服务端另造 lastSeq+1：那会让客户端回落 TCP 时从较小序号继续，
+    // 被 room 当成乱序包丢弃，方向最长冻结 INPUT_SEQ_RESET_GAP 帧。
+    if (room && room.humans[connId]) {
+      var accepted = room.handleInput(connId, {
+        seq: inp.frameId, a: inp.angle, bo: inp.boost
+      });
+      if (accepted && hub) hub.syncInputSeq(connId, inp.frameId);
+    }
+  };
+
+  var udp = config.UDP_ENABLED ? new UdpEndpoint(config, { onInput: onAccelInput }) : null;
+  var wt = config.WT_ENABLED ? new WebTransportEndpoint(config, {
+    onInput: onAccelInput,
+    onError: function (err) {
+      // WT 起不来不阻断服务：浏览器退回 wss，对局照常
+      console.error('[supersnake] WebTransport 未启用：' + (err && err.message || err));
+    }
+  }) : null;
+  var hub = (udp || wt) ? new TransportHub({ udp: udp, wt: wt }) : null;
+
   var matchmaker = new Matchmaker(config, {
+    udp: hub,   // 传聚合层：接口与 UdpEndpoint 同构，room.js 无感
     onRoomCreated: function (room) {
       for (var cid in room.humans) {
         if (conns[cid]) conns[cid].roomId = room.id;
@@ -128,11 +162,20 @@ function createServer(overrides) {
           break;
         case P.C2S.INPUT: {
           var room = conn.roomId && matchmaker.rooms[conn.roomId];
-          if (room) room.handleInput(connId, msg);
+          if (room && room.handleInput(connId, msg) && hub) {
+            // TCP 回落可能持续很久；把已采纳 seq 同步给加速端点，恢复时首帧不会
+            // 因相对旧 frameId 前跳超过 INPUT_MAX_SEQ_JUMP 而被永久拒绝。
+            hub.syncInputSeq(connId, msg.seq);
+          }
           break;
         }
         case P.C2S.PING:
           send(ws, { t: P.S2C.PONG, ts: msg.ts });
+          break;
+        case P.C2S.ACCEL:
+          // 下行停滞必须由客户端经可靠通道显式告知服务器；否则服务端仍把
+          // 已握手会话视为 ready，会继续抑制 TCP 快照，形成“假回落”。
+          if (hub) hub.setClientActive(connId, msg.on === 2 ? 2 : (msg.on ? 1 : 0));
           break;
         default:
           send(ws, { t: P.S2C.ERROR, code: 'unknown', msg: '未知消息类型: ' + msg.t });
@@ -143,6 +186,7 @@ function createServer(overrides) {
       matchmaker.remove(connId);
       var room = conn.roomId && matchmaker.rooms[conn.roomId];
       if (room) room.handleDrop(connId);
+      if (hub) hub.dropSession(connId);   // 两条通道的会话都清，避免令牌泄漏
       delete conns[connId];
     });
     ws.on('error', function () { /* close 事件随后处理清理 */ });
@@ -155,16 +199,59 @@ function createServer(overrides) {
     httpServer: httpServer,
     wss: wss,
     matchmaker: matchmaker,
+    udp: udp,
+    wt: wt,
+    hub: hub,
     config: config,
     listen: function (cb) {
-      httpServer.listen(config.PORT, config.HOST, cb);
+      httpServer.listen(config.PORT, config.HOST, function () {
+        // 加速通道起不来**一律不阻断服务**：降级为纯 TCP，游戏照常可玩。
+        // 这是刻意的 —— WT 依赖 native addon 与证书文件，
+        // 任一缺失都不该让整个服务器起不来。
+        var pending = 0, fired = false;
+        function oneDone() {
+          if (--pending <= 0 && !fired) { fired = true; if (cb) cb(); }
+        }
+        if (udp) {
+          pending++;
+          try { udp.listen(oneDone); } catch (e) {
+            udp = null;
+            if (hub) hub.udp = null;
+            oneDone();
+          }
+        }
+        if (wt) {
+          pending++;
+          try {
+            wt.listen(function (err) {
+              if (err) {
+                wt = null;   // 起不来就当没有这条通道
+                if (hub) hub.wt = null;
+              }
+              oneDone();
+            });
+          } catch (e) {
+            wt = null;
+            if (hub) hub.wt = null;
+            oneDone();
+          }
+        }
+        if (pending === 0 && !fired) { fired = true; if (cb) cb(); }
+      });
     },
     port: function () { return httpServer.address().port; },
+    udpPort: function () { return udp ? udp.port() : 0; },
+    wtPort: function () { return wt ? wt.port() : 0; },
     close: function (cb) {
       clearInterval(mmTimer);
       matchmaker.destroy();
       for (var cid in conns) { try { conns[cid].ws.terminate(); } catch (e) {} }
-      wss.close(function () { httpServer.close(cb || function () {}); });
+      var done = function () { wss.close(function () { httpServer.close(cb || function () {}); }); };
+      var left = (udp ? 1 : 0) + (wt ? 1 : 0);
+      if (left === 0) { done(); return; }
+      var step = function () { if (--left <= 0) done(); };
+      if (udp) udp.close(step);
+      if (wt) wt.close(step);
     }
   };
 }

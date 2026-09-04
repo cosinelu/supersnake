@@ -18,8 +18,9 @@
     this.snake = snake;
     this.blocks = []; // {x, y, color, phase, kind}（世界坐标）
     this.timer = 0;
-    this.meteors = [];   // 流星砖块：{x,y,vx,vy,color,ttl,trail,phase}（移动实体）
+    this.meteors = [];   // 流星砖块：{mid,x,y,vx,vy,color,ttl,trail,phase}（移动实体）
     this.meteorTimer = 0;
+    this._nextMeteorId = 1; // 联机客户端按它做跨快照轨迹关联；单机无需展示但保持同构
     this.others = []; // 其他活蛇数组（多人模式由 multiplayer 挂活引用，刷新时同样避让）
     this.unlockedKeys = cfg.COLOR_KEYS.slice(); // 默认全部；game 会按本局解锁数覆盖
     this.specialChance = cfg.ITEM_SPECIAL_CHANCE; // 每帧由 game/mp 按存活时间更新（越后期越高）
@@ -216,7 +217,10 @@
       my = d.y > 0 ? -40 : H + 40;
       vx = 0; vy = d.y * spd;
     }
+    var mid = this._nextMeteorId;
+    this._nextMeteorId = this._nextMeteorId >= 65535 ? 1 : this._nextMeteorId + 1;
     this.meteors.push({
+      mid: mid,
       x: mx, y: my, vx: vx, vy: vy,
       color: this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)],
       ttl: cfg.METEOR_TTL_MS,

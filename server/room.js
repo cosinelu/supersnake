@@ -13,11 +13,12 @@ var path = require('path');
 var JS = path.join(__dirname, '..', 'js');
 ['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'ai', 'multiplayer']
   .forEach(function (f) { require(path.join(JS, f + '.js')); });
-['protocol', 'transport', 'headlessGame']
+['protocol', 'transport', 'headlessGame', 'binCodec', 'binProtocol']
   .forEach(function (f) { require(path.join(JS, 'net', f + '.js')); });
 
 var CS = globalThis.CS;
 var P = CS.protocol;
+var BP = CS.binProtocol;
 
 var nextRoomId = 1;
 
@@ -32,11 +33,16 @@ function Room(opts) {
   this.id = 'r' + (nextRoomId++);
   this.config = opts.config;
   this.onEmpty = opts.onEmpty || function () {};
+  this.udp = opts.udp || null;   // UdpEndpoint（可选）：为 null 时全程走 TCP
   this.state = 'countdown'; // countdown → running → over
   this.tickCount = 0;
   this.countdownLeft = this.config.COUNTDOWN_MS;
   this._timer = null;
   this._overTimer = null;
+  // 色块增量同步：记录上一帧的色块集合，每帧算出 add/del（见 02-udp-transport.md §2.4）
+  this._blockSeen = {};     // bid → block
+  this._nextBid = 1;
+  this._lowFreqAt = 0;      // 低频通道（昵称/计分/色块全量校正）上次发送时刻
 
   var self = this;
   this.game = new CS.HeadlessGame({
@@ -59,6 +65,41 @@ function Room(opts) {
   this.totalHumans = opts.players.length;
 }
 
+/**
+ * 低频通道（1Hz，走 TCP）：昵称 / 计分 / 排行榜 + 色块全量校正。
+ *
+ * 这些字段永不变或低频变，从 30Hz 的每帧快照里移出去（原本占 103 B/蛇）。
+ * 色块全量是增量同步的兜底：客户端漏收任一增量都会永久偏差，
+ * 靠 1Hz 全量整体替换修复。走 TCP 是因为它低频、体积大、且不能丢。
+ */
+Room.prototype._maybeLowFreq = function () {
+  if (!this.udp) return;   // 裸 UDP 与 WebTransport 都由 hub 表示；纯 TCP 才无需低频通道
+  var now = this.config.nowFn();
+  var period = this.config.LOWFREQ_MS || 1000;
+  if (now - this._lowFreqAt < period) return;
+  this._lowFreqAt = now;
+
+  var entries = this.game.mp.allEntries();
+  var meta = entries.map(function (e) {
+    return {
+      id: e.id, nm: e.name, kl: e.kills | 0, es: e.elimScore | 0,
+      et: e.elimTotal | 0, ml: e.maxLen | 0,
+      sv: e.survivalScore | 0, mb: e.mpBonusScore | 0
+    };
+  });
+  var blocks = this.game.spawner.blocks;
+  var full = [];
+  for (var i = 0; i < blocks.length; i++) {
+    var b = blocks[i];
+    if (b.__bid == null) continue;   // 尚未编号的下一帧增量会带上
+    full.push({
+      bid: b.__bid, x: Math.round(b.x), y: Math.round(b.y), c: b.color,
+      k: b.kind || 'color', r: b.rarity || null, rr: b.r || 0
+    });
+  }
+  this._broadcast({ t: 'meta', tk: this.tickCount, sn: meta, blocks: full });
+};
+
 /** 广播 matched，进入倒计时（step 驱动递减） */
 Room.prototype.start = function () {
   var players = [];
@@ -69,11 +110,39 @@ Room.prototype.start = function () {
   var walls = this.game.walls.rects.map(function (r) { return [r.x | 0, r.y | 0, r.w | 0, r.h | 0]; });
   for (var c in this.humans) {
     var h = this.humans[c];
-    h.send({
+    var msg = {
       t: P.S2C.MATCHED, roomId: this.id, playerId: h.entry.id,
       players: players, countdownMs: this.config.COUNTDOWN_MS,
-      W: this.game.W, H: this.game.H, walls: walls
-    });
+      W: this.game.W, H: this.game.H, walls: walls,
+      // 兼容字段 snapIntervalMs 表示「初始保底通道」的实际间隔：客户端在
+      // WebTransport / 裸 UDP 真正激活后再切到 accelSnapIntervalMs；若中途
+      // 降级，则恢复 tcpSnapIntervalMs。旧客户端只认 snapIntervalMs，也会优先
+      // 得到稳定的 15Hz / 119ms，而不是在 wss 上误用 30Hz / 70ms。
+      tickMs: this.config.TICK_MS,
+      snapIntervalMs: this.config.TICK_MS * this.config.TCP_SNAP_EVERY,
+      tcpSnapIntervalMs: this.config.TICK_MS * this.config.TCP_SNAP_EVERY,
+      accelSnapIntervalMs: this.config.TICK_MS * this.config.SNAP_EVERY,
+      tcpSnapEvery: this.config.TCP_SNAP_EVERY,
+      accelSnapEvery: this.config.SNAP_EVERY,
+      udpDup: this.config.UDP_DUP
+    };
+    // 加速通道接入信息（可选）：客户端据此打洞；拿不到就全程走 TCP
+    // （见 02-udp-transport.md §4.3）。
+    // **两条通道都下发**（裸 UDP + WebTransport），由客户端按自身能力挑一条：
+    // 小游戏 wx.createUDPSocket → 裸 UDP，浏览器 → WebTransport，Node → dgram。
+    // 服务器不猜客户端类型，谁打通了就用谁（isReady 按连接实测）。
+    if (this.udp) {
+      var info = this.udp.offer(c, this.id);
+      if (info) {
+        if (info.port) { msg.udpPort = info.port; msg.udpToken = info.token; }
+        if (info.wtPort) {
+          msg.wtPort = info.wtPort;
+          msg.wtToken = info.wtToken;
+          msg.wtPath = info.wtPath;
+        }
+      }
+    }
+    h.send(msg);
   }
 };
 
@@ -105,15 +174,24 @@ Room.prototype.startAuto = function () {
   this.run();
 };
 
-/** 输入处理：保留最新角度/加速位 + seq（快照 ack 用） */
+/** 输入处理：保留最新角度/加速位 + seq（快照 ack 用）
+ *
+ * seq 校验用于丢弃乱序/重放包。但不能简单「seq < lastSeq 就丢」：
+ * 客户端 WsTransport.seq 在重建连接后从 0 重新计数，而服务端 lastSeq 停在旧值，
+ * 会导致该玩家输入被**永久**丢弃（表现为「怎么划都不动」且无法自行恢复）。
+ * 因此对「大幅回退」判定为新的计数周期，重置基线而非丢弃。 */
 Room.prototype.handleInput = function (connId, msg) {
   var h = this.humans[connId];
-  if (!h || !h.connected || this.state !== 'running') return;
+  if (!h || !h.connected || this.state !== 'running') return false;
   var seq = msg.seq | 0;
-  if (seq < h.lastSeq || seq > h.lastSeq + this.config.INPUT_MAX_SEQ_JUMP) return; // 乱序/异常丢弃
+  if (seq > h.lastSeq + this.config.INPUT_MAX_SEQ_JUMP) return false; // 异常跳变（作弊/损坏）：忽略
+  // 回退幅度小 → 网络乱序，丢弃（后续更新的包会补上）；
+  // 回退幅度大（含归零）→ 客户端重新计数，接受并把基线拉回，避免永久失效。
+  if (seq < h.lastSeq && (h.lastSeq - seq) < this.config.INPUT_SEQ_RESET_GAP) return false;
   if (typeof msg.a === 'number' && isFinite(msg.a)) h.angle = msg.a;
   h.boost = msg.bo ? 1 : 0;
   h.lastSeq = seq;
+  return true;
 };
 
 /** 掉线判负：立即淘汰该玩家（尸体掉落/事件广播走 mp 正常流程） */
@@ -147,7 +225,11 @@ Room.prototype.step = function (dt) {
   this.game.tick(dt);
   this.tickCount++;
 
-  if (this.tickCount % this.config.SNAP_EVERY === 0) this._broadcastSnap();
+  // 两条下行按各自物理特性分频：二进制加速通道 30Hz，TCP/JSON 保底 15Hz。
+  // 任一通道到发送 tick 就进入广播；_broadcastSnap 内再按连接实际就绪通道路由。
+  if (this.tickCount % this.config.SNAP_EVERY === 0 ||
+      this.tickCount % this.config.TCP_SNAP_EVERY === 0) this._broadcastSnap();
+  this._maybeLowFreq();
 
   this._checkPlayerDeaths();
   this._checkOver();
@@ -160,16 +242,125 @@ Room.prototype._broadcast = function (msg) {
   }
 };
 
-/** 快照广播：ack 按连接个性化（该连接已应用到哪个输入 seq） */
+/**
+ * 快照广播：ack 按连接个性化（该连接已应用到哪个输入 seq）。
+ *
+ * 双通道（见 docs/architecture/02-udp-transport.md §4）：
+ *   UDP 会话就绪 → 发二进制帧（冗余打散，单包 ≤ UDP_SNAP_CAP 永不分片）
+ *   否则         → 回落 TCP JSON（保底通道，不做任何额外处理）
+ * 两条通道的解码结果同构，客户端上层零感知。
+ */
 Room.prototype._broadcastSnap = function () {
-  var snap = P.snap(this.tickCount, 0, this.game.mp.timeMs,
-    this.game.mp.allEntries(), this.game.spawner.blocks, this.game.spawner.meteors);
-  for (var cid in this.humans) {
-    var h = this.humans[cid];
-    if (!h.connected) continue;
+  var entries = this.game.mp.allEntries();
+  var blocks = this.game.spawner.blocks;
+  var useAccel = !!this.udp;
+  var accelDue = this.tickCount % this.config.SNAP_EVERY === 0;
+  var tcpDue = this.tickCount % this.config.TCP_SNAP_EVERY === 0;
+
+  // 色块增量只在**本 tick 真要发加速帧**时推进。若在 TCP-only tick 也推进，
+  // 加速客户端会永久漏掉这一 tick 的 add/del，直到 1Hz 全量校正才恢复。
+  var delta = (useAccel && accelDue) ? this._blockDelta(blocks) : null;
+
+  var snap = null;   // TCP 路径的 JSON 快照（懒构造：全 UDP 时不付序列化开销）
+  var self = this;
+  function sendTcp(h) {
+    if (!snap) {
+      snap = P.snap(self.tickCount, 0, self.game.mp.timeMs,
+        entries, blocks, self.game.spawner.meteors);
+    }
     snap.ack = h.lastSeq;
     safeSend(h, snap);
   }
+
+  for (var cid in this.humans) {
+    var h = this.humans[cid];
+    if (!h.connected) continue;
+
+    if (useAccel && this.udp.isReady(cid)) {
+      var forceTcp = false;
+      if (accelDue) {
+        var ents = this._orderForViewer(h, entries);
+        var res = BP.encSnapCapped({
+          tick: this.tickCount, ack: h.lastSeq, timeMs: this.game.mp.timeMs,
+          entries: ents, blockAdd: delta.add, blockDel: delta.del,
+          meteors: this.game.spawner.meteors
+        }, this.config.UDP_SNAP_CAP);
+        if (res.degraded > 0) this._degradeCount = (this._degradeCount || 0) + 1;
+        if (res.overflow) {
+          // “≤UDP_SNAP_CAP”是硬约束，不是统计愿望。非蛇负载仍超限或 count>255 时，
+          // 这一帧改走可靠 TCP 全量；客户端会用 bid 同步增量基线，下一帧可继续加速。
+          this._overflowCount = (this._overflowCount || 0) + 1;
+          forceTcp = true;
+        } else if (!this.udp.sendFrame(cid, res.bytes)) {
+          // isReady 与实际 send 之间会话可能刚好关闭，不能让该帧凭空消失。
+          forceTcp = true;
+        }
+      }
+
+      // mode=2 的安全恢复探测期必须双发：只有收到完整二进制帧后，客户端才会
+      // 确认 mode=1。若只有 7B ACK 可达、大 datagram 被挡，TCP 仍持续不黑屏。
+      var probeTcp = typeof this.udp.needsTcp === 'function' && this.udp.needsTcp(cid);
+      if (!forceTcp && !probeTcp) continue;
+      if (!forceTcp && !tcpDue) continue;
+      sendTcp(h);
+      continue;
+    }
+
+    if (!tcpDue) continue;
+    sendTcp(h);
+  }
+};
+
+/**
+ * 按「与观察者的距离」升序排列实体，本机玩家永远排第一。
+ *
+ * 这个顺序是 encSnapCapped 降级策略的前提：超预算时从末尾（最远）开始降级为
+ * lite 档，本机玩家（index 0）永不被降级。
+ */
+Room.prototype._orderForViewer = function (h, entries) {
+  var me = h.entry;
+  var mx = me.snake.x, my = me.snake.y;
+  var rest = [];
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    if (e === me) continue;
+    var dx = e.snake.x - mx, dy = e.snake.y - my;
+    rest.push({ e: e, d: dx * dx + dy * dy });
+  }
+  rest.sort(function (a, b) { return a.d - b.d; });
+  var out = [{ e: me, lite: false }];
+  for (i = 0; i < rest.length; i++) out.push({ e: rest[i].e, lite: false });
+  return out;
+};
+
+/**
+ * 计算色块增量。
+ *
+ * 色块占 JSON 快照的 60%（168 块 × 69 字节 = 11814 B）却基本静止，
+ * 全量重传是最大的一块浪费。稳态每帧变化 < 5 个。
+ *
+ * 漏收增量会导致客户端永久偏差 → 由 1Hz 全量校正（走 TCP）兜底，见 _sendLowFreq。
+ */
+Room.prototype._blockDelta = function (blocks) {
+  var add = [], del = [];
+  var now = {};
+  for (var i = 0; i < blocks.length; i++) {
+    var b = blocks[i];
+    if (b.__bid == null) {
+      b.__bid = this._nextBid++;
+      if (this._nextBid > 65535) this._nextBid = 1;   // uint16 环回
+      add.push({
+        bid: b.__bid, x: b.x, y: b.y, color: b.color,
+        kind: b.kind || 'color', rarity: b.rarity || null, r: b.r || 0
+      });
+    }
+    now[b.__bid] = 1;
+  }
+  for (var bid in this._blockSeen) {
+    if (!now[bid]) del.push(parseInt(bid, 10));
+  }
+  this._blockSeen = now;
+  return { add: add, del: del };
 };
 
 /** 真人自然死亡（撞墙/被撞）→ 立即给本人发 over(dead)（对手继续） */

@@ -44,6 +44,7 @@ section('协议编解码');
 (function () {
   // 客户端消息构造
   var j = P.join('测试玩家');
+  ok(P.PROTO_VER === 3, '**外层协议版本随流星 mid / 二进制 v3 一起升级，禁止新旧端混跑**');
   ok(j.t === 'join' && j.ver === P.PROTO_VER && j.name === '测试玩家', 'join 消息构造');
   var inp = P.input(7, Math.PI, true);
   ok(inp.t === 'input' && inp.seq === 7 && inp.bo === 1, 'input 消息构造（seq/boost）');
@@ -75,6 +76,9 @@ section('协议编解码');
   ok(d0.segPos.length === e0.snake.segPos.length, '节心数组长度一致（含尾巴节）');
   var b0 = P.deBlock(snap.bl[0]);
   ok(typeof b0.x === 'number' && typeof b0.kind === 'string', 'deBlock 还原色块');
+  var m0 = P.deMeteor(P.serMeteor({ mid: 91, x: -40, y: 200, vx: 140, vy: 0, color: 'green', phase: 1.1, trail: [{ x: -50, y: 200 }] }));
+  ok(m0.mid === 91 && m0.vx === 140 && m0.trail.length === 1,
+    'deMeteor 还原稳定 id / 速度 / 拖尾');
 })();
 
 // ---------------- 2. 无头对局整局 ----------------

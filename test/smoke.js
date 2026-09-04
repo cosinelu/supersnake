@@ -145,7 +145,15 @@ var eb = makeSnake(['red', 'red', 'blue', 'blue']);
 var ebNormal = eb.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN); // 需 4 连
 ok(ebNormal.length === 0 && eb.length() === 4, '普通规则：仅 2 连不触发消除');
 var ebBomb = eb.eliminate(2, 2); // 炸弹：≥2 连即消
-ok(ebBomb.length === 2 && eb.colors.join(',') === 'blue,blue', '炸弹规则(2,2)：清除 2 连（剩保底 2 节）', 'removed=' + ebBomb.length);
+ok(ebBomb.length === 2 && eb.colors.join(',') === 'blue,blue', '炸弹底层规则(2,2)：清除 2 连（临时剩 2 节）', 'removed=' + ebBomb.length);
+// 多人拾取路径必须在炸弹后再执行存活蛇统一保底；旧代码漏了本步，真人可存活在 2 节。
+var bombGame = new CS.Game(960, 540); bombGame.startMulti();
+var bombEntry = bombGame.mp.playerEntry;
+bombEntry.snake.colors = ['red', 'red', 'blue', 'blue'];
+bombEntry.snake.computeBody();
+bombGame.mp.applyItem(bombEntry, { kind: 'bomb', color: null, x: bombEntry.snake.x, y: bombEntry.snake.y });
+ok(bombEntry.snake.colors.length === cfg.REFILL_ON_FLOOR,
+  '**多人炸弹后存活蛇补回保底长度**', 'len=' + bombEntry.snake.colors.length);
 // 减速道具：currentSpeed 在 slowUntil 内 ×SLOW_FACTOR
 var sg2 = new CS.Game(960, 540); sg2.startLevel(1);
 var spdNormal = sg2.currentSpeed();
@@ -301,6 +309,20 @@ var before3 = s3.colors.length;
 var r3 = s3.removeRandom(3);
 ok(r3.length === 3 && s3.colors.length === before3 - 3, '随机消 3：移除 3 节、长度 -3', 'rem=' + r3.length);
 
+// 回归：消除类道具是“先直接删节、再调用标准 eliminate”。旧实现仅在 findRuns()
+// 找到四连时设置保底；若道具已把 2~3 节直接删空，findRuns 为空，存活蛇会保持 0 节，
+// renderer 随即把唯一节点当尾巴画，玩家看到“头掉了”。
+var sFloor1 = mkSnake(['red', 'blue']);
+sFloor1.removeRandom(3);
+sFloor1.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+ok(sFloor1.colors.length === cfg.REFILL_ON_FLOOR,
+  '**随机消把短蛇删空后补回保底长度（头不会消失）**', 'len=' + sFloor1.colors.length);
+var sFloor2 = mkSnake(['red', 'red', 'red']);
+sFloor2.removeByColor('red');
+sFloor2.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+ok(sFloor2.colors.length === cfg.REFILL_ON_FLOOR,
+  '**消色道具删空后补回保底长度**', 'len=' + sFloor2.colors.length);
+
 var s4 = mkSnake(['red', 'blue', 'green', 'orange', 'purple']);
 s4.insertAt(2, 'yellow');
 ok(s4.colors[2] === 'yellow' && s4.colors.length === 6, 'insertAt(2)：在下标 2 插入 yellow');
@@ -321,6 +343,7 @@ msp.unlockedKeys = ['red', 'blue', 'green', 'orange', 'purple'];
 var lenBefore = ms.colors.length;
 msp.spawnMeteor(ms);
 var mm = msp.meteors[0];
+ok(mm.mid > 0, '流星生成即带稳定实体 id（联机跨快照关联用）');
 var mseg = ms.segPos[3];
 mm.x = mseg.x; mm.y = mseg.y; mm.vx = 0; mm.vy = 0; // 直接放到第 3 节上
 msp.meteorTimer = 1e9; // 防止本帧额外生成，保持测试纯净
@@ -334,11 +357,13 @@ ok(ms.colors.length === lenBefore + 1, '流星注入：身体长度 +1（中段�
 var m2 = mkSnake(['red', 'blue']);
 var m2sp = new CS.Spawner(new CS.Walls(2400, 1600, { x: 1200, y: 800 }), m2);
 m2sp.unlockedKeys = ['red', 'blue'];
-var cardinalOK = true, straightOK = true;
+var cardinalOK = true, straightOK = true, midOK = true, prevMid = 0;
 for (var mi = 0; mi < 40; mi++) {
   m2sp.meteors = [];
   m2sp.spawnMeteor({ x: 1200, y: 800 });
   var mo = m2sp.meteors[0];
+  if (mo.mid <= prevMid) midOK = false;
+  prevMid = mo.mid;
   if (!(Math.abs(mo.vx) < 1e-9 || Math.abs(mo.vy) < 1e-9)) cardinalOK = false; // 必为水平或垂直
   var ax0 = Math.atan2(mo.vy, mo.vx);
   mo.x += mo.vx * 0.1; mo.y += mo.vy * 0.1; // 不调 updateMeteors，避免被回收
@@ -347,6 +372,7 @@ for (var mi = 0; mi < 40; mi++) {
 }
 ok(cardinalOK, '流星：40 次生成全部为上下左右正方向（水平或垂直）');
 ok(straightOK, '流星：飞行朝向恒定，无归向蛇头（直线飞向对侧）');
+ok(midOK, '流星：实体 id 单调递增，重生不与旧流星混淆');
 
 // ---------------- 9. Game 流程 ----------------
 section('Game 流程');

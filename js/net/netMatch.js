@@ -54,6 +54,8 @@
   /**
    * @param {number} [playerId] 本机玩家 Entry id（matched 消息给出）
    * @param {object} [opts] { interpDelayMs } 传 0/false 关闭插值（默认 120ms，需 js/net/interpolation.js）
+   *   注意：正常路径**不该**依赖这个默认值，而应在 matched 后调用
+   *   setSnapInterval(snapIntervalMs) 让延迟随快照频率自适应（见 interpolation.js:deriveDelay）。
    */
   function RemoteMatch(playerId, opts) {
     this.playerId = playerId || 0;
@@ -65,18 +67,46 @@
     this.timeMs = 0;
     this.tick = 0;
     this.lastAck = 0;
+    this._lastSnapTick = null;
+    this._tickState = {}; // 即使插值关闭也要展开 uint16 tick，避免回绕后永久拒绝快照
     this._byId = {};
     var delay = opts && 'interpDelayMs' in opts ? opts.interpDelayMs : 120;
-    this._interp = (delay && CS.InterpBuffer) ? new CS.InterpBuffer(delay) : null;
+    var tickMs = opts && opts.tickMs || (CS.config && CS.config.SERVER_TICK_MS) || 33;
+    this._interp = (delay && CS.InterpBuffer) ? new CS.InterpBuffer(delay, tickMs) : null;
+    if (this._interp && opts && opts.snapIntervalMs) {
+      this._interp.setSnapInterval(opts.snapIntervalMs);
+    }
   }
+
+  /**
+   * 按服务器下发的快照间隔重算插值延迟（matched.snapIntervalMs）。
+   * 插值关闭时为空操作。
+   */
+  RemoteMatch.prototype.setSnapInterval = function (intervalMs) {
+    if (!this._interp) return false;
+    return this._interp.setSnapInterval(intervalMs);
+  };
+
+  /** 当前生效的渲染延迟（ms），供 HUD/诊断读取 */
+  RemoteMatch.prototype.interpDelayMs = function () {
+    return this._interp ? this._interp.delay : 0;
+  };
 
   /** 应用一帧快照（protocol.snap 结构）；色块/流星取最新，蛇进插值缓冲 */
   RemoteMatch.prototype.applySnap = function (snap, nowMs) {
-    this.tick = snap.tk;
+    // RemoteMatch 自身也做 tick 判序：传输层有过滤，但 LocalTransport/测试可绕过它；
+    // 旧 tick 不得先把 blocks/meteors 刷成旧状态、再被插值层丢弃。
+    var tick = this._interp ? this._interp._normalizeTick(snap.tk)
+      : (CS.normalizeTick16 ? CS.normalizeTick16(this._tickState, snap.tk) : (snap.tk | 0));
+    if (this._lastSnapTick !== null && tick < this._lastSnapTick) return false;
+    this._lastSnapTick = tick;
+    snap.tk = tick;
+    this.tick = tick;
     this.timeMs = snap.tm;
     this.lastAck = snap.ack;
     this._applyLatest(snap);
-    if (this._interp) this._interp.push(snap, nowMs || Date.now(), P.deSnake);
+    if (this._interp) this._interp.push(snap, nowMs || Date.now(), P.deSnake, P.deMeteor);
+    return true;
   };
 
   /** 最新快照直达（M2 行为；插值关闭时渲染也用它） */
@@ -106,11 +136,13 @@
     if (!this._interp) return;
     var s = this._interp.sample(nowMs || Date.now());
     if (!s) return;
-    for (var id in s) {
+    var snakes = s.snakes || s;
+    for (var id in snakes) {
       if (+id === this.playerId) continue; // 本机蛇走预测
       var e = this._byId[id];
-      if (e) updateEntryView(e, s[id]);
+      if (e) updateEntryView(e, snakes[id]);
     }
+    if (s.meteors) this.meteors = s.meteors;
   };
 
   // ---- 与 CS.Multiplayer 同构的只读接口（renderer/game 复用） ----

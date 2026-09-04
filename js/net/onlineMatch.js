@@ -22,6 +22,10 @@
   var store = CS.storage;
 
   var INPUT_INTERVAL_MS = 33;   // 上行输入节流（≈30Hz）
+                                // **刻意与下行快照频率解耦**：上行是幂等的绝对角度，
+                                // 12 字节/包成本极低，没有理由跟着下行降频 ——
+                                // 降上行只会让转向响应变钝。三层频率各管各的：
+                                // 上行 30Hz / 下行 SNAP_EVERY 可配 / 渲染 rAF 不锁帧。
   var NICK_KEY = 'crayon_snake_web_nick';
   var SERVER_KEY = 'crayon_snake_web_server';
   var ONLINE_BEST_KEY = 'crayon_snake_web_online_best';
@@ -54,6 +58,27 @@
     this._attached = false;    // 首帧快照已挂接预测体
     this._finished = false;
     this._disposed = false;
+
+    /**
+     * 当前实际生效的传输通道（HUD 显示 + 排障用）。
+     *
+     * 为什么必须做成**可见**的：加速通道是静默降级的设计 —— 打不通就走 TCP、
+     * 玩家无感。这是对的产品行为，但代价是「有没有吃到 UDP 收益」完全不可观测。
+     * 网页版曾经整个阶段都在走 wss+JSON 而无人察觉，正是因为缺这个指示。
+     *
+     * `offered` 单独记服务器下发了什么，用来分清两种完全不同的失败：
+     * 「服务器没提供接入信息」vs「提供了但客户端没用上」。
+     */
+    this.channel = {
+      kind: 'tcp',                       // 'tcp' | 'wt' | 'udp'
+      label: 'TCP（wss + JSON）',
+      offered: { udpPort: 0, wtPort: 0 },
+      snapIntervalMs: 0,       // 当前实际通道间隔
+      tcpIntervalMs: 66,
+      accelIntervalMs: 33,
+      switches: 0,      // 切换次数 >0 ⇒ 中途降级过，比「当前状态」更能说明问题
+      binFrames: 0      // 收到的二进制快照帧数（0 而 kind 非 tcp ⇒ 通道建了但没数据）
+    };
   }
 
   /** 连接并排入匹配队列（按钮「在线对战」触发） */
@@ -67,12 +92,28 @@
       },
       queued: function (m) {
         var cur = m.size || m.pos || 1;
-        self.detail = '已就位 ' + cur + ' / ' + (m.need || '?') + '，人满即开（20 秒后 AI 补位）';
+        self.detail = '已就位 ' + cur + ' / ' + (m.need || '?') + '，人满即开（最多等 20 秒，之后 AI 补位开局）';
       },
       matched: function (m) { self._onMatched(m); },
       start: function () { self.status = '开局！等待首帧同步…'; },
       snap: function (m) { self._onSnap(m); },
       event: function (m) { self._onEvent(m); },
+      // 加速通道状态变化。静默降级是对的产品行为，但必须**可观测** ——
+      // 否则「网页版其实一直在走 wss」这种事没人会发现。
+      udp: function (m) {
+        var ch = self.channel;
+        var kind = m.active ? (m.kind === 'wt' ? 'wt' : 'udp') : 'tcp';
+        if (kind !== ch.kind) ch.switches++;
+        ch.kind = kind;
+        ch.label = kind === 'wt' ? 'WebTransport（UDP + 二进制）'
+          : kind === 'udp' ? '裸 UDP（二进制）'
+            : 'TCP（wss + JSON）';
+        ch.snapIntervalMs = kind === 'tcp' ? ch.tcpIntervalMs : ch.accelIntervalMs;
+        // 通道物理特性不同：WT/UDP 30Hz 用 70ms；wss 15Hz 用约 119ms。
+        // 若只改 HUD 不改插值层，就会出现「显示已降级，但仍拿 70ms 缓冲扛 TCP
+        // 队头阻塞」的假修复。这里必须让真实渲染参数同步切换。
+        if (self.remote) self.remote.setSnapInterval(ch.snapIntervalMs);
+      },
       over: function (m) { self._finish(m.reason, m.ranks, false); },
       drop: function () { self._finish(P.OVER_REASON.DROPPED, null, true); },
       error: function (m) {
@@ -100,6 +141,16 @@
     this.status = '匹配成功！' + this.players.length + ' 名玩家同场';
     this.detail = '开局倒计时 ' + Math.ceil((m.countdownMs || 0) / 1000) + ' 秒…';
 
+    // 记下服务器下发了哪些加速接入方式。
+    // 这个和「当前实际走哪条」要分开看 —— 两者组合才能定位问题：
+    //   offered 全 0        ⇒ 服务器侧没开（UDP_ENABLED / WT_ENABLED）
+    //   offered 有值但走 tcp ⇒ 客户端没用上（浏览器不支持 / 握手失败 / 端口被封）
+    this.channel.offered = { udpPort: m.udpPort || 0, wtPort: m.wtPort || 0 };
+    this.channel.tcpIntervalMs = m.tcpSnapIntervalMs || m.snapIntervalMs || 66;
+    this.channel.accelIntervalMs = m.accelSnapIntervalMs || m.snapIntervalMs || 33;
+    this.channel.snapIntervalMs = this.channel.kind === 'tcp'
+      ? this.channel.tcpIntervalMs : this.channel.accelIntervalMs;
+
     g.mode = 'multi';
     g.levelCfg = { level: 0, W: m.W, H: m.H, wallSegments: 0, targetScore: 0, speed: cfg.SNAKE_SPEED };
     g.walls = new CS.Walls(m.W, m.H, { x: m.W / 2, y: m.H / 2 });
@@ -116,12 +167,118 @@
     g.mpBonusScore = 0; g.elimCombo = 0; g.elimComboTimer = 0;
     g.mpResult = null; g.slowUntil = 0;
     g.particles.clear();
-    g.joystick.onTouchEnd(g.joystick.touchId);
+    // 只释放摇杆的「激活态/角度」，**保留在屏触点集合**：
+    // 玩家常在倒计时期间就按住屏幕，若把触点一并清掉，进入 play 后只有 touchmove 在流，
+    // 摇杆永远不会激活 → 整局锁死（这正是 v3.0.2 修复的断点 3，见 docs/design §3.7）。
+    // setState('play') 会调 latchExisting()，把仍按住的手指重新接管。
+    g.joystick.release();
 
-    this.remote = new CS.RemoteMatch(this.playerId);
+    this.remote = new CS.RemoteMatch(this.playerId, {
+      snapIntervalMs: this.channel.snapIntervalMs,
+      tickMs: m.tickMs || cfg.SERVER_TICK_MS
+    });
     g.mp = this.remote;
     // 哑 spawner：blocks/meteors 每帧从快照刷新；grabBlock 供彩色星播报/小地图涟漪
     g.spawner = { blocks: [], meteors: [], grabBlock: null, others: [] };
+  };
+
+  /**
+   * 传输通道诊断快照（HUD 与控制台共用一个来源）。
+   *
+   * 统计**不自己再记一份**，直接读 `UdpAccel.stats` —— 那是真实收发计数。
+   * 测试里吃过复刻公式导致脱钩的亏（实现改了、复刻的那份还在，两套逻辑），
+   * 这里同理：重复计数迟早会和真值分叉。
+   */
+  OnlineMatch.prototype.netInfo = function () {
+    var ch = this.channel;
+    var udp = this.transport && this.transport.udp;
+    var s = udp && udp.stats;
+    var ad = udp && udp.diag || this.transport && this.transport.accelDiag || {};
+    var d = this.transport && typeof this.transport.diagnostics === 'function'
+      ? this.transport.diagnostics(ch.kind) : {};
+    var interp = this.remote && this.remote._interp;
+    var is = interp && interp.stats;
+    var pred = this.predictor;
+    var frameTotal = s ? s.recv + s.missingFrames : 0;
+    var expectedCopies = s ? frameTotal * (udp.expectedDup || 1) : 0;
+    function pct(n, total) { return total > 0 ? Math.round(n * 1000 / total) / 10 : 0; }
+    return {
+      通道: ch.label,
+      kind: ch.kind,
+      服务器下发: ch.offered,
+      当前快照间隔ms: ch.snapIntervalMs,
+      TCP快照间隔ms: ch.tcpIntervalMs,
+      加速快照间隔ms: ch.accelIntervalMs,
+      通道切换次数: ch.switches,
+      WebTransport支持: !!ad.webTransportSupported,
+      安全上下文: ad.secureContext !== false,
+      加速状态: ad.state || 'not_attempted',
+      加速失败阶段: ad.phase || '',
+      加速失败原因: ad.reason || '',
+      加速目标: ad.target || '',
+      加速错误摘要: ad.lastError || '',
+      加速Hello次数: ad.helloSent || 0,
+      加速ACK时间: ad.ackedAt || 0,
+      加速首帧时间: ad.firstSnapAt || 0,
+      Socket错误: s ? s.socketErrors : 0,
+      WSS延迟ms: d.rttMs || 0,
+      WSS延迟P50ms: d.rttP50Ms || 0,
+      WSS延迟P95ms: d.rttP95Ms || 0,
+      WSS抖动ms: Math.round((d.rttJitterMs || 0) * 10) / 10,
+      加速通道延迟ms: s ? s.pathRttMs : 0,
+      加速通道抖动ms: s ? Math.round(s.pathRttJitterMs * 10) / 10 : 0,
+      快照到达P50ms: d.arrivalP50Ms || 0,
+      快照到达P95ms: d.arrivalP95Ms || 0,
+      快照最大间隔ms: d.arrivalMaxMs || 0,
+      快照到达抖动ms: Math.round((d.arrivalJitterMs || 0) * 10) / 10,
+      // TCP 可靠传输不称「网络丢包」：这里是应用层快照序号是否缺失。
+      快照缺失率: Math.round((d.frameLossPct || 0) * 10) / 10,
+      快照迟到率: Math.round((d.latePct || 0) * 10) / 10,
+      长卡顿次数: d.stalls || 0,
+      WSS待发送字节: d.wsBufferedBytes || 0,
+      // recv 是去重后的二进制逻辑帧；rawSnaps 含冗余副本。
+      二进制帧: s ? s.recv : 0,
+      逻辑帧丢失: s ? s.missingFrames : 0,
+      逻辑帧丢失率: s ? pct(s.missingFrames, frameTotal) : 0,
+      冗余副本包: s ? s.rawSnaps : 0,
+      副本丢失率估算: s ? pct(Math.max(0, expectedCopies - s.rawSnaps), expectedCopies) : 0,
+      冗余去重: s ? s.dupDropped : 0,
+      乱序包: s ? s.outOfOrder : 0,
+      解码失败: s ? s.decodeFail : 0,
+      降级次数: s ? s.fallbacks : 0,
+      插值延迟ms: interp ? interp.delay : 0,
+      插值缓冲领先ms: interp ? Math.round(interp.lastLeadMs) : 0,
+      插值缓冲耗尽率: is ? pct(is.latestClamps, is.samples) : 0,
+      远端短外推率: is ? pct(is.extrapolated || 0, is.samples) : 0,
+      预测误差px: Math.round((pred.lastErr || 0) * 10) / 10,
+      预测硬校正: pred.hardSnaps || 0,
+      预测最大软校正px: Math.round((pred.maxCorrectionPx || 0) * 10) / 10,
+      头颈最大间距px: Math.round((pred.maxNeckGap || 0) * 10) / 10
+    };
+  };
+
+  /** 手机/桌面 HUD 共用的单行摘要；完整明细仍由 __net() 提供。 */
+  OnlineMatch.prototype.netSummary = function () {
+    var n = this.netInfo();
+    var tag = this.channel.kind === 'wt' ? 'WebTransport'
+      : this.channel.kind === 'udp' ? '裸UDP' : 'WSS';
+    var rtt = this.channel.kind === 'tcp' ? n.WSS延迟ms : n.加速通道延迟ms;
+    var quality = this.channel.kind === 'tcp'
+      ? ('卡 ' + n.快照迟到率 + '%')
+      : ('丢 ' + n.逻辑帧丢失率 + '%');
+    if (this.channel.kind === 'tcp' && n.加速失败原因) {
+      var reasonText = {
+        webtransport_unsupported: '不支持WT', offer_missing: '无WT入口',
+        invalid_offer: 'WT入口异常', factory_unavailable: 'WT不可用',
+        constructor_throw: 'WT创建失败', wt_ready_rejected: 'WT握手失败',
+        datagram_api_error: 'WT接口异常', hello_ack_timeout: 'WT超时',
+        write_rejected: 'WT发送失败', read_rejected: 'WT接收失败',
+        session_closed: 'WT已断开', downlink_stall: 'WT停滞',
+        send_failed: 'WT发送失败', socket_error: 'WT连接错误'
+      };
+      quality = reasonText[n.加速失败原因] || 'WT回落';
+    }
+    return tag + ' · ' + (rtt ? rtt + 'ms' : '--ms') + ' · ' + quality;
   };
 
   /** 快照：应用视图 + 本机 reconcile；首帧挂接预测体并切入 play */
@@ -153,11 +310,12 @@
   OnlineMatch.prototype._syncSpawner = function () {
     var g = this.game, r = this.remote;
     if (!g.spawner || !r) return;
-    g.spawner.blocks = r.blocks;
-    g.spawner.meteors = r.meteors;
+    var blocks = r.blocks || [], meteors = r.meteors || [];
+    g.spawner.blocks = blocks;
+    g.spawner.meteors = meteors;
     var grab = null;
-    for (var i = 0; i < r.blocks.length; i++) {
-      if (r.blocks[i].kind === cfg.GRAB_KIND) { grab = r.blocks[i]; break; }
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].kind === cfg.GRAB_KIND) { grab = blocks[i]; break; }
     }
     g.spawner.grabBlock = grab;
   };
@@ -255,13 +413,17 @@
     // 本机预测 + 他机插值
     if (this._attached) this.predictor.update(dt, ang === null ? undefined : ang);
     r.renderSample(Date.now());
+    this._syncSpawner(); // renderSample 会推进流星显示态；spawner 必须每帧跟随
 
     // 本机 Entry 视图与预测体对齐（名牌/排行榜/小地图读它）
+    // colors/segPos 必须拷贝：早期按引用赋值会让视图与预测体共享同一数组，
+    // 任一侧被快照覆写都会污染另一侧（见架构文档 §5.4.1「引用隔离」）。
     var e = r.playerEntry;
     if (e && this.predictor.snake) {
       var ps = this.predictor.snake, vs = e.snake;
       vs.x = ps.x; vs.y = ps.y; vs.angle = ps.angle; vs.speed = ps.speed;
-      vs.colors = ps.colors; vs.segPos = ps.segPos;
+      vs.colors = ps.colors.slice();
+      vs.segPos = ps.segPos.map(function (p) { return { x: p.x, y: p.y }; });
     }
 
     // HUD 计分同步（权威在服务器 Entry 上）

@@ -18,18 +18,52 @@
     var renderer = new CS.Renderer(ctx, window.innerWidth, window.innerHeight);
     root.__game = game; // 调试钩子：控制台/WebBridge 可读取对局状态（无功能影响）
 
+    /**
+     * 传输通道诊断入口：控制台敲 `__net()` 即可看当前走 TCP 还是 UDP/WebTransport。
+     *
+     * 这不是调试残留，是**必要的可观测性**：加速通道设计成静默降级
+     * （打不通就走 wss，玩家无感），代价是「有没有吃到 UDP 收益」不可观测。
+     * 网页版曾整个阶段都在走 wss+JSON 而无人察觉，就是因为缺这个。
+     */
+    root.__net = function () {
+      var om = game && game.online;
+      if (!om) return '未在联机对局中（先点「在线对战」）';
+      return om.netInfo();
+    };
+
+    // 全局重排订阅（docs/design §3.8.3-D）：各界面各自失效缓存并重算。
+    // game.resize() 内部会 emit，这里订阅的是"除 game 之外"的参与者。
+    if (CS.layoutBus) {
+      CS.layoutBus.on('relayout', function (m) {
+        renderer.resize(m.W, m.H);
+      });
+    }
+
     function resize() {
-      var w = window.innerWidth, h = window.innerHeight;
+      // 移动端优先用 visualViewport：地址栏收起/展开时 innerHeight 未必及时更新
+      var vv = window.visualViewport;
+      var w = Math.round(vv && vv.width ? vv.width : window.innerWidth);
+      var h = Math.round(vv && vv.height ? vv.height : window.innerHeight);
       var dpr = window.devicePixelRatio || 1;
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
       canvas.style.width = w + 'px';
       canvas.style.height = h + 'px';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 之后全部用逻辑像素绘制
+      // game.resize 内部会 emit relayout，renderer 通过订阅收到，无需在此重复调用。
+      // 若 layoutBus 不可用（极老浏览器/裁剪构建），退回直接调用。
       game.resize(w, h);
-      renderer.resize(w, h);
+      if (!CS.layoutBus) renderer.resize(w, h);
     }
     window.addEventListener('resize', resize);
+    // 横竖屏切换：orientationchange 触发时尺寸常还没更新，延迟再量一次
+    window.addEventListener('orientationchange', function () {
+      setTimeout(resize, 80);
+      setTimeout(resize, 300); // 二次校正（部分机型旋转动画结束后尺寸才稳定）
+    });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', resize);
+    }
     resize();
 
     // ---------- 触摸输入 ----------

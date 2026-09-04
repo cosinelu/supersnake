@@ -1,10 +1,10 @@
+<!-- 本文件由 scripts/pack-share.js 自动生成（v3.0.0），请勿手工修改；改动请改源文件后重新打包 -->
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<!-- 本文件为自包含单文件版：所有 JS 已内联，双击即可离线游玩，无需联网或服务器。 -->
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>消食蛇 · 网页版（分享版 v2.13.0）</title>
+<html lang="zh-CN" data-page-node-id="ATwgaSbx44PSV0oVnAFqYo">
+<head data-page-node-id="9vQtmzA4KJaVotoUs08mHC">
+<meta charset="UTF-8" data-page-node-id="MrSJcRHYfeLnuKt8g980y5">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" data-page-node-id="XS0mwPljO4QgPXxf4RDj4d">
+<title>消食蛇 · 网页版（分享版 v3.0.0）</title>
 <style>
   html, body {
     margin: 0;
@@ -43,11 +43,13 @@
   }
 </style>
 </head>
-<body>
-<canvas id="game"></canvas>
-<div id="rotateTip">横屏体验更佳</div>
+<body data-page-node-id="1TKuKKHs10nGUE9AH99HEb">
+<canvas id="game" data-page-node-id="sw2YLCL307EYwYfBQuCxrE"></canvas>
+<div id="rotateTip" data-page-node-id="yQfcmkUeZTFYMGa1Wwv268">横屏体验更佳</div>
+<!-- file:// 直开可用：纯 IIFE 全局命名空间 CS，按依赖顺序引入，无 ES Module / 无构建 -->
+<!-- ?v= 查询参数用于强制浏览器刷新最新 JS（避免改动后还加载旧缓存） -->
 <script>
-/* ===== inlined: js/config.js ===== */
+/* ===== 内联自 js/config.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * config.js — 全局可调参数表（浏览器版 v2：自由方向 + 大地图 + 跟随镜头）
@@ -377,7 +379,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/utils.js ===== */
+/* ===== 内联自 js/utils.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * utils.js — 工具函数：确定性伪随机、数学助手、角度助手（DOM 无关）
@@ -419,15 +421,33 @@
     return angle + (diff > 0 ? maxDelta : -maxDelta);
   }
 
+  /**
+   * 确定性伪随机序列生成器（mulberry32）。
+   * 联机自动测试用：测试前 `Math.random = makeRng(seed)` 即可让整局对局确定性复现
+   * （服务器/游戏逻辑全部走 Math.random，无需改业务代码）。
+   * @param {number} seed 任意整数种子
+   * @returns {function(): number} 返回 [0,1) 的伪随机函数
+   */
+  function makeRng(seed) {
+    var s = (seed | 0) >>> 0;
+    return function () {
+      s = (s + 0x6D2B79F5) | 0;
+      var t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
   CS.utils = {
     hash2: hash2, clamp: clamp, manhattan: manhattan,
-    dist: dist, normAngle: normAngle, turnToward: turnToward
+    dist: dist, normAngle: normAngle, turnToward: turnToward,
+    makeRng: makeRng
   };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
 <script>
-/* ===== inlined: js/storage.js ===== */
+/* ===== 内联自 js/storage.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * storage.js — localStorage 封装（替代 wx.setStorageSync / wx.getStorageSync）
@@ -491,7 +511,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/levels.js ===== */
+/* ===== 内联自 js/levels.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * levels.js — 闯关模式 10 关参数（v2：世界为像素坐标大地图，宽 > 高）
@@ -524,7 +544,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/walls.js ===== */
+/* ===== 内联自 js/walls.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * walls.js — 世界墙壁模型（v2：世界像素坐标，DOM 无关）
@@ -710,7 +730,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/snake.js ===== */
+/* ===== 内联自 js/snake.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * snake.js — 蛇模型（v2：自由方向连续移动，DOM 无关）
@@ -1099,7 +1119,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/spawner.js ===== */
+/* ===== 内联自 js/spawner.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * spawner.js — 色块刷新器（v2：世界像素坐标，DOM 无关）
@@ -1169,7 +1189,7 @@
       var y = m + Math.random() * (w.H - 2 * m);
       if (x < edgePad || x > w.W - edgePad || y < edgePad || y > w.H - edgePad) continue;
       if (w.pointInWall(x, y, cfg.BLOCK_RADIUS + 22)) continue;       // 不压内部墙（加大余量）
-      if (s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;            // 离玩家 ≥80px
+      if (s && s.distTo(x, y) < cfg.BLOCK_SNAKE_DIST) continue;       // 离主蛇 ≥80px（联机服务器无主蛇，靠 others 避让）
       var nearOther = false;
       for (var oi = 0; oi < this.others.length; oi++) {               // 多人：其他活蛇同样避让
         if (this.others[oi].distTo(x, y) < cfg.BLOCK_SNAKE_DIST) { nearOther = true; break; }
@@ -1298,9 +1318,11 @@
   /**
    * 生成一颗流星砖块：只从上下左右四个正方向之一，平行于地图边、从一侧直飞到对侧。
    * 出生在对应边缘（屏幕外一点），沿该正方向匀速直线飞向对侧边缘；
-   * 出生位置在蛇附近 ±band 的带内，保证流星会经过玩家区域、有机会命中身体注入中段。
+   * 出生位置在目标蛇附近 ±band 的带内，保证流星会经过玩家区域、有机会命中身体注入中段。
+   * @param {object} snake 目标蛇（updateMeteors 从目标列表中随机选定；联机多真人时每颗目标独立）
    */
   Spawner.prototype.spawnMeteor = function (snake) {
+    if (!snake) return; // 无存活真人目标：本周期不投放
     var W = this.walls.W, H = this.walls.H;
     var dirs = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
     var d = dirs[Math.floor(Math.random() * 4)];
@@ -1327,15 +1349,18 @@
 
   /**
    * 每帧更新流星：直线匀速移动（无归向）+ 碰撞检测。
-   * 命中任意身体节 → 返回注入事件 [{idx, x, y, color}]，由 game 调用 snake.insertAt 注入中段。
-   * 未命中且出界/超时则消失。
+   * 命中任意目标蛇身体节 → 返回注入事件 [{snake, idx, x, y, color}]（snake 为被命中的目标），
+   * 由调用方对该 snake 调用 insertAt 注入中段。未命中且出界/超时则消失。
+   * @param {object|object[]} snakes 目标蛇或目标蛇数组（单人传单蛇；联机传全部存活真人蛇）
    * @returns {Array} 本帧发生的注入事件
    */
-  Spawner.prototype.updateMeteors = function (dtMs, snake) {
+  Spawner.prototype.updateMeteors = function (dtMs, snakes) {
+    var list = Array.isArray(snakes) ? snakes : (snakes ? [snakes] : []);
     this.meteorTimer -= dtMs;
     if (this.meteorTimer <= 0 && this.meteors.length < cfg.METEOR_MAX) {
       this.meteorTimer = cfg.METEOR_INTERVAL_MS;
-      this.spawnMeteor(snake);
+      // 随机选一个目标投放（联机多真人：每颗流星的目标独立随机，雨露均沾）
+      this.spawnMeteor(list.length ? list[Math.floor(Math.random() * list.length)] : null);
     }
     var events = [], dt = dtMs / 1000;
     for (var i = this.meteors.length - 1; i >= 0; i--) {
@@ -1344,9 +1369,13 @@
       if (m.trail.length > 6) m.trail.shift();
       m.x += m.vx * dt; m.y += m.vy * dt;
       m.ttl -= dtMs;
-      var hit = snake.segIndexAt(m.x, m.y, cfg.METEOR_HIT_R);
-      if (hit >= 0) {
-        events.push({ idx: hit, x: m.x, y: m.y, color: m.color });
+      var hitSnake = null, hitIdx = -1;
+      for (var si = 0; si < list.length; si++) {
+        var h = list[si].segIndexAt(m.x, m.y, cfg.METEOR_HIT_R);
+        if (h >= 0) { hitSnake = list[si]; hitIdx = h; break; }
+      }
+      if (hitSnake) {
+        events.push({ snake: hitSnake, idx: hitIdx, x: m.x, y: m.y, color: m.color });
         this.meteors.splice(i, 1);
         continue;
       }
@@ -1362,7 +1391,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/particles.js ===== */
+/* ===== 内联自 js/particles.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * particles.js — 消除特效：蜡笔屑粒子 + 手绘星形闪光 + 连锁文字（DOM 无关）
@@ -1502,7 +1531,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/joystick.js ===== */
+/* ===== 内联自 js/joystick.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * joystick.js — 虚拟摇杆 + 键盘输入（浏览器版 v2：输出目标角度）
@@ -1626,7 +1655,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/audio.js ===== */
+/* ===== 内联自 js/audio.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * audio.js — 音效与背景音乐（纯 Web Audio API 振荡器合成，零外部文件）
@@ -1788,7 +1817,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/ai.js ===== */
+/* ===== 内联自 js/ai.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * ai.js — 多人对战 AI 决策（加权转向，DOM 无关）
@@ -1924,12 +1953,13 @@
 
 </script>
 <script>
-/* ===== inlined: js/multiplayer.js ===== */
+/* ===== 内联自 js/multiplayer.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
- * multiplayer.js — 多人对战模式编排（玩家 1 名 + AI 蛇，DOM 无关）
+ * multiplayer.js — 多人对战模式编排（N 名真人玩家 + AI 蛇，DOM 无关）
  * 职责：
- *  - 蛇管理：玩家 1 名 + AI 蛇（v2.8.7 起**动态增长**：开局 MP_AI_START_COUNT 条（默认 3），
+ *  - 蛇管理：真人玩家 N 名（v3.0 起支持多真人，见 addPlayer；本地单机对局为 1 名）+ AI 蛇
+ *    （v2.8.7 起**动态增长**：开局 MP_AI_START_COUNT 条（默认 3），
  *    （独立 Snake 实例、昵称、基础速度档位、性格参数 greed/caution、击杀数、消除分、历史最长节数）；
  *  - 淘汰：头撞墙/边界 → 淘汰；头撞其他蛇身体节 → 淘汰（身体主人记 1 击杀）；
  *    头对头相撞 → 两条都淘汰（简单公平，不记击杀）；不做蛇身自碰（沿用现有设计）；
@@ -1943,11 +1973,20 @@
  *  - 尸体掉落：被淘汰蛇的颜色序列按节在原地散落成色块（每隔 MP_CORPSE_STRIDE 节掉 1 个，
  *    起点随机 → ≈50% 的节变成可吃色块），多人模式的主要资源循环；
  *  - 补充：AI 淘汰后延迟 MP_RESPAWN_MIN_MS~MP_RESPAWN_MAX_MS 在世界边缘、远离其他蛇的
- *    安全位置重生（初始 MP_START_LENGTH 节），维持编制；玩家不重生（由 game 进结算）；
+ *    安全位置重生（初始 MP_START_LENGTH 节），维持编制；真人不重生（由 game/room 结算）；
  *  - 吃色/消除：所有蛇共用同一套 grow / 4 连消除连锁逻辑（Snake 类原样复用）；
- *    连锁倍率计分与特效与单人模式一致（消除分只计入玩家成绩，AI 的 elimScore 仅供调试）；
+ *    连锁倍率计分与特效与单人模式一致（消除分计入各真人 Entry，AI 的 elimScore 仅供调试）；
  *  - 速度：所有蛇按 基础速度 + SPEED_LEN_COEF×节数 + ENDLESS_SPEEDUP_PER_SEC×存活秒 动态加速，
  *    封顶 SPEED_MAX（AI 基础速度在 MP_AI_SPEED_MIN~MAX 随机，玩家用 SNAKE_SPEED）。
+ *
+ * v3.0 联机改造（对本地单机行为完全等价）：
+ *  - players[]：真人 Entry 列表（addPlayer 加入；setup() 无真人时回退为本地单真人 game.snake）；
+ *  - liveSnakes[]：全部活蛇活引用（spawner.others 改用它，多真人时刷新避让所有真人）；
+ *  - 连击 combo / 生存分 survivalScore / 彩色星加成 mpBonusScore 下沉到 Entry
+ *    （本地单真人时由 game.updateMulti 每帧同步回 game 字段，显示与结算不变）；
+ *  - 流星砖块目标从「唯一玩家蛇」改为「全部存活真人蛇」（单人时行为不变）；
+ *  - onMpEvent(kind, data) 钩子：game 实现时接收离散事件（death/elim/bite/item/grab/toast/
+ *    self_pull），供服务器广播；本地 Game 不实现 → 零行为变化。
  */
 (function (root) {
   var CS = root.CS = root.CS || {};
@@ -1957,7 +1996,10 @@
 
   var nextId = 1;
 
-  /** 一条参赛蛇的档案（玩家或 AI） */
+  /** 重置 id 计数（测试用：保证同种子双跑时 id 序列一致） */
+  function resetIds() { nextId = 1; }
+
+  /** 一条参赛蛇的档案（真人玩家或 AI） */
   function Entry(snake, name, isPlayer) {
     this.id = nextId++;
     this.snake = snake;
@@ -1974,10 +2016,16 @@
     this.greed = 1;        // 性格：贪食权重（AI 决策用）
     this.caution = 1;      // 性格：谨慎权重（避障/避蛇距离）
     this.diedAt = 0;
+    // v3.0：计分状态下沉到 Entry（多真人各自独立计分；本地单真人由 game.updateMulti 同步回 game）
+    this.combo = 0;           // 连击层数（窗口内连续消除 +1，分数 ×combo）
+    this.comboTimer = 0;      // 连击剩余窗口（ms），每帧衰减
+    this.survivalScore = 0;   // 生存分（存活秒 × SURVIVE_SCORE_PER_SEC，死亡后冻结）
+    this.mpBonusScore = 0;    // 彩色星加成（吃到即 +20% 当前总分，可累计叠加）
   }
 
   /**
-   * @param {Game} game 宿主游戏实例（读 walls/spawner/particles/unlockedKeys/snake）
+   * @param {Game} game 宿主游戏实例（读 walls/spawner/particles/unlockedKeys/snake；
+   *   联机服务器传入 HeadlessGame 桩，字段面相同）
    */
   function Multiplayer(game) {
     this.game = game;
@@ -1985,13 +2033,23 @@
     this.spawner = game.spawner;
     this.particles = game.particles;
     this.timeMs = 0;
-    this.playerEntry = null;
+    this.players = [];       // 全部真人 Entry（本地模式恒为 1 名）
+    this.playerEntry = null; // 首位真人（本地模式 = 本机玩家，game.js/renderer 沿用）
     this.bots = [];          // 全部 AI Entry（含已淘汰的，死亡 FX 引用）
-    this.botSnakes = [];     // 活体 AI 蛇数组（活引用，交给 spawner.others 做刷新避让）
+    this.botSnakes = [];     // 活体 AI 蛇数组（活引用）
+    this.liveSnakes = [];    // 全部活蛇活引用（真人 + AI；spawner.others 刷新避让用）
     this.respawnQueue = [];  // [{at}] 待重生时刻表
     this.usedNames = {};     // 场上已占用昵称（防重名）
     this.respawned = 0;      // 累计重生次数（测试/统计）
   }
+
+  // ---------------- 事件钩子 ----------------
+
+  /** 离散事件钩子：game 实现 onMpEvent 时上报（服务器广播用；本地 Game 不实现则为空操作） */
+  Multiplayer.prototype.emitEv = function (kind, data) {
+    var g = this.game;
+    if (g && typeof g.onMpEvent === 'function') g.onMpEvent(kind, data);
+  };
 
   // ---------------- 编制管理 ----------------
 
@@ -2007,20 +2065,31 @@
     return fallback;
   };
 
-  /** 初始化：玩家 Entry（包裹 game.snake）+ 补足 AI 编制 */
+  /**
+   * 加入一名真人玩家（v3.0）：外部构造好 Snake（出生点由调用方选定）后注册。
+   * 首位真人同时成为 playerEntry（本地单机对局的"我"）。
+   */
+  Multiplayer.prototype.addPlayer = function (snake, name) {
+    var e = new Entry(snake, name || '我', true);
+    this.usedNames[e.name] = true; // 真人昵称整局保留：AI 不复用（kill 只释放 AI 名）
+    this.players.push(e);
+    this.liveSnakes.push(snake);
+    if (!this.playerEntry) this.playerEntry = e;
+    return e;
+  };
+
+  /** 初始化：真人 Entry（未 addPlayer 时回退包裹 game.snake，本地兼容）+ 补足 AI 编制 */
   Multiplayer.prototype.setup = function () {
-    this.playerEntry = new Entry(this.game.snake, '我', true);
+    if (!this.players.length) this.addPlayer(this.game.snake, '我'); // 本地单真人（原行为）
     // 开局只生成初始数量的 AI（后续随时间增长）
     var startCount = cfg.MP_AI_START_COUNT || cfg.MP_AI_COUNT;
     for (var i = 0; i < startCount; i++) this.spawnBot(0); // 早期 AI，智力普通
-    this.spawner.others = this.botSnakes; // 活引用：重生/淘汰自动反映到刷新避让
+    this.spawner.others = this.liveSnakes; // 活引用：重生/淘汰自动反映到刷新避让（含全部真人）
   };
 
-  /** 全部 Entry（玩家在前，含已淘汰） */
+  /** 全部 Entry（真人在前，含已淘汰） */
   Multiplayer.prototype.allEntries = function () {
-    var arr = [];
-    if (this.playerEntry) arr.push(this.playerEntry);
-    return arr.concat(this.bots);
+    return this.players.concat(this.bots);
   };
 
   /** 全部活蛇的 Snake 实例（AI 决策 / 出生避让用） */
@@ -2028,6 +2097,13 @@
     var es = this.allEntries(), arr = [];
     for (var i = 0; i < es.length; i++) if (es[i].alive) arr.push(es[i].snake);
     return arr;
+  };
+
+  /** 存活真人数量（联机房间结算判定用） */
+  Multiplayer.prototype.alivePlayerCount = function () {
+    var n = 0;
+    for (var i = 0; i < this.players.length; i++) if (this.players[i].alive) n++;
+    return n;
   };
 
   Multiplayer.prototype.aliveBotCount = function () {
@@ -2120,6 +2196,7 @@
 
     this.bots.push(e);
     this.botSnakes.push(snake);
+    this.liveSnakes.push(snake);
     return e;
   };
 
@@ -2147,14 +2224,16 @@
     return added;
   };
 
-  /** 淘汰一条蛇：掉落尸体 + 粒子闪光；AI 进入重生队列，玩家由 game 结算 */
+  /** 淘汰一条蛇：掉落尸体 + 粒子闪光；AI 进入重生队列，真人由 game/room 结算 */
   Multiplayer.prototype.kill = function (e) {
     if (!e.alive) return;
     e.alive = false;
     e.diedAt = this.timeMs;
-    this.dropCorpse(e);
+    var dropped = this.dropCorpse(e);
     this.dropDeathItems(e); // 必然掉 1 个随机道具 + 每 10 节额外掉 1 个
     this.particles.flash(e.snake.x, e.snake.y, '#FFD94A', 1.4, 3);
+    var li = this.liveSnakes.indexOf(e.snake);
+    if (li >= 0) this.liveSnakes.splice(li, 1);
     if (!e.isPlayer) {
       delete this.usedNames[e.name];
       var idx = this.botSnakes.indexOf(e.snake);
@@ -2162,6 +2241,7 @@
       var delay = cfg.MP_RESPAWN_MIN_MS + Math.random() * (cfg.MP_RESPAWN_MAX_MS - cfg.MP_RESPAWN_MIN_MS);
       this.respawnQueue.push({ at: this.timeMs + delay });
     }
+    this.emitEv('death', { id: e.id, isPlayer: e.isPlayer, x: e.snake.x, y: e.snake.y, drop: dropped });
   };
 
   /**
@@ -2256,6 +2336,7 @@
     if (!removed) return;
     this.particles.burst(removed.x, removed.y, cfg.COLORS[removed.color], 5, 0.8);
     B.bittenUntil = this.timeMs + cfg.MP_BITE_FLASH_MS;
+    this.emitEv('bite', { id: B.id, by: A.id, seg: segIdx, x: removed.x, y: removed.y, color: removed.color });
     if (B.snake.length() < cfg.MP_BITE_MIN_LENGTH) {
       dead[B.id] = { by: A }; // 保底淘汰：正常淘汰流程（尸体掉落）+ 计入 A 的击杀
       return;
@@ -2274,6 +2355,7 @@
 
   /**
    * 统一计分 + 特效（供 resolveElim 与 applyItem 共用）。
+   * 连击 combo 为 Entry 级状态（v3.0 下沉，多真人各自独立；窗口规则与单机一致）。
    * @param {Entry} e 被消除的蛇档案
    * @param {Array} removed 被移除节 [{color,x,y,chain}]
    * @param {number} fxBoost 特效放大（炸弹更强）
@@ -2283,11 +2365,12 @@
     if (!removed || !removed.length) return;
     if (CS.audio) CS.audio.playElim();
     e.elimTotal += removed.length;
-    // 连击（仅玩家计入，AI 的 elimScore 仅供调试）：窗口内连续消除 → combo 递增 → 分数成倍
+    // 连击（仅真人计分，AI 的 elimScore 仅供调试）：窗口内连续消除 → combo 递增 → 分数成倍
     var combo = 1;
     if (e.isPlayer) {
-      this.game.bumpCombo();
-      combo = Math.min(cfg.ELIM_COMBO_MAX, this.game.elimCombo);
+      e.combo = (e.comboTimer > 0) ? e.combo + 1 : 1;
+      e.comboTimer = cfg.ELIM_COMBO_WINDOW;
+      combo = Math.min(cfg.ELIM_COMBO_MAX, e.combo);
     }
     var waves = {};
     var i;
@@ -2315,19 +2398,20 @@
         this.particles.chainText(ccx, ccy - 46, combo + '连击 ×' + combo, 18 + combo);
       }
     }
+    this.emitEv('elim', { id: e.id, segs: removed, combo: combo, score: e.elimScore });
   };
 
   /**
-   * 拾取道具的统一处理（玩家与 AI 共用）：按 kind 触发对应效果 + 计分 + 特效。
+   * 拾取道具的统一处理（真人与 AI 共用）：按 kind 触发对应效果 + 计分 + 特效。
    * 特殊道具（wild/bomb/slow/clear/clear3/rand1-3）都会真正生效；
-   * 仅当 e 是玩家时弹出效果飘字（setItemToast），避免 AI 拾取刷屏。
+   * 真人拾取时弹出效果飘字（setItemToast，本地模式仅本机玩家可见；联机按 Entry 路由）。
    * @param {Entry} e 拾取者
    * @param {object} b 色块 {kind,color,x,y,rarity}
    */
   Multiplayer.prototype.applyItem = function (e, b) {
     var px = b.x, py = b.y;
     var isPlayer = e.isPlayer;
-    if (b.kind && b.kind !== 'color' && isPlayer) this.game.setItemToast(b.kind, b.color);
+    if (b.kind && b.kind !== 'color' && isPlayer) this.game.setItemToast(b.kind, b.color, e);
     if (b.kind === 'wild') {
       e.snake.growWild();
       if (CS.audio) CS.audio.playSpecial();
@@ -2366,18 +2450,19 @@
       this.scoreChain(e, rem2, 1, 0);
       this.particles.burst(px, py, '#FFD94A', 9, 1.3);
     } else if (b.kind === 'grab') {
-      // 多人专属「彩色星」：玩家吃到 → 当前总分立即 +20%（一次性加成，可叠加）；
-      // AI 吃到则只是把道具消耗掉（玩家失去抢夺机会）。无论谁吃，都清掉场上这颗并安排下一颗。
+      // 多人专属「彩色星」：真人吃到 → 自己当前总分立即 +20%（一次性加成，可叠加）；
+      // AI 吃到则只是把道具消耗掉（真人失去抢夺机会）。无论谁吃，都清掉场上这颗并安排下一颗。
       if (CS.audio) CS.audio.playSpecial();
       this.particles.burst(px, py, '#FFD94A', 16, 1.9);
       this.particles.ring(px, py, '#FFC83D', 1.8);
-      if (e.isPlayer) {
-        // score 在 mp.update 之后才由 game 汇总，这里取上一帧已汇总分（差一帧，可忽略）
-        var cur = (this.game.survivalScore || 0) + (this.game.elimScore || 0) + (this.game.mpBonusScore || 0);
-        var bonus = Math.max(1, Math.round(cur * cfg.GRAB_SCORE_MUL));
-        this.game.mpBonusScore = (this.game.mpBonusScore || 0) + bonus;
+      var bonus = 0;
+      if (isPlayer) {
+        var cur = (e.survivalScore || 0) + (e.elimScore || 0) + (e.mpBonusScore || 0);
+        bonus = Math.max(1, Math.round(cur * cfg.GRAB_SCORE_MUL));
+        e.mpBonusScore = (e.mpBonusScore || 0) + bonus;
         this.particles.chainText(px, py - 32, '分数 +20%！+' + bonus, 24);
       }
+      this.emitEv('grab', { id: e.id, isPlayer: isPlayer, bonus: bonus, x: px, y: py });
       // 消费场上这颗彩色星（collectAt 已将其移出 blocks，这里只清引用 + 排下一颗）
       this.spawner.grabBlock = null;
       this.spawner.grabTimer = cfg.GRAB_RESPAWN_MS;
@@ -2387,11 +2472,14 @@
       this.particles.burst(px, py, cfg.COLORS[b.color], 4);
       this.resolveElim(e);
     }
+    if (b.kind && b.kind !== 'color') {
+      this.emitEv('item', { id: e.id, kind: b.kind, color: b.color || null, x: px, y: py });
+    }
   };
 
   /**
    * 阵亡掉落道具：除身体散落色块（dropCorpse）外，必然额外掉落一个随机道具，
-   * 且玩家/任意蛇每有 10 个颜色节（不含尾巴节）再额外掉一个随机道具（长度越长奖励越多）。
+   * 且真人/任意蛇每有 10 个颜色节（不含尾巴节）再额外掉一个随机道具（长度越长奖励越多）。
    * @param {Entry} e 被淘汰的蛇
    */
   Multiplayer.prototype.dropDeathItems = function (e) {
@@ -2446,7 +2534,7 @@
   };
 
   /**
-   * 每帧推进（由 game.updateMulti 调用，玩家输入已由 game 写入 targetAngle）：
+   * 每帧推进（由 game.updateMulti / room.tick 调用；真人输入已写入各 snake.targetAngle）：
    *  AI 决策 → 动态速度 → 推进所有蛇 → 碰撞淘汰 → 吃色/消除 → 重生补充 → 色块刷新。
    */
   Multiplayer.prototype.update = function (dt) {
@@ -2460,11 +2548,21 @@
     // 随时间提升特殊道具刷新概率（越后期道具越密集）
     this.spawner.specialChance = cfg.specialChanceForElapsed(this.game.elapsed);
 
-    // AI 决策（与玩家同规则：只设目标角，转向速率由 Snake.update 钳制）
+    // AI 决策（与真人同规则：只设目标角，转向速率由 Snake.update 钳制）
     for (i = 0; i < this.bots.length; i++) {
       e = this.bots[i];
       if (!e.alive) continue;
       e.snake.setTargetAngle(CS.AI.decide(e.snake, env, e));
+    }
+
+    // 真人计分状态推进：生存分（死亡冻结）+ 连击窗口衰减
+    for (i = 0; i < this.players.length; i++) {
+      e = this.players[i];
+      if (e.alive) e.survivalScore = Math.floor(this.timeMs / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
+      if (e.comboTimer > 0) {
+        e.comboTimer -= dt;
+        if (e.comboTimer <= 0) { e.comboTimer = 0; e.combo = 0; }
+      }
     }
 
     // 动态速度（长度/时间加成，封顶 SPEED_MAX；减速道具期间 ×SLOW_FACTOR）+ 推进
@@ -2481,7 +2579,7 @@
     // 碰撞淘汰（墙 / 头头 / 头身）
     this.collide();
 
-    // 吃色块 + 消除（玩家优先，其后 AI；特殊道具走 applyItem 真正生效 + 玩家飘字）
+    // 吃色块 + 消除（真人优先，其后 AI；特殊道具走 applyItem 真正生效 + 真人飘字）
     for (i = 0; i < entries.length; i++) {
       e = entries[i];
       if (!e.alive) continue;
@@ -2489,16 +2587,28 @@
       for (var g = 0; g < got.length; g++) this.applyItem(e, got[g]);
     }
 
-    // 流星砖块：直线飞行 + 命中玩家蛇身注入中段（与单人同规则；玩家专属，AI 不受影响）
-    var mev = this.spawner.updateMeteors(dt, this.game.snake);
+    // 流星砖块：直线飞行 + 命中真人蛇身注入中段（目标 = 全部存活真人；单人时行为不变）
+    var targets = [];
+    for (i = 0; i < this.players.length; i++) {
+      if (this.players[i].alive) targets.push(this.players[i]);
+    }
+    var targetSnakes = [];
+    for (i = 0; i < targets.length; i++) targetSnakes.push(targets[i].snake);
+    var mev = this.spawner.updateMeteors(dt, targetSnakes);
     for (var mi = 0; mi < mev.length; mi++) {
       var ev = mev[mi];
-      this.game.snake.insertAt(ev.idx, ev.color);
+      var owner = null;
+      for (i = 0; i < targets.length; i++) {
+        if (targets[i].snake === ev.snake) { owner = targets[i]; break; }
+      }
+      if (!owner) continue;
+      owner.snake.insertAt(ev.idx, ev.color);
       this.particles.burst(ev.x, ev.y, cfg.COLORS[ev.color], 7, 1.3);
       if (CS.audio) CS.audio.playSpecial();
-      this.playerEntry.elimScore += cfg.METEOR_SCORE; // 记到玩家 Entry（多人对局分以 Entry 为准）
-      this.game.setItemToast('meteor', ev.color); // 流星注入飘字（仅玩家可见）
-      this.resolveElim(this.playerEntry);
+      owner.elimScore += cfg.METEOR_SCORE; // 记到被注入的真人 Entry
+      this.game.setItemToast('meteor', ev.color, owner); // 流星注入飘字（按 Entry 路由）
+      this.emitEv('meteor', { id: owner.id, idx: ev.idx, color: ev.color, x: ev.x, y: ev.y });
+      this.resolveElim(owner);
     }
 
     // AI 补充 + 稀疏刷新
@@ -2508,7 +2618,7 @@
 
   // ---------------- 排行榜与名次 ----------------
 
-  /** 实时排行榜：活蛇按当前节数降序（同节数玩家优先），[{name, length, isPlayer}] */
+  /** 实时排行榜：活蛇按当前节数降序（同节数真人优先），[{name, length, isPlayer}] */
   Multiplayer.prototype.leaderboard = function () {
     var es = this.allEntries();
     var arr = [];
@@ -2534,11 +2644,1108 @@
   };
 
   CS.Multiplayer = Multiplayer;
+  CS.MultiplayerEntry = Entry;
+  CS.resetMultiplayerIds = resetIds;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<!-- v3.0 联机：协议/传输/插值/预测/远程视图/在线控制器（按依赖顺序） -->
+<script>
+/* ===== 内联自 js/net/protocol.js（勿手改，源文件为准） ===== */
+'use strict';
+/**
+ * protocol.js — 联机对战协议（v3.0，两端共享：浏览器挂 CS.protocol，Node 可 require）
+ *
+ * 设计见 docs/architecture/01-online-multiplayer.md §5.1。
+ * 消息一律 JSON 文本帧，带 t（type）字段。v1 为全量快照 + 坐标/角度量化（1px / 0.001rad）
+ * + 扁平数组 + 1 字符颜色短码，传输层叠加 permessage-deflate（见 server/index.js），
+ * 后续升级二进制/增量时只改本文件。
+ *
+ * 快照键名采用短键以控制 JSON 体积：
+ *   snap:  { t, tk(tick), ack, tm(timeMs), sn[snakes], bl[blocks], mt[meteors] }
+ *   snake: { id, nm, pl(isPlayer), al(alive), x, y, a(angle), sp(speed),
+ *            co[colors], sg[[x,y]节心含尾巴节], kl(kills), es(elimScore), et(elimTotal),
+ *            ml(maxLen), bt(bittenUntil), sl(slowUntil) }
+ *   block: { x, y, c(color|null), k(kind), r(rarity|null), ph(phase), ttl, rr(收集半径) }
+ *   meteor:{ x, y, vx, vy, c, ph, tr[[x,y]轨迹] }
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+
+  var PROTO_VER = 1;
+
+  // ---------------- 消息类型 ----------------
+  // 客户端 → 服务器
+  var C2S = {
+    JOIN: 'join',       // { t, ver, name }
+    CANCEL: 'cancel',   // { t }
+    INPUT: 'input',     // { t, seq, a(angle), bo(boost 0/1) }
+    PING: 'ping'        // { t, ts }
+  };
+  // 服务器 → 客户端
+  var S2C = {
+    QUEUED: 'queued',   // { t, pos, need }
+    MATCHED: 'matched', // { t, roomId, playerId, players:[{id,name}], countdownMs, W, H }
+    START: 'start',     // { t, tick }
+    SNAP: 'snap',       // { t, tk, ack, tm, sn, bl, mt }
+    EVENT: 'event',     // { t, k(event kind), ... }（见 EVENT_KIND）
+    OVER: 'over',       // { t, reason, ranks:[{id,name,score,rank,alive}] }
+    PONG: 'pong',       // { t, ts }
+    ERROR: 'error'      // { t, code, msg }
+  };
+  // event.kind 离散事件（驱动粒子/音效/播报，客户端不自行判定）
+  var EVENT_KIND = {
+    DEATH: 'death',       // { k, id, by(击杀者id|null), x, y, drop(尸体掉色块数) }
+    ELIM: 'elim',         // { k, id, segs:[{x,y,c,chain}], combo }
+    ITEM: 'item',         // { k, id, kind, color, x, y }（吃到特殊道具）
+    TOAST: 'toast',       // { k, id, kind, color }（等价于单机 setItemToast，仅 id=接收者本人时展示）
+    GRAB: 'grab',         // { k, id, bonus }（彩色星被吃；bonus>0 表示真人加分）
+    GRAB_SPAWN: 'grab_spawn', // { k, x, y }（彩色星出现，播报表+小地图涟漪）
+    METEOR: 'meteor',     // { k, id, idx, color, x, y }（流星注入）
+    BITE: 'bite',         // { k, id(被咬者), seg, x, y, color }
+    SELF_PULL: 'self_pull',// { k, id, x, y, color }
+    WALL: 'wall'          // { k, x, y, w, h }（动态墙体新增，客户端补画）
+  };
+  // over.reason
+  var OVER_REASON = {
+    DEAD: 'dead',             // 你死了（按名次结算）
+    WIN: 'win',               // 你是最后存活者
+    TIMEOUT: 'timeout',       // 对局到时，按总分
+    OPPONENT_LEFT: 'op_left', // 对手全部掉线
+    DROPPED: 'dropped'        // 你掉线被判负（连接中断时本地合成，非服务器下发）
+  };
+
+  // ---------------- 量化 ----------------
+  /** 坐标量化到 1px（远程渲染足够；配合 permessage-deflate 控制带宽） */
+  function qCoord(v) { return Math.round(v); }
+  /** 角度量化到 0.001rad（≈0.057°） */
+  function qAngle(v) { return Math.round(v * 1000) / 1000; }
+
+  // ---------------- 颜色短码（1 字符，快照体积优化） ----------------
+  var COLOR_SHORT = { red: 'r', blue: 'b', green: 'g', orange: 'o', purple: 'u', yellow: 'y', teal: 't', pink: 'k', wild: 'w' };
+  var COLOR_LONG = {};
+  (function () { for (var k in COLOR_SHORT) COLOR_LONG[COLOR_SHORT[k]] = k; })();
+  function cShort(c) { return COLOR_SHORT[c] || 'r'; }
+  function cLong(s) { return COLOR_LONG[s] || 'red'; }
+  function packColors(colors) {
+    var s = '';
+    for (var i = 0; i < colors.length; i++) s += cShort(colors[i]);
+    return s;
+  }
+  function unpackColors(s) {
+    var arr = [];
+    for (var i = 0; i < s.length; i++) arr.push(cLong(s[i]));
+    return arr;
+  }
+
+  // ---------------- 编解码 ----------------
+  function encode(msg) { return JSON.stringify(msg); }
+  /** 解析失败返回 null（调用方对畸形消息做丢弃/踢出处理） */
+  function decode(text) {
+    if (typeof text !== 'string' || text.length > 65536) return null;
+    try {
+      var m = JSON.parse(text);
+      return (m && typeof m.t === 'string') ? m : null;
+    } catch (e) { return null; }
+  }
+
+  // ---------------- 客户端消息构造 ----------------
+  function join(name) { return { t: C2S.JOIN, ver: PROTO_VER, name: String(name || '玩家').slice(0, 12) }; }
+  function cancel() { return { t: C2S.CANCEL }; }
+  function input(seq, angle, boost) { return { t: C2S.INPUT, seq: seq | 0, a: qAngle(angle), bo: boost ? 1 : 0 }; }
+  function ping(ts) { return { t: C2S.PING, ts: ts }; }
+
+  // ---------------- 快照序列化（服务器/LocalTransport 产出） ----------------
+
+  /**
+   * 序列化一条参赛蛇（Entry 或 RemoteEntry）。
+   * sg 为扁平整数数组 [x0,y0,x1,y1,...]（含尾巴节），co 为 1 字符颜色短码串。
+   * @param e Entry（见 multiplayer.js）：{ id, name, isPlayer, alive, kills, elimScore,
+   *          elimTotal, maxLen, bittenUntil, slowUntil, snake }
+   */
+  function serSnake(e) {
+    var s = e.snake;
+    var sg = [];
+    for (var i = 0; i < s.segPos.length; i++) {
+      sg.push(qCoord(s.segPos[i].x), qCoord(s.segPos[i].y));
+    }
+    return {
+      id: e.id, nm: e.name, pl: e.isPlayer ? 1 : 0, al: e.alive ? 1 : 0,
+      x: qCoord(s.x), y: qCoord(s.y), a: qAngle(s.angle), sp: qCoord(s.speed),
+      co: packColors(s.colors), sg: sg,
+      kl: e.kills | 0, es: e.elimScore | 0, et: e.elimTotal | 0, ml: e.maxLen | 0,
+      sv: e.survivalScore | 0, mb: e.mpBonusScore | 0, // 生存分/彩色星加成（HUD 计分显示）
+      bt: e.bittenUntil | 0, sl: e.slowUntil | 0
+    };
+  }
+
+  function serBlock(b) {
+    return {
+      x: qCoord(b.x), y: qCoord(b.y),
+      c: b.color ? cShort(b.color) : null, k: b.kind || 'color', r: b.rarity || null,
+      ph: Math.round((b.phase || 0) * 100) / 100, ttl: b.ttl | 0, rr: b.rr || b.r || 0
+    };
+  }
+
+  function serMeteor(m) {
+    var tr = [];
+    for (var i = 0; i < (m.trail || []).length; i++) tr.push(qCoord(m.trail[i].x), qCoord(m.trail[i].y));
+    return { x: qCoord(m.x), y: qCoord(m.y), vx: qCoord(m.vx), vy: qCoord(m.vy), c: cShort(m.color), ph: Math.round((m.phase || 0) * 100) / 100, tr: tr };
+  }
+
+  /** 组装一帧快照 */
+  function snap(tick, ack, timeMs, entries, blocks, meteors) {
+    var sn = [];
+    for (var i = 0; i < entries.length; i++) sn.push(serSnake(entries[i]));
+    var bl = [];
+    for (i = 0; i < blocks.length; i++) bl.push(serBlock(blocks[i]));
+    var mt = [];
+    for (i = 0; i < (meteors || []).length; i++) mt.push(serMeteor(meteors[i]));
+    return { t: S2C.SNAP, tk: tick | 0, ack: ack | 0, tm: timeMs | 0, sn: sn, bl: bl, mt: mt };
+  }
+
+  function event(kind, data) {
+    var m = { t: S2C.EVENT, k: kind };
+    if (data) for (var k in data) m[k] = data[k];
+    return m;
+  }
+
+  // ---------------- 反序列化（客户端 RemoteMatch 用） ----------------
+
+  function deSnake(d) {
+    var segPos = [];
+    for (var i = 0; i + 1 < d.sg.length; i += 2) segPos.push({ x: d.sg[i], y: d.sg[i + 1] });
+    return {
+      id: d.id, name: d.nm, isPlayer: !!d.pl, alive: !!d.al,
+      x: d.x, y: d.y, angle: d.a, speed: d.sp,
+      colors: unpackColors(d.co), segPos: segPos,
+      kills: d.kl, elimScore: d.es, elimTotal: d.et, maxLen: d.ml,
+      survivalScore: d.sv, mpBonusScore: d.mb,
+      bittenUntil: d.bt, slowUntil: d.sl
+    };
+  }
+
+  function deBlock(d) {
+    return { x: d.x, y: d.y, color: d.c ? cLong(d.c) : null, kind: d.k, rarity: d.r, phase: d.ph, ttl: d.ttl, r: d.rr || 0 };
+  }
+
+  function deMeteor(d) {
+    var tr = [];
+    for (var i = 0; i + 1 < (d.tr || []).length; i += 2) tr.push({ x: d.tr[i], y: d.tr[i + 1] });
+    return { x: d.x, y: d.y, vx: d.vx, vy: d.vy, color: cLong(d.c), phase: d.ph, trail: tr };
+  }
+
+  CS.protocol = {
+    PROTO_VER: PROTO_VER,
+    C2S: C2S, S2C: S2C, EVENT_KIND: EVENT_KIND, OVER_REASON: OVER_REASON,
+    qCoord: qCoord, qAngle: qAngle,
+    encode: encode, decode: decode,
+    join: join, cancel: cancel, input: input, ping: ping,
+    serSnake: serSnake, serBlock: serBlock, serMeteor: serMeteor,
+    snap: snap, event: event,
+    deSnake: deSnake, deBlock: deBlock, deMeteor: deMeteor
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = CS.protocol;
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
 <script>
-/* ===== inlined: js/renderer.js ===== */
+/* ===== 内联自 js/net/transport.js（勿手改，源文件为准） ===== */
+'use strict';
+/**
+ * transport.js — 传输层接口（v3.0，浏览器/Node 通用）
+ *
+ * 设计见 docs/architecture/01-online-multiplayer.md §5.2。
+ * game/netMatch 只面对本接口，不知道自己在联网还是单机。
+ *
+ * 方法：
+ *   connect()              建立连接（LocalTransport 为空操作，立即 onOpen）
+ *   joinMatch(name)        进匹配队列
+ *   cancelMatch()          取消匹配
+ *   sendInput(angle,boost) 上行方向输入（实现方负责节流）
+ *   dispose()              释放资源
+ *
+ * 事件（on(name, fn) 注册）：
+ *   open                   连接就绪
+ *   queued   {pos, need}   排队中
+ *   matched  {roomId, playerId, players, countdownMs, W, H}
+ *   start    {tick}
+ *   snap     快照（protocol.snap 结构）
+ *   event    离散事件（protocol.event 结构）
+ *   over     {reason, ranks}
+ *   drop     {reason}      连接中断（→ 掉线判负结算）
+ *   error    {code, msg}
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+
+  function TransportBase() { this._handlers = {}; }
+
+  TransportBase.prototype.on = function (name, fn) {
+    (this._handlers[name] = this._handlers[name] || []).push(fn);
+    return this;
+  };
+
+  TransportBase.prototype._emit = function (name, a, b) {
+    var hs = this._handlers[name];
+    if (!hs) return;
+    for (var i = 0; i < hs.length; i++) {
+      try { hs[i](a, b); } catch (e) {
+        if (typeof console !== 'undefined') console.error('[transport] handler error (' + name + '):', e);
+      }
+    }
+  };
+
+  // 子类实现以下方法（基类给出空操作/抛错兜底）
+  TransportBase.prototype.connect = function () { this._emit('open'); };
+  TransportBase.prototype.joinMatch = function (/* name */) {};
+  TransportBase.prototype.cancelMatch = function () {};
+  TransportBase.prototype.sendInput = function (/* angle, boost */) {};
+
+  /** 便捷：一次性注册整张事件表 { queued: fn, snap: fn, ... } */
+  TransportBase.prototype.onAll = function (table) {
+    for (var k in table) if (table.hasOwnProperty(k)) this.on(k, table[k]);
+    return this;
+  };
+
+  TransportBase.prototype.dispose = function () { this._handlers = {}; };
+
+  CS.TransportBase = TransportBase;
+  if (typeof module !== 'undefined' && module.exports) module.exports = TransportBase;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== 内联自 js/net/interpolation.js（勿手改，源文件为准） ===== */
+'use strict';
+/**
+ * interpolation.js — 他人蛇快照插值缓冲（v3.0 M4）
+ *
+ * 设计见 docs/architecture/01-online-multiplayer.md §5.4：
+ * 渲染始终落后权威时刻 delayMs（默认 120ms，约 2 个快照间隔），
+ * 在两帧快照间对位置/角度/节心做线性插值（角度走最短弧）。
+ *
+ * 用法：RemoteMatch.applySnap 时 push(buffer, snap)；每帧渲染前调用
+ * sampleInto(buffer, entries, nowMs) 把插值结果写回 Entry 视图（原位更新，引用稳定）。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var u = CS.utils;
+
+  /** 最短弧角度插值 */
+  function lerpAngle(a, b, t) {
+    return u.normAngle(a + u.normAngle(b - a) * t);
+  }
+
+  function InterpBuffer(delayMs) {
+    this.delay = delayMs || 120;
+    this.snaps = []; // [{ time(本地接收时刻), byId: {id: deSnake} }] 按时间升序
+  }
+
+  /**
+   * 收到一帧快照（snap 为协议结构；deSnake 在 push 内完成，后续零解析成本）。
+   * @param {object} snap protocol.snap 消息
+   * @param {number} nowMs 本地接收时刻（Date.now 风格）
+   * @param {function} deSnake protocol.deSnake
+   */
+  InterpBuffer.prototype.push = function (snap, nowMs, deSnake) {
+    var byId = {};
+    for (var i = 0; i < snap.sn.length; i++) {
+      var d = deSnake(snap.sn[i]);
+      byId[d.id] = d;
+    }
+    this.snaps.push({ time: nowMs, byId: byId, tick: snap.tk });
+    // 只保留最近 1 秒（15Hz 下 ~15 帧），渲染延迟永远落在这个窗口内
+    while (this.snaps.length > 30) this.snaps.shift();
+  };
+
+  /** 取渲染时刻的前后两帧快照（不足两帧时返回 [最新, 最新]） */
+  InterpBuffer.prototype._bracket = function (renderT) {
+    var ss = this.snaps;
+    if (!ss.length) return null;
+    if (ss.length === 1 || renderT >= ss[ss.length - 1].time) {
+      return [ss[ss.length - 1], ss[ss.length - 1], 0];
+    }
+    for (var i = ss.length - 1; i >= 1; i--) {
+      if (ss[i - 1].time <= renderT) {
+        var span = ss[i].time - ss[i - 1].time;
+        return [ss[i - 1], ss[i], span > 0 ? (renderT - ss[i - 1].time) / span : 0];
+      }
+    }
+    return [ss[0], ss[0], 0];
+  };
+
+  /**
+   * 采样一帧插值结果：{ id: {x,y,angle,segPos, ...静态字段取较新帧} }
+   * 节心插值要求两帧节数一致（变长/消除瞬间取较新帧，一跳可接受）。
+   */
+  InterpBuffer.prototype.sample = function (nowMs) {
+    var br = this._bracket(nowMs - this.delay);
+    if (!br) return null;
+    var s0 = br[0], s1 = br[1], t = Math.max(0, Math.min(1, br[2]));
+    var out = {};
+    for (var id in s1.byId) {
+      var b = s1.byId[id], a = s0.byId[id];
+      if (!a || a === b) { out[id] = b; continue; }
+      var segPos = b.segPos;
+      if (a.segPos.length === b.segPos.length) {
+        segPos = [];
+        for (var i = 0; i < b.segPos.length; i++) {
+          segPos.push({
+            x: a.segPos[i].x + (b.segPos[i].x - a.segPos[i].x) * t,
+            y: a.segPos[i].y + (b.segPos[i].y - a.segPos[i].y) * t
+          });
+        }
+      }
+      out[id] = {
+        id: b.id, name: b.name, isPlayer: b.isPlayer, alive: b.alive,
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+        angle: lerpAngle(a.angle, b.angle, t),
+        speed: b.speed,
+        colors: b.colors, segPos: segPos,
+        kills: b.kills, elimScore: b.elimScore, elimTotal: b.elimTotal, maxLen: b.maxLen,
+        bittenUntil: b.bittenUntil, slowUntil: b.slowUntil
+      };
+    }
+    return out;
+  };
+
+  CS.InterpBuffer = InterpBuffer;
+  CS.lerpAngle = lerpAngle;
+  if (typeof module !== 'undefined' && module.exports) module.exports = InterpBuffer;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== 内联自 js/net/prediction.js（勿手改，源文件为准） ===== */
+'use strict';
+/**
+ * prediction.js — 本机玩家蛇预测 + 软校正（v3.0 M4）
+ *
+ * 设计见 docs/architecture/01-online-multiplayer.md §5.4：
+ * 玩家输入立刻在本地生效（零操作延迟），服务器快照带回权威状态后软校正：
+ *  - 偏差 < HARD_SNAP_PX（默认 80px）：按 CORRECT_RATE（默认 10%/帧）收敛，绝不瞬移；
+ *  - 偏差 ≥ HARD_SNAP_PX（极少见：丢包爆发/被咬瞬间）：直接对齐权威状态；
+ *  - 颜色序列/速度以服务器为准（吃块/消除/咬断都是服务器裁决）。
+ *
+ * 预测体是一个真正的 CS.Snake 实例（与服务器同一套运动模型），
+ * 轨迹用快照节心近似重建（节间距 SEG_SPACING ≈ TRAIL_STEP 的整数倍，形状高度接近）。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+  var u = CS.utils;
+
+  var HARD_SNAP_PX = 80;   // 偏差超过该值直接对齐（防长时间错误漂移）
+  var CORRECT_RATE = 0.1;  // 每帧收敛剩余偏差的 10%
+
+  function SelfPredictor() {
+    this.snake = null;       // 本地预测蛇（CS.Snake 实例）
+    this._corr = { x: 0, y: 0 };  // 待收敛的位置偏差
+    this._corrAngle = 0;     // 待收敛的角度偏差
+    this.lastErr = 0;        // 最近一次 reconcile 的偏差（监控/测试用）
+    this.hardSnaps = 0;      // 硬对齐次数（应极少；监控用）
+  }
+
+  /**
+   * 用权威快照（deSnake 结果）初始化/重建预测体。
+   * @param {object} d protocol.deSnake 的本机玩家蛇
+   * @param {string[]} colorKeys 已解锁颜色池（保底补砖用）
+   */
+  SelfPredictor.prototype.attach = function (d, colorKeys) {
+    var s = Object.create(CS.Snake.prototype);
+    s.x = d.x; s.y = d.y;
+    s.angle = d.angle; s.targetAngle = d.angle;
+    s.speed = d.speed;
+    s.colors = d.colors.slice();
+    s.colorKeys = colorKeys || cfg.COLOR_KEYS;
+    // 轨迹近似：节心数组头在前、间距 SEG_SPACING，正好可当 trail 用
+    s.trail = d.segPos.map(function (p) { return { x: p.x, y: p.y }; });
+    if (!s.trail.length) s.trail = [{ x: d.x, y: d.y }];
+    s.segPos = [];
+    s.selfPullCd = 0;
+    s.computeBody();
+    s.trimTrail();
+    this.snake = s;
+    this._corr = { x: 0, y: 0 };
+    this._corrAngle = 0;
+  };
+
+  /** 每帧本地推进：写入最新输入 → 运动学积分 → 应用一份软校正 */
+  SelfPredictor.prototype.update = function (dtMs, angle) {
+    var s = this.snake;
+    if (!s) return;
+    if (typeof angle === 'number') s.setTargetAngle(angle);
+    s.update(dtMs);
+    // 软校正：位置/角度各收敛剩余偏差的 10%，收敛到 0.1px 内清零
+    if (Math.abs(this._corr.x) > 0.1 || Math.abs(this._corr.y) > 0.1) {
+      s.x += this._corr.x * CORRECT_RATE;
+      s.y += this._corr.y * CORRECT_RATE;
+      this._corr.x *= (1 - CORRECT_RATE);
+      this._corr.y *= (1 - CORRECT_RATE);
+      s.computeBody();
+    } else { this._corr.x = 0; this._corr.y = 0; }
+    if (Math.abs(this._corrAngle) > 0.001) {
+      s.angle = u.normAngle(s.angle + this._corrAngle * CORRECT_RATE);
+      this._corrAngle *= (1 - CORRECT_RATE);
+    } else { this._corrAngle = 0; }
+  };
+
+  /**
+   * 收到本机蛇权威快照（deSnake 结果）时的 reconcile：
+   * 颜色序列/速度直接以服务器为准；位置/角度按偏差大小软校正或硬对齐。
+   */
+  SelfPredictor.prototype.reconcile = function (d) {
+    var s = this.snake;
+    if (!s) { this.attach(d); return; }
+    // 颜色序列（吃块/消除/咬断/流星注入全是服务器裁决，直接采纳）
+    if (s.colors.join() !== d.colors.join()) {
+      s.colors = d.colors.slice();
+      s.computeBody();
+    }
+    s.speed = d.speed;
+    var dx = d.x - s.x, dy = d.y - s.y;
+    var err = Math.sqrt(dx * dx + dy * dy);
+    this.lastErr = err;
+    if (err >= HARD_SNAP_PX) {
+      this.attach(d); // 硬对齐（丢包爆发/长卡顿后的自救）
+      this.hardSnaps++;
+      return;
+    }
+    this._corr.x += dx;
+    this._corr.y += dy;
+    this._corrAngle += u.normAngle(d.angle - s.angle);
+  };
+
+  /** 当前预测视图（供渲染：与 Snake 同形） */
+  SelfPredictor.prototype.view = function () { return this.snake; };
+
+  CS.SelfPredictor = SelfPredictor;
+  CS.PREDICT_HARD_SNAP_PX = HARD_SNAP_PX;
+  if (typeof module !== 'undefined' && module.exports) module.exports = SelfPredictor;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== 内联自 js/net/netMatch.js（勿手改，源文件为准） ===== */
+'use strict';
+/**
+ * netMatch.js — 联机对局远程视图（v3.0）：把 snap/event 数据流维护成与 CS.Multiplayer
+ * 同构的只读视图，renderer/game 多人分支无需分辨本地/联机（形状模仿，见
+ * docs/architecture/01-online-multiplayer.md §5.5）。
+ *
+ * v1 为「最新快照直达」（无插值）；M4 将在此层内加 120ms 插值缓冲，对外形状不变。
+ *
+ * 视图对象：
+ *   RemoteMatch.playerEntry   本机玩家 Entry 视图（按 playerId）
+ *   RemoteMatch.bots          除本机外的全部 Entry 视图（真人 + AI，渲染/HUD 复用）
+ *   RemoteMatch.allEntries() / leaderboard() / rankOf(e) / aliveSnakes() / timeMs
+ *   Entry 视图字段与 multiplayer.Entry 对齐；snake 视图带 length()/totalLength()/
+ *   headColor()/headDir()，segPos/colors/x/y/angle/speed 与本地 Snake 同形。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var P = CS.protocol;
+
+  /** 蛇视图：快照数据 + 本地 Snake 的只读方法面 */
+  function makeSnakeView(d) {
+    var v = {
+      x: d.x, y: d.y, angle: d.angle, targetAngle: d.angle, speed: d.speed,
+      colors: d.colors, segPos: d.segPos,
+      length: function () { return this.colors.length; },
+      totalLength: function () { return this.colors.length + 1; },
+      headColor: function () { return this.colors[0]; },
+      headDir: function () { return { x: Math.cos(this.angle), y: Math.sin(this.angle) }; }
+    };
+    return v;
+  }
+
+  function makeEntryView(d) {
+    return {
+      id: d.id, name: d.name, isPlayer: d.isPlayer, alive: d.alive,
+      kills: d.kills, elimScore: d.elimScore, elimTotal: d.elimTotal, maxLen: d.maxLen,
+      survivalScore: d.survivalScore || 0, mpBonusScore: d.mpBonusScore || 0,
+      bittenUntil: d.bittenUntil, slowUntil: d.slowUntil,
+      snake: makeSnakeView(d)
+    };
+  }
+
+  /** 快照原位更新（保留对象引用，M4 插值层挂在这里） */
+  function updateEntryView(e, d) {
+    e.name = d.name; e.isPlayer = d.isPlayer; e.alive = d.alive;
+    e.kills = d.kills; e.elimScore = d.elimScore; e.elimTotal = d.elimTotal; e.maxLen = d.maxLen;
+    e.survivalScore = d.survivalScore || 0; e.mpBonusScore = d.mpBonusScore || 0;
+    e.bittenUntil = d.bittenUntil; e.slowUntil = d.slowUntil;
+    var s = e.snake;
+    s.x = d.x; s.y = d.y; s.angle = d.angle; s.targetAngle = d.angle; s.speed = d.speed;
+    s.colors = d.colors; s.segPos = d.segPos;
+  }
+
+  /**
+   * @param {number} [playerId] 本机玩家 Entry id（matched 消息给出）
+   * @param {object} [opts] { interpDelayMs } 传 0/false 关闭插值（默认 120ms，需 js/net/interpolation.js）
+   */
+  function RemoteMatch(playerId, opts) {
+    this.playerId = playerId || 0;
+    this.playerEntry = null;
+    this.bots = [];          // 除本机外全部 Entry 视图
+    this.entries = [];       // 全部 Entry 视图（按 id 升序）
+    this.blocks = [];
+    this.meteors = [];
+    this.timeMs = 0;
+    this.tick = 0;
+    this.lastAck = 0;
+    this._byId = {};
+    var delay = opts && 'interpDelayMs' in opts ? opts.interpDelayMs : 120;
+    this._interp = (delay && CS.InterpBuffer) ? new CS.InterpBuffer(delay) : null;
+  }
+
+  /** 应用一帧快照（protocol.snap 结构）；色块/流星取最新，蛇进插值缓冲 */
+  RemoteMatch.prototype.applySnap = function (snap, nowMs) {
+    this.tick = snap.tk;
+    this.timeMs = snap.tm;
+    this.lastAck = snap.ack;
+    this._applyLatest(snap);
+    if (this._interp) this._interp.push(snap, nowMs || Date.now(), P.deSnake);
+  };
+
+  /** 最新快照直达（M2 行为；插值关闭时渲染也用它） */
+  RemoteMatch.prototype._applyLatest = function (snap) {
+    var i, d, e;
+    for (i = 0; i < snap.sn.length; i++) {
+      d = P.deSnake(snap.sn[i]);
+      e = this._byId[d.id];
+      if (e) updateEntryView(e, d);
+      else { e = makeEntryView(d); this._byId[d.id] = e; this.entries.push(e); }
+    }
+    this.entries.sort(function (a, b) { return a.id - b.id; });
+    this.playerEntry = this._byId[this.playerId] || null;
+    this.bots = [];
+    for (i = 0; i < this.entries.length; i++) {
+      if (this.entries[i].id !== this.playerId) this.bots.push(this.entries[i]);
+    }
+    this.blocks = snap.bl.map(P.deBlock);
+    this.meteors = snap.mt.map(P.deMeteor);
+  };
+
+  /**
+   * 每帧渲染前调用：把「非本机」Entry 视图改写为 120ms 延迟的插值状态。
+   * 本机 Entry 不动（由 SelfPredictor 负责）；插值关闭时为空操作。
+   */
+  RemoteMatch.prototype.renderSample = function (nowMs) {
+    if (!this._interp) return;
+    var s = this._interp.sample(nowMs || Date.now());
+    if (!s) return;
+    for (var id in s) {
+      if (+id === this.playerId) continue; // 本机蛇走预测
+      var e = this._byId[id];
+      if (e) updateEntryView(e, s[id]);
+    }
+  };
+
+  // ---- 与 CS.Multiplayer 同构的只读接口（renderer/game 复用） ----
+
+  RemoteMatch.prototype.allEntries = function () { return this.entries.slice(); };
+
+  RemoteMatch.prototype.aliveSnakes = function () {
+    var arr = [];
+    for (var i = 0; i < this.entries.length; i++) {
+      if (this.entries[i].alive) arr.push(this.entries[i].snake);
+    }
+    return arr;
+  };
+
+  RemoteMatch.prototype.leaderboard = function () {
+    var arr = [];
+    for (var i = 0; i < this.entries.length; i++) {
+      var e = this.entries[i];
+      if (e.alive) arr.push({ name: e.name, length: e.snake.length(), isPlayer: e.id === this.playerId });
+    }
+    arr.sort(function (a, b) {
+      if (b.length !== a.length) return b.length - a.length;
+      return (a.isPlayer ? 0 : 1) - (b.isPlayer ? 0 : 1);
+    });
+    return arr;
+  };
+
+  RemoteMatch.prototype.rankOf = function (entry) {
+    var len = entry.snake.length();
+    var rank = 1;
+    for (var i = 0; i < this.entries.length; i++) {
+      var e = this.entries[i];
+      if (e !== entry && e.alive && e.snake.length() > len) rank++;
+    }
+    return rank;
+  };
+
+  CS.RemoteMatch = RemoteMatch;
+  if (typeof module !== 'undefined' && module.exports) module.exports = RemoteMatch;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== 内联自 js/net/wsTransport.js（勿手改，源文件为准） ===== */
+'use strict';
+/**
+ * wsTransport.js — WebSocket 传输实现（v3.0，浏览器联机客户端）
+ *
+ * 连接匹配服务器，把协议消息路由为 TransportBase 事件（queued/matched/start/snap/event/over），
+ * 断线发 drop（→ 客户端进"掉线判负"结算，不重连，见架构文档 §1）。
+ *
+ * 浏览器默认地址：同域 /ws（Nginx 反代）；可用 opts.url 覆盖（本地调试 ws://127.0.0.1:8090）。
+ * Node 测试可注入 opts.WebSocketImpl（ws 包）与 opts.url 直接复用本类。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var TransportBase = CS.TransportBase;
+  var P = CS.protocol;
+
+  function defaultUrl() {
+    if (typeof location !== 'undefined' && location.host) {
+      return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    }
+    return 'ws://127.0.0.1:8090';
+  }
+
+  function WsTransport(opts) {
+    TransportBase.call(this);
+    opts = opts || {};
+    this.url = opts.url || defaultUrl();
+    this.WS = opts.WebSocketImpl || (typeof WebSocket !== 'undefined' ? WebSocket : null);
+    this.heartbeatMs = opts.heartbeatMs || 5000;
+    this.ws = null;
+    this.seq = 0;
+    this.rtt = 0;          // 最近一次 ping/pong 往返（ms）
+    this.playerId = 0;
+    this.roomId = null;
+    this._hbTimer = null;
+    this._dropped = false;
+  }
+  WsTransport.prototype = Object.create(TransportBase.prototype);
+  WsTransport.prototype.constructor = WsTransport;
+
+  WsTransport.prototype.connect = function () {
+    var self = this;
+    if (!this.WS) throw new Error('WsTransport: 无 WebSocket 实现（浏览器应原生支持）');
+    var ws = this.ws = new this.WS(this.url);
+
+    ws.onopen = function () {
+      self._dropped = false;
+      self._emit('open');
+      self._hbTimer = setInterval(function () {
+        if (ws.readyState === 1) ws.send(P.encode(P.ping(Date.now())));
+      }, self.heartbeatMs);
+    };
+    ws.onmessage = function (ev) {
+      var msg = P.decode(typeof ev === 'string' ? ev : ev.data);
+      if (!msg) return; // 服务器消息畸形：忽略（协议内错误走 error 类型）
+      switch (msg.t) {
+        case P.S2C.QUEUED: self._emit('queued', msg); break;
+        case P.S2C.MATCHED:
+          self.playerId = msg.playerId; self.roomId = msg.roomId;
+          self._emit('matched', msg);
+          break;
+        case P.S2C.START: self._emit('start', msg); break;
+        case P.S2C.SNAP: self._emit('snap', msg); break;
+        case P.S2C.EVENT: self._emit('event', msg); break;
+        case P.S2C.OVER: self._emit('over', msg); break;
+        case P.S2C.PONG: self.rtt = Date.now() - msg.ts; break;
+        case P.S2C.ERROR: self._emit('error', msg); break;
+      }
+    };
+    ws.onclose = function () {
+      if (self._hbTimer) { clearInterval(self._hbTimer); self._hbTimer = null; }
+      if (!self._dropped) {
+        self._dropped = true;
+        self._emit('drop', { reason: P.OVER_REASON.DROPPED });
+      }
+    };
+    ws.onerror = function () { /* close 随后触发 drop */ };
+  };
+
+  WsTransport.prototype._send = function (obj) {
+    if (this.ws && this.ws.readyState === 1) this.ws.send(P.encode(obj));
+  };
+
+  WsTransport.prototype.joinMatch = function (name) { this._send(P.join(name)); };
+  WsTransport.prototype.cancelMatch = function () { this._send(P.cancel()); };
+
+  /** 上行输入（调用方节流，建议 ≤30Hz；seq 单调递增供服务器 ack） */
+  WsTransport.prototype.sendInput = function (angle, boost) {
+    this.seq++;
+    this._send(P.input(this.seq, angle, boost));
+  };
+
+  WsTransport.prototype.dispose = function () {
+    if (this._hbTimer) { clearInterval(this._hbTimer); this._hbTimer = null; }
+    if (this.ws) {
+      try { this._dropped = true; this.ws.close(); } catch (e) {}
+      this.ws = null;
+    }
+    TransportBase.prototype.dispose.call(this);
+  };
+
+  CS.WsTransport = WsTransport;
+  if (typeof module !== 'undefined' && module.exports) module.exports = WsTransport;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== 内联自 js/net/onlineMatch.js（勿手改，源文件为准） ===== */
+'use strict';
+/**
+ * onlineMatch.js — 在线对战客户端控制器（v3.0 M5，仅浏览器）
+ *
+ * 串起整条联机管线：WsTransport（或注入的测试/本地传输）→ RemoteMatch（快照视图+插值）
+ * → SelfPredictor（本机预测+软校正）→ Game 多人渲染分支（零改动复用）。
+ *
+ * 对 Game 的约定（game.online = 本实例时，game.update 把帧更新委托给 update(dt)）：
+ *   mode='multi' / mp=RemoteMatch / snake=预测蛇 / spawner=快照哑对象 / walls=服务器下发
+ *   得分字段（survivalScore/elimScore/mpBonusScore/score/elapsed）每帧从权威快照同步。
+ *
+ * 生命周期：begin() → matching（queued/matched）→ 首帧 snap 进 play → over/drop → finish()
+ * 不支持断线重连：drop 即判负进结算（架构文档 §1）。
+ *
+ * 服务器地址：opts.url > localStorage 'crayon_snake_web_server' > 同域 /ws（见 wsTransport）。
+ * 昵称：localStorage 'crayon_snake_web_nick'，缺省「我xxxx」（随机 4 位）。
+ */
+(function (root) {
+  var CS = root.CS = root.CS || {};
+  var cfg = CS.config;
+  var P = CS.protocol;
+  var store = CS.storage;
+
+  var INPUT_INTERVAL_MS = 33;   // 上行输入节流（≈30Hz）
+  var NICK_KEY = 'crayon_snake_web_nick';
+  var SERVER_KEY = 'crayon_snake_web_server';
+  var ONLINE_BEST_KEY = 'crayon_snake_web_online_best';
+
+  function defNick() {
+    var n = store.get(NICK_KEY, null);
+    if (n && typeof n === 'string') return n.slice(0, 12);
+    n = '我' + String(Math.floor(Math.random() * 9000) + 1000);
+    store.set(NICK_KEY, n);
+    return n;
+  }
+
+  /**
+   * @param {Game} game 宿主 Game（浏览器主控）
+   * @param {object} [opts] { url, transport, nick }
+   */
+  function OnlineMatch(game, opts) {
+    opts = opts || {};
+    this.game = game;
+    this.nick = opts.nick || defNick();
+    this.transport = opts.transport || new CS.WsTransport({ url: opts.url || store.get(SERVER_KEY, null) || undefined });
+    this.remote = null;
+    this.predictor = new CS.SelfPredictor();
+    this.playerId = 0;
+    this.players = [];         // matched 下发的真人名单 [{id,name}]
+    this.status = '正在连接服务器…'; // matching 界面状态行
+    this.detail = '';          // 状态行补充（队列位次/对手数）
+    this.over = false;
+    this._inputTimer = 0;
+    this._attached = false;    // 首帧快照已挂接预测体
+    this._finished = false;
+    this._disposed = false;
+  }
+
+  /** 连接并排入匹配队列（按钮「在线对战」触发） */
+  OnlineMatch.prototype.begin = function () {
+    var self = this;
+    this.transport.onAll({
+      open: function () {
+        if (self._disposed) return;
+        self.status = '正在匹配…';
+        self.transport.joinMatch(self.nick);
+      },
+      queued: function (m) {
+        var cur = m.size || m.pos || 1;
+        self.detail = '已就位 ' + cur + ' / ' + (m.need || '?') + '，人满即开（20 秒后 AI 补位）';
+      },
+      matched: function (m) { self._onMatched(m); },
+      start: function () { self.status = '开局！等待首帧同步…'; },
+      snap: function (m) { self._onSnap(m); },
+      event: function (m) { self._onEvent(m); },
+      over: function (m) { self._finish(m.reason, m.ranks, false); },
+      drop: function () { self._finish(P.OVER_REASON.DROPPED, null, true); },
+      error: function (m) {
+        self.status = '服务器错误：' + (m.msg || m.code || 'unknown');
+      }
+    });
+    try {
+      if (typeof this.transport.startAuto === 'function') {
+        // 本地传输（开发/测试用）：无连接概念，直接入队并自动泵模拟循环
+        this.transport.joinMatch(this.nick);
+        this.transport.startAuto(33);
+      } else {
+        this.transport.connect();
+      }
+    } catch (e) {
+      this.status = '连接失败：' + (e && e.message || e);
+    }
+  };
+
+  /** matched：建地图/视图/哑 spawner，进入开局倒计时（matching 界面继续） */
+  OnlineMatch.prototype._onMatched = function (m) {
+    var g = this.game;
+    this.playerId = m.playerId;
+    this.players = m.players || [];
+    this.status = '匹配成功！' + this.players.length + ' 名玩家同场';
+    this.detail = '开局倒计时 ' + Math.ceil((m.countdownMs || 0) / 1000) + ' 秒…';
+
+    g.mode = 'multi';
+    g.levelCfg = { level: 0, W: m.W, H: m.H, wallSegments: 0, targetScore: 0, speed: cfg.SNAKE_SPEED };
+    g.walls = new CS.Walls(m.W, m.H, { x: m.W / 2, y: m.H / 2 });
+    if (m.walls) {
+      for (var i = 0; i < m.walls.length; i++) {
+        var r = m.walls[i];
+        g.walls.rects.push({ x: r[0], y: r[1], w: r[2], h: r[3] });
+      }
+    }
+    // 联机不设本地解锁上限：服务器蛇可带任意颜色（渲染按快照 colors 直出）
+    g.unlockedCount = cfg.MAX_COLORS;
+    g.unlockedKeys = cfg.COLOR_KEYS.slice();
+    g.elapsed = 0; g.score = 0; g.survivalScore = 0; g.elimScore = 0;
+    g.mpBonusScore = 0; g.elimCombo = 0; g.elimComboTimer = 0;
+    g.mpResult = null; g.slowUntil = 0;
+    g.particles.clear();
+    g.joystick.onTouchEnd(g.joystick.touchId);
+
+    this.remote = new CS.RemoteMatch(this.playerId);
+    g.mp = this.remote;
+    // 哑 spawner：blocks/meteors 每帧从快照刷新；grabBlock 供彩色星播报/小地图涟漪
+    g.spawner = { blocks: [], meteors: [], grabBlock: null, others: [] };
+  };
+
+  /** 快照：应用视图 + 本机 reconcile；首帧挂接预测体并切入 play */
+  OnlineMatch.prototype._onSnap = function (m) {
+    if (!this.remote || this._finished) return;
+    var now = Date.now();
+    this.remote.applySnap(m, now);
+    var selfData = null;
+    for (var i = 0; i < m.sn.length; i++) {
+      if (m.sn[i].id === this.playerId) { selfData = P.deSnake(m.sn[i]); break; }
+    }
+    if (!selfData) return; // 本机 Entry 不在快照里（异常），等下一帧
+
+    var g = this.game;
+    if (!this._attached) {
+      this._attached = true;
+      this.predictor.attach(selfData, g.unlockedKeys);
+      g.snake = this.predictor.snake;
+      g.snapCamera();
+      if (CS.audio) CS.audio.startBgm();
+      g.setState('play');
+    } else {
+      this.predictor.reconcile(selfData);
+    }
+    this._syncSpawner();
+  };
+
+  /** 哑 spawner 与最新快照对齐（渲染/播报只读这三个字段） */
+  OnlineMatch.prototype._syncSpawner = function () {
+    var g = this.game, r = this.remote;
+    if (!g.spawner || !r) return;
+    g.spawner.blocks = r.blocks;
+    g.spawner.meteors = r.meteors;
+    var grab = null;
+    for (var i = 0; i < r.blocks.length; i++) {
+      if (r.blocks[i].kind === cfg.GRAB_KIND) { grab = r.blocks[i]; break; }
+    }
+    g.spawner.grabBlock = grab;
+  };
+
+  /** 离散事件 → 粒子/音效/飘字/墙体（本人相关事件才弹 toast） */
+  OnlineMatch.prototype._onEvent = function (m) {
+    var g = this.game, A = CS.audio;
+    var mine = m.id === this.playerId;
+    var col = (m.color && cfg.COLORS[m.color]) || '#FFD94A';
+    switch (m.k) {
+      case 'wall':
+        if (g.walls) g.walls.rects.push({ x: m.x, y: m.y, w: m.w, h: m.h });
+        break;
+      case 'death':
+        g.particles.flash(m.x, m.y, '#FFFFFF', mine ? 2.2 : 1.2);
+        g.particles.burst(m.x, m.y, '#E8552F', mine ? 16 : 8, 1.3);
+        if (mine && A) A.playWall();
+        break;
+      case 'elim': {
+        var segs = m.segs || [];
+        var sx = 0, sy = 0, maxChain = 1;
+        for (var i = 0; i < segs.length; i++) {
+          var c = segs[i].color === 'wild' ? '#FFD94A' : (cfg.COLORS[segs[i].color] || '#FFD94A');
+          var fx = 1 + ((segs[i].chain || 1) - 1) * cfg.CHAIN_FX_STEP;
+          g.particles.burst(segs[i].x, segs[i].y, c, Math.round(5 * fx), fx);
+          g.particles.ring(segs[i].x, segs[i].y, c, fx);
+          sx += segs[i].x; sy += segs[i].y;
+          if ((segs[i].chain || 1) > maxChain) maxChain = segs[i].chain;
+        }
+        if (segs.length) {
+          var cx = sx / segs.length, cy = sy / segs.length;
+          g.particles.flash(cx, cy, '#FFD94A', 1, Math.min(4, maxChain));
+          if (maxChain >= cfg.CHAIN_TEXT_MIN) {
+            g.particles.chainText(cx, cy - 24, maxChain + '连锁！', 20 + (maxChain - 1) * 6);
+          }
+        }
+        if (mine && A) { A.playElim(); if (maxChain >= 2) A.playChain(maxChain); }
+        break;
+      }
+      case 'bite':
+        g.particles.burst(m.x, m.y, col, 7, 1.2);
+        if (mine && A) A.playWall();
+        break;
+      case 'item':
+        g.particles.burst(m.x, m.y, col, mine ? 9 : 4, 1.2);
+        if (mine) { g.setItemToast(m.kind, m.color); if (A) A.playSpecial(); }
+        break;
+      case 'grab':
+        g.particles.burst(m.x, m.y, '#FFD94A', mine ? 14 : 6, 1.6);
+        if (mine) {
+          g.itemToast = { text: '彩色星！总分 +' + (m.bonus || 0) + ' 分', until: g.timeMs + cfg.ITEM_TOAST_MS };
+          if (A) A.playSpecial();
+        }
+        break;
+      case 'grab_spawn':
+        g.particles.chainText(m.x, m.y - 20, '彩色星出现！', 18);
+        break;
+      case 'meteor':
+        g.particles.burst(m.x, m.y, col, mine ? 7 : 3, 1.3);
+        if (mine) { g.setItemToast('meteor', m.color); if (A) A.playSpecial(); }
+        break;
+      case 'self_pull':
+        if (mine) {
+          g.particles.ring(m.x, m.y, col, 1.4);
+          g.particles.burst(m.x, m.y, col, 8, 1.4);
+          if (g.snake) g.particles.streak(m.x, m.y, g.snake.x, g.snake.y, col);
+          g.particles.chainText(m.x, m.y - 26, '自吃 +1', 16);
+          if (A) A.playEat();
+        }
+        break;
+      case 'toast':
+        if (mine) g.setItemToast(m.kind, m.color);
+        break;
+    }
+  };
+
+  /**
+   * 帧更新（game.update 在 online 时委托到这里）：
+   * 输入节流上行 → 本机预测推进 → 他机插值采样 → HUD 字段同步 → 相机。
+   */
+  OnlineMatch.prototype.update = function (dt) {
+    var g = this.game, r = this.remote;
+    if (!r || this._finished) return;
+
+    var ang = g.joystick.currentAngle();
+    var selfAlive = !!(r.playerEntry && r.playerEntry.alive);
+
+    // 上行输入（节流 30Hz；只在有方向输入且存活时发）
+    this._inputTimer -= dt;
+    if (this._inputTimer <= 0) {
+      this._inputTimer = INPUT_INTERVAL_MS;
+      if (ang !== null && selfAlive) this.transport.sendInput(ang, 0);
+    }
+
+    // 本机预测 + 他机插值
+    if (this._attached) this.predictor.update(dt, ang === null ? undefined : ang);
+    r.renderSample(Date.now());
+
+    // 本机 Entry 视图与预测体对齐（名牌/排行榜/小地图读它）
+    var e = r.playerEntry;
+    if (e && this.predictor.snake) {
+      var ps = this.predictor.snake, vs = e.snake;
+      vs.x = ps.x; vs.y = ps.y; vs.angle = ps.angle; vs.speed = ps.speed;
+      vs.colors = ps.colors; vs.segPos = ps.segPos;
+    }
+
+    // HUD 计分同步（权威在服务器 Entry 上）
+    if (e) {
+      g.elapsed = r.timeMs;
+      g.survivalScore = e.survivalScore || 0;
+      g.elimScore = e.elimScore || 0;
+      g.mpBonusScore = e.mpBonusScore || 0;
+      g.score = g.survivalScore + g.elimScore + g.mpBonusScore;
+      // 减速显示：mp.timeMs 域 → game.timeMs 域
+      var slowRemain = (e.slowUntil || 0) - r.timeMs;
+      g.slowUntil = slowRemain > 0 ? g.timeMs + slowRemain : 0;
+    }
+
+    g.updateCamera(dt);
+  };
+
+  /**
+   * 结算：reason ∈ win/dead/timeout/dropped；掉线判负不重连。
+   * 合成 mpResult（renderer.drawMultiResult 直接复用；dropped 额外提示）。
+   */
+  OnlineMatch.prototype._finish = function (reason, ranks, dropped) {
+    if (this._finished) return;
+    this._finished = true;
+    var g = this.game, A = CS.audio;
+    if (A) { A.stopBgm(); if (!dropped) A.playWall(); }
+
+    // 还在匹配阶段就掉线/出错：静默回菜单（无对局可结算）
+    if (g.state === 'matching') {
+      this.dispose();
+      g.online = null;
+      g.setState('menu');
+      return;
+    }
+
+    var e = this.remote && this.remote.playerEntry;
+    var myRank = null;
+    if (ranks) {
+      for (var i = 0; i < ranks.length; i++) {
+        if (ranks[i].id === this.playerId) { myRank = ranks[i]; break; }
+      }
+    }
+    var surviveSec = Math.floor((this.remote ? this.remote.timeMs : 0) / 1000);
+    var score = g.score;
+    var finalLen = myRank ? myRank.length : (e ? e.snake.length() : 0);
+    var maxLen = e ? e.maxLen : finalLen;
+    var rank = myRank ? myRank.rank : (e && this.remote ? this.remote.rankOf(e) : 0);
+
+    var best = store.get(ONLINE_BEST_KEY, { len: 0, score: 0 });
+    var newBest = maxLen > (best.len | 0) || score > (best.score | 0);
+    best = { len: Math.max(best.len | 0, maxLen), score: Math.max(best.score | 0, score) };
+    store.set(ONLINE_BEST_KEY, best);
+
+    g.mpResult = {
+      online: true,
+      dropped: !!dropped,
+      surviveSec: surviveSec,
+      score: score,
+      survivalScore: g.survivalScore,
+      elimScore: g.elimScore,
+      elimTotal: e ? e.elimTotal : 0,
+      rank: rank,
+      kills: myRank ? (myRank.kills || 0) : (e ? e.kills : 0),
+      finalLen: finalLen,
+      maxLen: maxLen,
+      bestLen: best.len,
+      bestScore: best.score,
+      newBest: newBest
+    };
+    g.overAt = g.timeMs;
+    this.transport.dispose(); // 对局结束即释放连接（rooms 结算后服务端也会回收）
+    g.setState('over');
+  };
+
+  /** 主动离开（取消匹配/返回菜单）：释放传输与事件 */
+  OnlineMatch.prototype.dispose = function () {
+    if (this._disposed) return;
+    this._disposed = true;
+    try { this.transport.cancelMatch(); } catch (e) {}
+    this.transport.dispose();
+  };
+
+  CS.OnlineMatch = OnlineMatch;
+  if (typeof module !== 'undefined' && module.exports) module.exports = OnlineMatch;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== 内联自 js/renderer.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * renderer.js — 全部程序化 Canvas 2D 绘制（蜡笔手绘风，v2：相机视口 + 大地图）
@@ -3528,7 +4735,7 @@
     ctx.font = '12px sans-serif';
     ctx.globalAlpha = 0.75;
     var modeText = game.mode === 'level' ? ('闯关模式 · 第 ' + game.levelCfg.level + ' 关')
-      : (game.mode === 'multi' ? '多人对战 · 7 蛇同场' : '无尽模式');
+      : (game.mode === 'multi' ? (game.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场') : '无尽模式');
     ctx.fillText(modeText, cx, 46);
     ctx.globalAlpha = 1;
 
@@ -3820,7 +5027,7 @@
     ctx.font = '13px sans-serif';
     ctx.globalAlpha = 0.7;
     ctx.fillText('无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10', this.W / 2, this.H * 0.89);
-    ctx.fillText('多人对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.89 + 22);
+    ctx.fillText('AI对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分', this.W / 2, this.H * 0.89 + 22);
     ctx.restore();
     this.drawParticles(game); // 标题消除动效的粒子（屏幕坐标，无相机变换）
     this.drawButtons(game);
@@ -3977,6 +5184,62 @@
     for (var i = 0; i < game.uiButtons.length; i++) this.drawButton(game.uiButtons[i]);
   };
 
+  // ---------------- 在线对战匹配界面（v3.0） ----------------
+
+  /**
+   * 匹配等待页：标题 + 昵称 + 状态行（连接/排队位次/倒计时，省略号动画）+
+   * 规则提示（掉线判负不重连）+ 取消按钮。数据全部来自 game.online（CS.OnlineMatch）。
+   */
+  Renderer.prototype.drawMatching = function (game) {
+    var ctx = this.ctx, W = this.W, H = this.H, cx = W / 2;
+    var om = game.online;
+
+    // 标题
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.font = 'bold 40px sans-serif';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText('在线对战', cx, H * 0.30);
+    ctx.fillStyle = '#4A7FD4';
+    ctx.fillText('在线对战', cx, H * 0.30);
+
+    // 昵称
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    ctx.globalAlpha = 0.75;
+    ctx.fillText('昵称：' + (om ? om.nick : '…'), cx, H * 0.30 + 40);
+    ctx.globalAlpha = 1;
+
+    // 状态行（省略号跳动）
+    var dots = ['', '.', '..', '...'][Math.floor(game.timeMs / 400) % 4];
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillStyle = '#C47F17';
+    var status = om ? om.status : '正在连接服务器…';
+    ctx.fillText(status + (/[…。！？：:]$/.test(status) ? '' : dots), cx, H * 0.48);
+
+    // 详情行（队列位次 / 对手数）
+    if (om && om.detail) {
+      ctx.font = '14px sans-serif';
+      ctx.fillStyle = cfg.INK;
+      ctx.globalAlpha = 0.8;
+      ctx.fillText(om.detail, cx, H * 0.48 + 30);
+      ctx.globalAlpha = 1;
+    }
+
+    // 规则提示
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = cfg.INK;
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('真人匹配 · 人满即开（不足补 AI） · 掉线直接判负，不支持重连', cx, H * 0.60);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    this.drawButtons(game); // 取消匹配
+  };
+
   // ---------------- 多人对战结算（手绘风卡片 + 逐行统计，v2.2） ----------------
 
   /**
@@ -4075,9 +5338,9 @@
     ctx.stroke();
     ctx.restore();
 
-    // ---- 标题区（按名次变化）----
-    var title = r.rank === 1 ? '冠军！' : (r.rank <= 3 ? '很棒！' : '再接再厉');
-    var titleColor = r.rank === 1 ? '#C47F17' : (r.rank <= 3 ? '#4A8C3F' : cfg.INK);
+    // ---- 标题区（按名次变化；掉线判负覆盖）----
+    var title = r.dropped ? '掉线判负' : (r.rank === 1 ? '冠军！' : (r.rank <= 3 ? '很棒！' : '再接再厉'));
+    var titleColor = r.dropped ? '#E8552F' : (r.rank === 1 ? '#C47F17' : (r.rank <= 3 ? '#4A8C3F' : cfg.INK));
     var ty = y + padV + 50;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -4104,7 +5367,7 @@
     ctx.font = '12px sans-serif';
     ctx.globalAlpha = aCard * 0.65;
     ctx.fillStyle = cfg.INK;
-    ctx.fillText('多人对战 · 7 蛇同场', cx, ty + 30);
+    ctx.fillText(r.dropped ? '连接中断，不支持重连' : (r.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场'), cx, ty + 30);
     ctx.globalAlpha = aCard;
 
     // ---- 统计行（每行一项，依次延迟 ~80ms 从左侧滑入）----
@@ -4630,6 +5893,7 @@
     if (game.state === 'menu') { this.drawMenu(game); return; }
     if (game.state === 'guide') { this.drawGuide(game); return; }
     if (game.state === 'levels') { this.drawLevels(game); return; }
+    if (game.state === 'matching') { this.drawMatching(game); return; }
     // play / clear / over 都先画对局场景（世界 + 相机）
     this.drawPlay(game);
     this.drawPanel(game);
@@ -4651,7 +5915,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/game.js ===== */
+/* ===== 内联自 js/game.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * game.js — 游戏主控：状态机 + 主循环逻辑（v2：自由方向 + 大地图 + 跟随镜头，横版布局）
@@ -4707,6 +5971,7 @@
     this.elimCombo = 0;     // 连击层数（v2.9）：窗口内连续触发消除 +1，分数 ×combo
     this.elimComboTimer = 0; // 连击剩余窗口（ms），每帧衰减
     this.mp = null;       // 多人对战编排器（mode==='multi' 时非空）
+    this.online = null;   // 在线对战控制器（CS.OnlineMatch，在线对局时非空，帧更新委托给它）
     this.mpResult = null; // 多人结算数据 {surviveSec, score, survivalScore, elimScore, elimTotal,
                         //   rank, kills, finalLen, maxLen, bestLen, bestScore, newBest}
     this.overAt = 0;      // 进入结算界面的时刻（timeMs，结算卡片/逐行动画计时起点）
@@ -4912,8 +6177,9 @@
       }
     }
 
-    // 玩家得分 = 存活分 + 消除分 + 彩色星加成（消除分在 mp.resolveElim 中按连锁 + 连击倍率累计）
+    // 玩家得分 = 存活分 + 消除分 + 彩色星加成（消除分/加成在 mp 内按连锁 + 连击倍率累计到 Entry，每帧同步回 game）
     this.elimScore = this.mp.playerEntry.elimScore;
+    this.mpBonusScore = this.mp.playerEntry.mpBonusScore || 0;
     this.score = this.survivalScore + this.elimScore + (this.mpBonusScore || 0);
 
     this.updateCamera(dt);
@@ -5092,6 +6358,7 @@
 
     // 多人对战：蛇群推进/淘汰/补充全部由 mp 编排（含吃色与消除）
     if (this.mode === 'multi') {
+      if (this.online) { this.online.update(dt); return; } // 在线：预测+插值+快照同步
       this.updateWallSpawn(dt);
       this.updateMulti(dt);
       return;
@@ -5247,10 +6514,13 @@
     var W = this.screenW, H = this.screenH, cx = W / 2;
     var bw = Math.min(220, W * 0.3), bh = 54;
     if (this.state === 'menu') {
-      this.addButton('level', cx, H * 0.44, bw, bh, '闯关模式');
-      this.addButton('endless', cx, H * 0.44 + bh + 16, bw, bh, '无尽模式');
-      this.addButton('multi', cx, H * 0.44 + 2 * (bh + 16), bw, bh, '多人对战');
-      this.addButton('guide', cx, H * 0.44 + 3 * (bh + 16), bw, bh, '图鉴');
+      this.addButton('level', cx, H * 0.40, bw, bh, '闯关模式');
+      this.addButton('endless', cx, H * 0.40 + bh + 16, bw, bh, '无尽模式');
+      this.addButton('multi', cx, H * 0.40 + 2 * (bh + 16), bw, bh, 'AI对战');
+      this.addButton('online', cx, H * 0.40 + 3 * (bh + 16), bw, bh, '在线对战');
+      this.addButton('guide', cx, H * 0.40 + 4 * (bh + 16), bw, bh, '图鉴');
+    } else if (this.state === 'matching') {
+      this.addButton('online_cancel', cx, H * 0.72, bw, bh, '取消匹配');
     } else if (this.state === 'guide') {
       // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
       this.addButton('back', W / 2, H - 28, 120, 38, '← 返回');
@@ -5287,11 +6557,14 @@
     if (id === 'level') this.setState('levels');
     else if (id === 'endless') this.startEndless();
     else if (id === 'multi') this.startMulti();
+    else if (id === 'online') this.startOnline();
+    else if (id === 'online_cancel') this.cancelOnline();
     else if (id === 'guide') { this.guidePage = 0; this.guideTab = 'items'; this.setState('guide'); }
     else if (id === 'back') this.setState('menu');
-    else if (id === 'menu') this.setState('menu');
+    else if (id === 'menu') { this._teardownOnline(); this.setState('menu'); }
     else if (id === 'retry') {
-      if (this.mode === 'level') this.startLevel(this.levelCfg.level);
+      if (this.online) this.startOnline(); // 在线结算「再来一局」→ 重新匹配
+      else if (this.mode === 'level') this.startLevel(this.levelCfg.level);
       else if (this.mode === 'multi') this.startMulti();
       else this.startEndless();
     }
@@ -5300,6 +6573,29 @@
       var n = parseInt(id.slice(2), 10);
       if (n >= 1 && n <= this.unlocked) this.startLevel(n);
     }
+  };
+
+  // ---------------- 在线对战（v3.0：匹配 → 联机对局，见 js/net/onlineMatch.js） ----------------
+
+  /** 进入在线匹配：mode 置 multi（渲染分支复用），状态切 matching，控制器接管后续 */
+  Game.prototype.startOnline = function () {
+    this._teardownOnline();
+    if (!CS.OnlineMatch) return; // 联机模块未加载（极端：script 缺失）→ 静默忽略
+    this.mode = 'multi';
+    this.online = new CS.OnlineMatch(this, {});
+    this.setState('matching');
+    this.online.begin();
+  };
+
+  /** 取消匹配（matching 界面按钮）：释放连接回菜单 */
+  Game.prototype.cancelOnline = function () {
+    this._teardownOnline();
+    this.setState('menu');
+  };
+
+  /** 释放在线控制器（如有）；对局结束后 online 保留供 retry 判断，这里统一清理 */
+  Game.prototype._teardownOnline = function () {
+    if (this.online) { this.online.dispose(); this.online = null; }
   };
 
   // ---------------- 触摸/鼠标入口（main.js 转发，坐标为 CSS 逻辑像素） ----------------
@@ -5375,7 +6671,7 @@
 
 </script>
 <script>
-/* ===== inlined: js/main.js ===== */
+/* ===== 内联自 js/main.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
  * main.js — 启动引导（浏览器版）：画布初始化、屏幕适配、输入转发、主循环
@@ -5394,6 +6690,7 @@
 
     var game = new CS.Game(window.innerWidth, window.innerHeight);
     var renderer = new CS.Renderer(ctx, window.innerWidth, window.innerHeight);
+    root.__game = game; // 调试钩子：控制台/WebBridge 可读取对局状态（无功能影响）
 
     function resize() {
       var w = window.innerWidth, h = window.innerHeight;
