@@ -1905,10 +1905,17 @@
     ctx.fillText('昵称：' + (game.online ? game.online.nick : (CS.storage.get('crayon_snake_web_nick', '') || '我')), cx, H * 0.26);
     ctx.globalAlpha = 1;
 
-    // 好友房号标签
+    // 好友房号标签：宽屏一行；窄屏（手机竖屏）拆两行，避免整句横向溢出屏幕
+    var labelFull = '好友房号：点「邀请好友」自动生成并复制链接发微信；也可手填相同房号';
     ctx.font = '14px sans-serif';
     ctx.fillStyle = cfg.INK;
-    ctx.fillText('好友房号：点「邀请好友」自动生成并复制链接发微信；也可手填相同房号', cx, H * 0.35);
+    if (ctx.measureText(labelFull).width <= W - 24) {
+      ctx.fillText(labelFull, cx, H * 0.35);
+    } else {
+      ctx.font = '13px sans-serif';
+      ctx.fillText('好友房号：点「邀请好友」自动生成并复制链接发微信', cx, H * 0.335);
+      ctx.fillText('也可手填相同房号，与好友进同一队', cx, H * 0.365);
+    }
 
     // 输入框（由 main.js 的 <input> 覆盖；这里画边框与占位/内容预览）
     if (codeBtn) {

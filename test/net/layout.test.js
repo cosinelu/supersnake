@@ -700,8 +700,56 @@ function t11() {
     '空草稿时绘制占位提示「点此输入房号」');
 }
 
+// ---------------- T12 团队大厅标签窄屏折行（防手机竖屏横向溢出） ----------------
+// 14px 全角字符 ≈ 14px/字：整句 28 字 ≈ 392px > 390 竖屏可用宽 → 必须折两行。
+function t12() {
+  section('T12 团队大厅好友房号标签窄屏折行');
+
+  function labels(W, H) {
+    var texts = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      // 模拟真实字宽：全角字符宽 ≈ 字号（从 ctx.font 解析，缺省 14）
+      measureText: function (s) {
+        var fs = parseInt(ctx.font, 10) || 14;
+        return { width: String(s).length * fs };
+      },
+      fillText: function (s) { texts.push(String(s)); },
+      strokeText: nop,
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: W, height: H }
+    };
+    var g = new CS.Game(W, H);
+    g.enterTeamLobby();
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = W; r.H = H;
+    r.drawTeamLobby(g);
+    return texts;
+  }
+
+  var FULL = '好友房号：点「邀请好友」自动生成并复制链接发微信；也可手填相同房号';
+  var LA = '好友房号：点「邀请好友」自动生成并复制链接发微信';
+  var LB = '也可手填相同房号，与好友进同一队';
+
+  var wide = labels(1280, 720);
+  ok(wide.indexOf(FULL) !== -1 && wide.indexOf(LB) === -1,
+    '桌面宽屏：标签整句单行绘制');
+
+  var narrow = labels(390, 844);
+  ok(narrow.indexOf(FULL) === -1 &&
+    narrow.indexOf(LA) !== -1 && narrow.indexOf(LB) !== -1,
+    '**手机竖屏 390：标签折两行、不横向溢出**');
+}
+
 console.log('横竖屏自适应布局回归（v3.0.2 ~ v3.0.5）');
-t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11();
+t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11(); t12();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');
