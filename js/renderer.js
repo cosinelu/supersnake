@@ -1945,7 +1945,12 @@
     }
     ctx.restore();
 
-    this.drawButtons(game); // 开始匹配 / 返回
+    // 开始匹配 / 返回 / 邀请好友。「team_code」是伪按钮（输入框），由本函数上方按
+    // 聚焦态自行绘制——若走 drawButton 通用样式会再盖一层 PANEL 底色，把草稿文本遮掉。
+    for (var bi = 0; bi < game.uiButtons.length; bi++) {
+      if (game.uiButtons[bi].id === 'team_code') continue;
+      this.drawButton(game.uiButtons[bi]);
+    }
   };
 
   Renderer.prototype.drawMatching = function (game) {

@@ -651,8 +651,57 @@ function t10() {
     '横屏协议与网络质量分两行绘制、不互相覆盖');
 }
 
+// ---------------- T11 团队大厅房号框：草稿文本不被通用按钮重绘遮盖 ----------------
+// 回归：drawTeamLobby 先画了房号框（含草稿/占位文本），末尾 drawButtons 又把 'team_code'
+// 伪按钮用 PANEL 底色重画一遍，文本被完全遮盖（输入框永远空白）。修复后 team_code 不走过场。
+function t11() {
+  section('T11 团队大厅房号框绘制（草稿可见、伪按钮不重绘）');
+
+  function run(draft) {
+    var texts = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      measureText: function (s) { return { width: String(s).length * 6 }; },
+      fillText: function (s, x, y) { texts.push(String(s)); },
+      strokeText: nop,
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: 1280, height: 720 }
+    };
+    var g = new CS.Game(1280, 720);
+    g.enterTeamLobby();
+    g.teamCodeDraft = draft;
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = 1280; r.H = 720;
+    var drawn = [];
+    var orig = CS.Renderer.prototype.drawButton;
+    r.drawButton = function (b) { drawn.push(b.id); orig.call(r, b); };
+    r.drawTeamLobby(g);
+    return { texts: texts, drawn: drawn };
+  }
+
+  var a = run('BZQ3');
+  ok(a.texts.indexOf('BZQ3') !== -1,
+    '房号草稿文本被真实绘制到输入框（BZQ3）');
+  ok(a.drawn.indexOf('team_code') === -1,
+    '**team_code 伪按钮不再走 drawButton 通用样式（防遮盖回归）**');
+  ok(a.drawn.indexOf('team_invite') !== -1 && a.drawn.indexOf('team_start') !== -1 &&
+    a.drawn.indexOf('team_back') !== -1,
+    '邀请/开始/返回按钮正常绘制');
+
+  var b = run('');
+  ok(b.texts.indexOf('点此输入房号') !== -1,
+    '空草稿时绘制占位提示「点此输入房号」');
+}
+
 console.log('横竖屏自适应布局回归（v3.0.2 ~ v3.0.5）');
-t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10();
+t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');
