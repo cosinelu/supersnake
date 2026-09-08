@@ -123,7 +123,7 @@ teamScore(teamId) = Σ 该队所有成员（含已阵亡）的 (survivalScore + 
 | C2S `join` | `mode: 'ffa'\|'team'` | 区分自由混战与团队战（缺省 `ffa` 保持向后兼容） |
 | C2S `join` | `teamCode: string\|null` | 好友房号；solo 为 null |
 | S2C `matched` | `mode` | 回显模式 |
-| S2C `matched` | `teams: [{ id, players:[{id,name,isHuman}] }]` | 5 队编制，供客户端着色/标签 |
+| S2C `matched` | `teams: [[{id,name,isHuman}] …]` | **二维数组** `teams[teamId][slot]`（5 队 × 2 槽），供客户端着色/标签 |
 | S2C `matched` | `myTeam: int` | 本人所属 teamId |
 | 蛇快照 `serSnake/deSnake` | `tm: int` | teamId（-1 = 无队伍，FFA 不影响） |
 | S2C `event` | `kind: 'YOU_DIED'` | 本人死而队友活 → 客户端转观战 |
