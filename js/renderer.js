@@ -1658,6 +1658,25 @@
         ml.statCx, ml.statY + ml.statLine, maxW, 13, 10);
     }
     ctx.restore();
+
+    // 主菜单错误提示（如匹配阶段连不上服务器被弹回菜单）：屏幕底部居中，4 秒淡出
+    if (game.menuNotice && game.menuNotice.until > Date.now()) {
+      var na = Math.min(1, (game.menuNotice.until - Date.now()) / 600);
+      ctx.save();
+      ctx.globalAlpha = na;
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 3;
+      var ny = this.H - 34;
+      ctx.strokeStyle = '#FFFDF5';
+      ctx.strokeText(game.menuNotice.text, this.W / 2, ny);
+      ctx.fillStyle = '#D64550';
+      ctx.fillText(game.menuNotice.text, this.W / 2, ny);
+      ctx.restore();
+    }
+
     this.drawParticles(game); // 标题消除动效的粒子（屏幕坐标，无相机变换）
     this.drawButtons(game);
   };

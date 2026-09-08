@@ -159,6 +159,23 @@ ok(/WSS/.test(om6.netSummary()) && /48ms/.test(om6.netSummary()),
   '手机 HUD 摘要包含实际协议与延迟（' + om6.netSummary() + '）');
 om6.dispose();
 
+// ---- 10. 匹配阶段掉线：回菜单且必须留可见提示（不许静默弹回主界面） ----
+var c7 = makeOnline('掉线喵'); // begin 后仍处 matching（未收首帧快照）
+ok(c7.game.state === 'matching', '用例就位：matching 阶段');
+c7.om._finish(CS.protocol.OVER_REASON.DROPPED, null, true);
+ok(c7.game.state === 'menu', 'matching 阶段掉线 → 回主菜单');
+ok(!!c7.game.menuNotice && c7.game.menuNotice.until > Date.now() &&
+   /无法连接|断开/.test(c7.game.menuNotice.text),
+  '回菜单时留下可见提示 menuNotice（' + (c7.game.menuNotice && c7.game.menuNotice.text) + '）');
+ok(c7.game.online === null, 'online 控制器已清理');
+
+// 服务器错误文案优先于通用掉线文案（如「协议版本不匹配」要原样透传）
+var c8 = makeOnline('版本喵');
+c8.om.status = '服务器错误：协议版本不匹配，请刷新页面';
+c8.om._finish(CS.protocol.OVER_REASON.DROPPED, null, true);
+ok(c8.game.menuNotice && /协议版本不匹配/.test(c8.game.menuNotice.text),
+  '服务器错误文案优先透传到 menuNotice');
+
 console.log('');
 console.log('========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

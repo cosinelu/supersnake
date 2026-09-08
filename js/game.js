@@ -75,6 +75,7 @@
     this.pendingTeamCode = null; // 邀请链接带入的房号（main.js 解析 ?team= 写入；进大厅时消费）
     this.inviteRequested = false; // 「邀请好友」点击标志：main.js（DOM 层）据此复制邀请链接
     this.inviteNotice = null;   // 邀请操作结果提示 {text, until}（main.js 写入，renderer 绘制）
+    this.menuNotice = null;     // 主菜单错误提示 {text, until}（如匹配阶段连接失败回菜单时由 OnlineMatch 写入）
 
     this.uiButtons = [];
     this.buildButtons();

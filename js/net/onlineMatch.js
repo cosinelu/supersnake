@@ -447,8 +447,14 @@
     var g = this.game, A = CS.audio;
     if (A) { A.stopBgm(); if (!dropped) A.playWall(); }
 
-    // 还在匹配阶段就掉线/出错：静默回菜单（无对局可结算）
+    // 还在匹配阶段就掉线/出错：回菜单（无对局可结算）。
+    // 必须留一条可见提示——静默回菜单会让玩家以为按钮坏了
+    //（v3.1 反馈：服务器没开时点「开始匹配」直接弹回主界面、无任何说明）。
     if (g.state === 'matching') {
+      var note = (this.status && this.status.indexOf('服务器错误') === 0) ? this.status
+        : (dropped ? '无法连接服务器或连接已断开，请稍后重试'
+                   : '匹配未完成，请重试（' + (reason || 'unknown') + '）');
+      g.menuNotice = { text: note, until: Date.now() + 4000 };
       this.dispose();
       g.online = null;
       g.setState('menu');

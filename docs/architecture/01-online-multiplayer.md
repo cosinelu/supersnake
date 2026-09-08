@@ -143,6 +143,11 @@ onMatched / onStart / onSnap / onEvent / onOver / onDrop  — 回调注册
 - `LocalTransport`：内部直接实例化现有 `CS.Multiplayer`（本地 AI 对战），把本地对局状态包装成与 `snap/event` 同构的对象。**联机 UI/渲染管线先用它开发**，服务器没好也能干活。
 - `WsTransport`：连 `wss://host/ws`，负责编码、心跳、断线回调（→ 直接进"掉线判负"结算页）。
 
+> **匹配阶段断线/连不上的 UX**：ws 在 `matching` 状态就 close（连不上服务器、握手即断）时，
+> 客户端回主菜单，但**不再静默**——会在主菜单弹出 4 秒提示
+> （连不上 →「无法连接服务器，请检查网络后重试」；服务器主动 error → 透传服务器消息，
+> 如「协议版本不匹配，请刷新页面」）。对局中途掉线仍走原「掉线判负」结算页，不变。
+
 > **v3.1 起新增加速传输层**：`UdpAccel` 在小游戏/Node 上使用裸 UDP，在浏览器使用
 > WebTransport datagram；两者共用二进制协议与冗余打散，WebSocket 保留为可靠控制面和
 > 15Hz 全量保底。设计见 **`docs/architecture/02-udp-transport.md`**。上层
