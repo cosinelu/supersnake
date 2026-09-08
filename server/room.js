@@ -426,10 +426,12 @@ Room.prototype._checkPlayerDeaths = function () {
           continue; // 不置 overSent，等待整队淘汰或全局结束再结算
         }
       }
-      // 整队已无人存活（或先前已发 you_died 且队友此时也亡）→ 结算负
+      // 整队已无人存活（或先前已发 you_died 且队友此时也亡）→ 结算负。
+      // 必须带 teams 队伍总排行（§4.3-4：团队模式所有 OVER 都带），
+      // 否则客户端组不出队伍结算卡，会退化成 FFA 通用卡片。
       if (!h.overSent) {
         h.overSent = true;
-        safeSend(h, { t: P.S2C.OVER, reason: P.OVER_REASON.DEAD, ranks: this._ranks() });
+        safeSend(h, { t: P.S2C.OVER, reason: P.OVER_REASON.DEAD, ranks: this._ranks(), teams: this._teamRanks() });
       }
     }
     return;

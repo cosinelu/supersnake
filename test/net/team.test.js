@@ -242,6 +242,13 @@ section('C. 队伍胜负与观战（room._checkPlayerDeaths / _checkOver）');
   room._checkPlayerDeaths();
   ok(r.sinks.s1.overs.length === 1 && r.sinks.s1.overs[0].reason === 'dead', 'C1 整队淘汰 → 本人收到 over(dead)');
   ok(r.sinks.s2.overs.length === 1 && r.sinks.s2.overs[0].reason === 'dead', 'C1 整队淘汰 → 队友收到 over(dead)');
+  // §4.3-4：中途整队淘汰的 over(dead) 也必须带 teams，否则客户端退化为 FFA 结算卡
+  var od = r.sinks.s1.overs[0];
+  ok(Array.isArray(od.teams) && od.teams.length === 5,
+    '**C1 整队淘汰 over(dead) 带 5 队排行（防退化 FFA 卡回归）**',
+    'teams=' + (od.teams && od.teams.length));
+  var tDead = od.teams.filter(function (t) { return t.id === 0; })[0];
+  ok(tDead && tDead.aliveCount === 0, 'C1 本队 aliveCount=0（客户端据此判「全队阵亡」）');
   r.mm.destroy();
 })();
 

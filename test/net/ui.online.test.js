@@ -176,6 +176,29 @@ c8.om._finish(CS.protocol.OVER_REASON.DROPPED, null, true);
 ok(c8.game.menuNotice && /协议版本不匹配/.test(c8.game.menuNotice.text),
   '服务器错误文案优先透传到 menuNotice');
 
+// ---- 11. 团队模式中途整队淘汰：over(dead) 带 teams → 组队结算卡（防退化 FFA 卡） ----
+// 真实浏览器抓到的链路：room._checkPlayerDeaths 整队淘汰分支原先漏带 teams，
+// 客户端组不出 teamResult → 结算卡显示「再接再厉 · 在线对战真人匹配 · 个人第 N 名」。
+var c9 = makeOnline('团灭喵');
+drive(c9, 10); // 进 play，remote/预测体就位
+c9.om.matchMode = 'team';
+c9.om.myTeam = 2;
+var fakeTeams = [
+  { id: 0, rank: 1, score: 900, aliveCount: 2, members: [] },
+  { id: 1, rank: 2, score: 400, aliveCount: 1, members: [] },
+  { id: 2, rank: 5, score: 60, aliveCount: 0, members: [] },  // 本队：整队淘汰
+  { id: 3, rank: 3, score: 300, aliveCount: 2, members: [] },
+  { id: 4, rank: 4, score: 150, aliveCount: 1, members: [] }
+];
+c9.om._finish(CS.protocol.OVER_REASON.DEAD, null, false, fakeTeams);
+ok(c9.game.state === 'over', '团队整队淘汰 → 进入结算');
+ok(c9.game.mpResult && c9.game.mpResult.team === true,
+  '**mpResult.team=true（队伍结算卡，不退化 FFA 卡）**');
+var tr9 = c9.game.mpResult.teamResult;
+ok(tr9 && tr9.outcome === 'elim', '本队 aliveCount=0 → outcome=elim（标题「全队阵亡」）');
+ok(tr9 && tr9.myTeamRank === 5 && tr9.myTeamScore === 60,
+  '队伍名次/总分取自服务器 teams（rank=5 score=60）');
+
 console.log('');
 console.log('========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');
