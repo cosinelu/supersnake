@@ -107,6 +107,26 @@ section('A. 碰撞免疫（同队免死 / 异队照常）');
   ok(!A4.alive && !B4.alive, 'A4 异队头对头：双双淘汰');
 })();
 
+// A5 真实房间路径：真人头撞「AI 队友」身体免死
+// （A1-A4 用合成 Entry；本条走 matchmaker 建房 + spawnBot(teamId) 真实链路，
+//   对应用户实测「碰到自己的红队队友」场景）
+(function () {
+  var r = formTeamRoom([{ connId: 'a5', name: '碰队友' }]);
+  var room = r.room;
+  var me = room.humans.a5.entry;
+  var mate = entriesOfTeam(room, 0).filter(function (e) { return e !== me; })[0];
+  ok(!!mate && mate.isPlayer === false && mate.teamId === 0 && me.teamId === 0,
+    'A5 真人 + AI 队友同队（teamId=0，spawnBot 链路）');
+  // 把真人头挪到 AI 队友身体第 2 节上（必然命中碰撞半径）
+  var sp = mate.snake.segPos;
+  me.snake.x = sp[2].x; me.snake.y = sp[2].y;
+  var lenBefore = mate.snake.length();
+  room.game.mp.collide();
+  ok(me.alive === true, '**A5 真人头撞 AI 队友身体：免死（真实房间路径）**');
+  ok(mate.snake.length() === lenBefore, 'A5 同队撞击不咬断队友');
+  r.mm.destroy();
+})();
+
 // ---------------- B. 匹配分组 ----------------
 section('B. 匹配分组（_buildTeams / _formTeam）');
 
@@ -237,6 +257,12 @@ section('C. 队伍胜负与观战（room._checkPlayerDeaths / _checkOver）');
   var died = r.sinks.s1.events.filter(function (m) { return m.k === 'you_died'; });
   ok(died.length === 1 && died[0].team === 0, 'C1 本人死/队友活 → 收到 you_died（team=0）转观战');
   ok(r.sinks.s1.overs.length === 0, 'C1 队友仍活 → 暂不结算（无 over）');
+
+  // 回归（v3.1 用户实测「队友 1 存活却被弹惜败卡」）：you_died 之后只要队友还活着，
+  // 后续每个 tick 都不得补发 OVER——旧逻辑第二 tick 起无条件结算，观战形同虚设。
+  for (var tick = 0; tick < 10; tick++) room._checkPlayerDeaths();
+  ok(r.sinks.s1.overs.length === 0,
+    '**C1 观战期间队友仍活：连续 10 tick 不结算（防提前 OVER 回归）**');
 
   room.game.mp.kill(room.humans.s2.entry); // 队友也阵亡 → 整队淘汰
   room._checkPlayerDeaths();

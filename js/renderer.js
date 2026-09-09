@@ -2178,9 +2178,13 @@
     }
     ctx.font = 'bold 34px sans-serif';
     ctx.lineJoin = 'round';
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = cfg.INK;
-    ctx.strokeText(title, cx, ty);
+    // 描边仅用于彩色标题（蜡笔勾边效果）；深色标题（惜败/全队阵亡/再接再厉）
+    // 墨色描边 + 墨色填充会糊成一团不可读（v3.1 用户实测「惜败」变墨团），直接纯净填充。
+    if (titleColor !== cfg.INK) {
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = cfg.INK;
+      ctx.strokeText(title, cx, ty);
+    }
     ctx.fillStyle = titleColor;
     ctx.fillText(title, cx, ty);
     ctx.font = '12px sans-serif';

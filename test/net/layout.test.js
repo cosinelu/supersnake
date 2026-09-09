@@ -748,8 +748,64 @@ function t12() {
     '**手机竖屏 390：标签折两行、不横向溢出**');
 }
 
+// ---------------- T13 结算卡标题：深色标题不墨团（防「惜败」不可读回归） ----------------
+// 墨色描边 + 墨色填充 = 墨团（v3.1 用户实测「惜败」两字完全看不清）。
+// 规则：titleColor 为 INK（惜败/全队阵亡/再接再厉）时不描边；彩色标题保留蜡笔勾边。
+function t13() {
+  section('T13 结算卡标题描边策略（深色纯净填充 / 彩色蜡笔勾边）');
+
+  function capture(outcome) {
+    var strokes = [], fills = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      measureText: function (s) { return { width: String(s).length * 8 }; },
+      fillText: function (s) { fills.push(String(s)); },
+      strokeText: function (s) { strokes.push(String(s)); },
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: 390, height: 844 }
+    };
+    var g = new CS.Game(390, 844);
+    g.mode = 'multi';
+    g.startMulti();
+    g.mpResult = {
+      online: true, team: true,
+      teamResult: {
+        outcome: outcome, myTeam: 3, myTeamRank: 4, myTeamScore: 14, myTeamAlive: 1,
+        teams: [0, 1, 2, 3, 4].map(function (t) {
+          return { id: t, rank: t + 1, score: 100 - t * 20, aliveCount: 1,
+            members: [{ id: t * 2, name: 'T' + t + 'a', isPlayer: 0 }, { id: t * 2 + 1, name: 'T' + t + 'b', isPlayer: 0 }] };
+        })
+      },
+      rank: 8, surviveSec: 14, score: 14, survivalScore: 14, elimScore: 0,
+      elimTotal: 0, kills: 0, finalLen: 7, maxLen: 7, bestLen: 7, bestScore: 14, newBest: true
+    };
+    g.overAt = 0; g.timeMs = 5000;
+    g.setState('over');
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = 390; r.H = 844;
+    CS.Renderer.prototype.drawMultiResult.call(r, g);
+    return { strokes: strokes, fills: fills };
+  }
+
+  var lose = capture('lose');
+  ok(lose.fills.indexOf('惜败') !== -1, '惜败标题正常填充绘制');
+  ok(lose.strokes.indexOf('惜败') === -1,
+    '**深色标题「惜败」不再墨压墨描边（防墨团回归）**');
+
+  var win = capture('win');
+  ok(win.strokes.indexOf('团队冠军！') !== -1,
+    '彩色标题「团队冠军！」保留蜡笔勾边（描边未一刀切删除）');
+}
+
 console.log('横竖屏自适应布局回归（v3.0.2 ~ v3.0.5）');
-t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11(); t12();
+t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11(); t12(); t13();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

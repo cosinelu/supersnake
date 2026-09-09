@@ -429,7 +429,9 @@ Room.prototype._checkPlayerDeaths = function () {
       // 整队已无人存活（或先前已发 you_died 且队友此时也亡）→ 结算负。
       // 必须带 teams 队伍总排行（§4.3-4：团队模式所有 OVER 都带），
       // 否则客户端组不出队伍结算卡，会退化成 FFA 通用卡片。
-      if (!h.overSent) {
+      // 关键：每次都要重查队友存活——you_died 之后只要队友还活着就继续观战，
+      // 绝不能在下个 tick 无条件补发 OVER（v3.1 实测：队友 1 存活却被弹「惜败」结算卡）。
+      if (!h.overSent && !this.game.mp.aliveMemberOfTeam(h.team)) {
         h.overSent = true;
         safeSend(h, { t: P.S2C.OVER, reason: P.OVER_REASON.DEAD, ranks: this._ranks(), teams: this._teamRanks() });
       }
