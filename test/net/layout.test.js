@@ -751,11 +751,12 @@ function t12() {
 // ---------------- T13 结算卡标题：深色标题不墨团（防「惜败」不可读回归） ----------------
 // 墨色描边 + 墨色填充 = 墨团（v3.1 用户实测「惜败」两字完全看不清）。
 // 规则：titleColor 为 INK（惜败/全队阵亡/再接再厉）时不描边；彩色标题保留蜡笔勾边。
+// 字体：标题统一圆体优先栈（Yuanti SC 字腔开口大，稠密字不粘连），无圆体平台回退中黑。
 function t13() {
   section('T13 结算卡标题描边策略（深色纯净填充 / 彩色蜡笔勾边）');
 
   function capture(outcome) {
-    var strokes = [], fills = [];
+    var strokes = [], fills = [], fonts = [];
     function nop() {}
     var ctx = {
       save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
@@ -765,7 +766,7 @@ function t13() {
       quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
       createLinearGradient: function () { return { addColorStop: nop }; },
       measureText: function (s) { return { width: String(s).length * 8 }; },
-      fillText: function (s) { fills.push(String(s)); },
+      fillText: function (s) { fills.push(String(s)); fonts.push(this.font); },
       strokeText: function (s) { strokes.push(String(s)); },
       font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
       textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
@@ -791,21 +792,78 @@ function t13() {
     var r = Object.create(CS.Renderer.prototype);
     r.ctx = ctx; r.W = 390; r.H = 844;
     CS.Renderer.prototype.drawMultiResult.call(r, g);
-    return { strokes: strokes, fills: fills };
+    return { strokes: strokes, fills: fills, fonts: fonts };
   }
 
   var lose = capture('lose');
   ok(lose.fills.indexOf('惜败') !== -1, '惜败标题正常填充绘制');
   ok(lose.strokes.indexOf('惜败') === -1,
     '**深色标题「惜败」不再墨压墨描边（防墨团回归）**');
+  ok(/Yuanti SC/.test(lose.fonts[lose.fills.indexOf('惜败')] || ''),
+    '**「惜败」标题使用圆体优先字体栈（稠密字不粘连，防不可读回归）**',
+    'font=' + lose.fonts[lose.fills.indexOf('惜败')]);
 
   var win = capture('win');
   ok(win.strokes.indexOf('团队冠军！') !== -1,
     '彩色标题「团队冠军！」保留蜡笔勾边（描边未一刀切删除）');
 }
 
+// ---------------- T14 团队观战横幅（防"观战无任何屏幕提示"回归） ----------------
+// v3.1 服务端修复观战提前终结后，观战首次真正可达；若屏幕无任何提示，
+// 玩家会误以为"死了还在玩 / 游戏卡死"。横幅只在 om.spectating 时绘制。
+function t14() {
+  section('T14 团队观战横幅（spectating 时绘制 / 平时不绘制）');
+
+  function capture(spectating) {
+    var fills = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      measureText: function (s) { return { width: String(s).length * 8 }; },
+      fillText: function (s) { fills.push(String(s)); },
+      strokeText: nop,
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: 390, height: 844 }
+    };
+    var g = new CS.Game(390, 844);
+    g.mode = 'multi';
+    g.startMulti();
+    g.online = { spectating: spectating };
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = 390; r.H = 844;
+    CS.Renderer.prototype.drawSpectateBanner.call(r, g);
+    return fills;
+  }
+
+  ok(capture(true).indexOf('你已阵亡 · 观战队友中') !== -1,
+    '**观战中：屏幕顶部绘制常驻横幅**');
+  ok(capture(false).length === 0,
+    '非观战：不绘制横幅（不干扰正常对局）');
+
+  // 相机目标：观战且队友存活 → 跟随存活队友而非本机死蛇
+  var g2 = new CS.Game(390, 844);
+  g2.mode = 'multi';
+  g2.startMulti();
+  var mate = g2.mp.spawnBot(0.5, 2);
+  var foe = g2.mp.spawnBot(0.5, 0);
+  g2.myTeam = 2;
+  g2.online = { spectating: true, myTeam: 2, playerId: -999 };
+  mate.snake.x = 1111; foe.snake.x = 2222;
+  ok(g2.cameraTarget() === mate.snake,
+    '观战相机：跟随同队存活队友');
+  mate.alive = false;
+  ok(g2.cameraTarget() === g2.snake,
+    '队友也阵亡后：相机回退跟随本机蛇（等结算）');
+}
+
 console.log('横竖屏自适应布局回归（v3.0.2 ~ v3.0.5）');
-t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11(); t12(); t13();
+t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11(); t12(); t13(); t14();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

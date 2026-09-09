@@ -2176,7 +2176,9 @@
       ctx.fill();
       ctx.stroke();
     }
-    ctx.font = 'bold 34px sans-serif';
+    // 标题字体：圆体优先（Yuanti SC 字面圆润、字腔开口大，「惜败/全队阵亡」这类
+    // 稠密字不粘连；无圆体的平台回退系统中黑）。字号 34→32，给粗体笔画留出间隙。
+    ctx.font = 'bold 32px "Yuanti SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
     ctx.lineJoin = 'round';
     // 描边仅用于彩色标题（蜡笔勾边效果）；深色标题（惜败/全队阵亡/再接再厉）
     // 墨色描边 + 墨色填充会糊成一团不可读（v3.1 用户实测「惜败」变墨团），直接纯净填充。
@@ -2368,6 +2370,35 @@
     ctx.moveTo(cx - dw / 2, ty + 16);
     ctx.lineTo(cx + dw / 2, ty + 16);
     ctx.stroke();
+    ctx.restore();
+  };
+
+  /**
+   * 团队模式观战横幅：本人阵亡但队友存活（om.spectating）时，屏幕顶部常驻
+   * 「你已阵亡 · 观战队友中」呼吸提示，直到整队结算出卡。
+   * 背景：v3.1 服务端修复观战提前终结后，观战首次真正可达——若无任何屏幕提示，
+   * 玩家会以为"自己死了却还在玩"或"游戏卡死"。
+   * 位置避让：彩色星播报占 viewY+30、道具 toast 占 viewY+64，观战横幅落 viewY+96。
+   */
+  Renderer.prototype.drawSpectateBanner = function (game) {
+    var om = game.online;
+    if (!om || !om.spectating) return;
+    var ctx = this.ctx, l = game.layout();
+    var a = 0.75 + 0.25 * Math.sin(game.timeMs / 1000 * 3); // 呼吸闪烁
+    var cx = l.viewX + l.viewW / 2;
+    var ty = l.viewY + 96;
+    var txt = '你已阵亡 · 观战队友中';
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 17px sans-serif';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = cfg.INK;
+    ctx.strokeText(txt, cx, ty);
+    ctx.fillStyle = '#FFFDF5';
+    ctx.fillText(txt, cx, ty);
     ctx.restore();
   };
 
@@ -2740,6 +2771,7 @@
     this.drawPlay(game);
     this.drawPanel(game);
     if (game.state === 'play') {
+      this.drawSpectateBanner(game); // 团队观战常驻横幅（本人阵亡、队友存活）
       this.drawUnlockBanner(game); // 解锁提示横幅（在摇杆之上）
       this.drawItemToast(game);    // 特殊道具效果提示（屏幕空间，不遮挡地图）
       this.drawGrabBroadcast(game); // 多人专属彩色星常驻播报（仅场上存在时显示）
