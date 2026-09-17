@@ -5,7 +5,7 @@
  */
 var path = require('path');
 var JS = path.join(__dirname, '..', '..', 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'ai', 'multiplayer']
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles', 'ai', 'multiplayer']
   .forEach(function (f) { require(path.join(JS, f + '.js')); });
 ['protocol', 'interpolation', 'prediction']
   .forEach(function (f) { require(path.join(JS, 'net', f + '.js')); });

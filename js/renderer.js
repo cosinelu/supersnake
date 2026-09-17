@@ -7,7 +7,7 @@
  *  - 墙壁：边界为灰色排线墙带，内部墙为排线矩形；色块：带蜡笔笔触的圆角色块；
  *    蛇：圆形蜡笔节沿轨迹排布，末尾恒带 1 节深色小尾鳍（不可消除的尾巴节），
  *    蛇头表情眼睛朝向移动方向；
- *  - 右侧 HUD 面板：分数/目标/关卡/已解锁颜色预览 + 小地图（世界缩略 + 蛇头亮点）；
+ *  - 右侧 HUD 面板：分数/最高/已解锁颜色预览 + 小地图（世界缩略 + 蛇头亮点）；
  *  - 摇杆：固定底座浮在视口区左下角，半透明手绘风。
  */
 (function (root) {
@@ -1032,7 +1032,7 @@
       // 两行：协议 + RTT/丢帧（或 TCP 迟到率）。
       channel: (game.mode === 'multi' && game.online) ? 30 : 0,
       score: 54,                        // 「分数」标签 + 大号分数
-      target: 26 + (game.mode === 'level' ? 14 : 0), // 目标/最高（闯关多一条进度条）
+      target: 26,                       // 最高/最佳成绩行
       detail: 34,                       // 分数构成 + 速度
       board: lbRows ? (18 + lbRows * 16) : 0,
       colors: 18 + 2 * 27,              // 「已解锁颜色」标题 + 4x2 色格
@@ -1094,8 +1094,7 @@
     adv(24);
     ctx.font = Math.round(12 * Math.min(1, k + 0.2)) + 'px sans-serif';
     ctx.globalAlpha = 0.75;
-    var modeText = game.mode === 'level' ? ('闯关模式 · 第 ' + game.levelCfg.level + ' 关')
-      : (game.mode === 'multi' ? (game.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场') : '无尽模式');
+    var modeText = game.mode === 'multi' ? (game.online ? '在线对战 · 真人匹配' : 'AI对战 · 7 蛇同场') : '无尽模式';
     ctx.fillText(modeText, cx, y + 6);
     ctx.globalAlpha = 1;
     adv(22);
@@ -1147,28 +1146,9 @@
     ctx.fillText(String(game.score), cx, y + 12);
     adv(36);
 
-    // ---- 目标 / 最高分（+ 闯关进度条）----
+    // ---- 最高 / 最佳成绩 ----
     ctx.font = 'bold 13px sans-serif';
-    if (game.mode === 'level') {
-      ctx.fillText('目标 ' + game.levelCfg.targetScore, cx, y + 6);
-      adv(16);
-      var barW = pw - 44, barH = 9, bx = cx - barW / 2, by = y;
-      var prog = u.clamp(game.score / game.levelCfg.targetScore, 0, 1);
-      wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
-      ctx.fillStyle = 'rgba(58,50,56,0.12)';
-      ctx.fill();
-      if (prog > 0.02) {
-        wobblyRoundRect(ctx, bx, by, Math.max(8, barW * prog), barH, 4, 9, 3, 0.8);
-        ctx.fillStyle = cfg.COLORS.green;
-        ctx.fill();
-      }
-      wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
-      ctx.strokeStyle = cfg.INK;
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
-      ctx.fillStyle = cfg.INK;
-      adv(24);
-    } else if (game.mode === 'multi') {
+    if (game.mode === 'multi') {
       ctx.fillText('最佳 ' + Math.max(game.mpBest.len, game.snake.length()) + '节 · ' +
         Math.max(game.mpBest.score, game.score) + '分', cx, y + 6);
       adv(26);
@@ -1348,8 +1328,7 @@
     var y2 = y1 + H1 / 2 + slack * 0.8 + H2 / 2;
     var y3base = y2 + H2 / 2 + slack * 0.8 + 6;
     ctx.font = 'bold 12px sans-serif';
-    var modeText = game.mode === 'level' ? ('闯关 · 第 ' + game.levelCfg.level + ' 关')
-      : (game.mode === 'multi' ? (game.online ? '在线对战' : 'AI对战') : '无尽模式');
+    var modeText = game.mode === 'multi' ? (game.online ? '在线对战' : 'AI对战') : '无尽模式';
     ctx.globalAlpha = 0.8;
     ctx.fillText(modeText, padL, y1);
     var xCur = padL + ctx.measureText(modeText).width + 14;
@@ -1363,34 +1342,12 @@
 
     // 目标 / 最高分：剩余宽度够才画（低优先级）
     ctx.font = 'bold 11px sans-serif';
-    var infoText = game.mode === 'level' ? ('目标 ' + game.levelCfg.targetScore)
-      : (game.mode === 'multi'
-        ? ('最佳 ' + Math.max(game.mpBest.len, game.snake ? game.snake.length() : 0) + '节')
-        : ('最高 ' + Math.max(game.best, game.score)));
+    var infoText = game.mode === 'multi'
+      ? ('最佳 ' + Math.max(game.mpBest.len, game.snake ? game.snake.length() : 0) + '节')
+      : ('最高 ' + Math.max(game.best, game.score));
     ctx.globalAlpha = 0.7;
     if (xCur + ctx.measureText(infoText).width <= textR) ctx.fillText(infoText, xCur, y1 + 4);
     ctx.globalAlpha = 1;
-
-    // 闯关模式：进度条画在行 2 位置，颜色格顺延到行 3（进度条比颜色格更关键）
-    if (game.mode === 'level') {
-      var barW = Math.min(availW, 190), barH = 8, bx = padL, by = y2 - 4;
-      var prog = u.clamp(game.score / game.levelCfg.targetScore, 0, 1);
-      wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
-      ctx.fillStyle = 'rgba(58,50,56,0.12)';
-      ctx.fill();
-      if (prog > 0.02) {
-        wobblyRoundRect(ctx, bx, by, Math.max(8, barW * prog), barH, 4, 9, 3, 0.8);
-        ctx.fillStyle = cfg.COLORS.green;
-        ctx.fill();
-      }
-      wobblyRoundRect(ctx, bx, by, barW, barH, 4, 9, 3, 0.8);
-      ctx.strokeStyle = cfg.INK;
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
-      ctx.fillStyle = cfg.INK;
-      y2 = y3base;                 // 颜色格挪到行 3，避免与进度条叠在一起
-      y3base = y3base + 20;
-    }
 
     // ---- 行 2：在线时固定显示协议/网络质量；单机时显示颜色格。速度始终保留 ----
     var spd = Math.round(game.currentSpeed());
@@ -1650,8 +1607,8 @@
     }
     ctx.globalAlpha = 0.7;
     if (ml.showStat !== false) {   // 极端小屏统计让位给按钮（见 game.menuLayout）
-      this._fitText(ctx, ['无尽模式最高分：' + game.best + '    已解锁关卡：' + game.unlocked + ' / 10',
-        '最高分 ' + game.best + ' · 已解锁 ' + game.unlocked + '/10'],
+      this._fitText(ctx, ['无尽模式最高分：' + game.best,
+        '最高分 ' + game.best],
         ml.statCx, ml.statY, maxW, 13, 10);
       this._fitText(ctx, ['AI对战最佳：最长 ' + game.mpBest.len + ' 节 · 最高 ' + game.mpBest.score + ' 分',
         'AI最佳 ' + game.mpBest.len + ' 节 · ' + game.mpBest.score + ' 分'],
@@ -1819,23 +1776,7 @@
   };
 
 
-  Renderer.prototype.drawLevels = function (game) {
-    var ctx = this.ctx;
-    this.drawOverlay(0.0);
-    ctx.save();
-    ctx.fillStyle = cfg.INK;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = 'bold 26px sans-serif';
-    ctx.fillText('选择关卡', this.W / 2, this.H * 0.22);
-    ctx.font = '13px sans-serif';
-    ctx.globalAlpha = 0.65;
-    ctx.fillText('通关可解锁后续关卡，每 2 关解锁 1 种新颜色', this.W / 2, this.H * 0.22 + 34);
-    ctx.restore();
-    this.drawButtons(game);
-  };
-
-  Renderer.prototype.drawResult = function (game, isClear) {
+  Renderer.prototype.drawResult = function (game) {
     var ctx = this.ctx;
     this.drawOverlay(0.9);
     ctx.save();
@@ -1843,18 +1784,12 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = 'bold 32px sans-serif';
-    ctx.fillText(isClear ? '过关！' : '游戏结束', this.W / 2, this.H * 0.30);
+    ctx.fillText('游戏结束', this.W / 2, this.H * 0.30);
     ctx.font = 'bold 20px sans-serif';
     ctx.fillText('得分 ' + game.score, this.W / 2, this.H * 0.39);
     ctx.font = '14px sans-serif';
     ctx.globalAlpha = 0.75;
-    if (isClear) {
-      ctx.fillText('存活 ' + game.survivalScore + ' 分 + 消除 ' + game.elimScore + ' 分', this.W / 2, this.H * 0.45);
-    } else if (game.mode === 'endless') {
-      ctx.fillText('历史最高 ' + game.best + ' 分', this.W / 2, this.H * 0.45);
-    } else {
-      ctx.fillText('目标分数 ' + game.levelCfg.targetScore + '，再接再厉', this.W / 2, this.H * 0.45);
-    }
+    ctx.fillText('历史最高 ' + game.best + ' 分', this.W / 2, this.H * 0.45);
     ctx.restore();
     this.drawButtons(game);
   };
@@ -2719,8 +2654,7 @@
       ctx.fillText(p.name, tx, cy + cellH * 0.30);
       ctx.font = '12px sans-serif';
       ctx.fillStyle = p.initial ? '#C2185B' : '#555';
-      ctx.fillText('闯关：' + p.levelText, tx, cy + cellH * 0.58);
-      ctx.fillText('无尽：' + p.endlessText, tx, cy + cellH * 0.80);
+      ctx.fillText(p.endlessText, tx, cy + cellH * 0.62);
       ctx.restore();
     }
 
@@ -2764,10 +2698,9 @@
     this.drawBackground();
     if (game.state === 'menu') { this.drawMenu(game); return; }
     if (game.state === 'guide') { this.drawGuide(game); return; }
-    if (game.state === 'levels') { this.drawLevels(game); return; }
     if (game.state === 'team_lobby') { this.drawTeamLobby(game); return; }
     if (game.state === 'matching') { this.drawMatching(game); return; }
-    // play / clear / over 都先画对局场景（世界 + 相机）
+    // play / over 都先画对局场景（世界 + 相机）
     this.drawPlay(game);
     this.drawPanel(game);
     if (game.state === 'play') {
@@ -2776,11 +2709,10 @@
       this.drawItemToast(game);    // 特殊道具效果提示（屏幕空间，不遮挡地图）
       this.drawGrabBroadcast(game); // 多人专属彩色星常驻播报（仅场上存在时显示）
       this.drawJoystick(game);
-    } else if (game.state === 'clear') this.drawResult(game, true);
-    else if (game.state === 'over') {
-      // 多人对战：卡片式逐行结算（含咬断/累计消除等新统计）；其余模式沿用简单结算
+    } else if (game.state === 'over') {
+      // 多人对战：卡片式逐行结算（含咬断/累计消除等新统计）；无尽沿用简单结算
       if (game.mode === 'multi' && game.mpResult) this.drawMultiResult(game);
-      else this.drawResult(game, false);
+      else this.drawResult(game);
     }
   };
 

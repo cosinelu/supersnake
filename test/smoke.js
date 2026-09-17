@@ -7,11 +7,11 @@
  */
 var path = require('path');
 
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'joystick', 'ai', 'multiplayer', 'game']
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles', 'joystick', 'ai', 'multiplayer', 'game']
   .forEach(function (f) { require(path.join(__dirname, '..', 'js', f + '.js')); });
 
 var CS = globalThis.CS;
-var cfg = CS.config, lv = CS.levels, store = CS.storage, u = CS.utils;
+var cfg = CS.config, store = CS.storage, u = CS.utils;
 
 var passed = 0, failed = 0;
 function ok(cond, name, detail) {
@@ -20,14 +20,8 @@ function ok(cond, name, detail) {
 }
 function section(t) { console.log('\n[' + t + ']'); }
 
-// ---------------- 1. 解锁档位表 ----------------
+// ---------------- 1. 解锁档位表（全模式统一按存活时间） ----------------
 section('解锁档位表');
-var expectLevel = [4, 4, 5, 5, 6, 6, 7, 7, 8, 8];
-var levelOk = true;
-for (var n = 1; n <= 10; n++) {
-  if (cfg.unlockedCountForLevel(n) !== expectLevel[n - 1]) levelOk = false;
-}
-ok(levelOk, '闯关 10 关档位 = [4,4,5,5,6,6,7,7,8,8]');
 var endlessCases = [[0, 4], [44, 4], [45, 5], [89, 5], [90, 6], [134, 6], [135, 7], [179, 7], [180, 8], [9999, 8]];
 var endlessOk = endlessCases.every(function (c) { return cfg.unlockedCountForEndless(c[0]) === c[1]; });
 ok(endlessOk, '无尽 0s=4 / 45s=5 / 90s=6 / 135s=7 / 180s+=8');
@@ -39,30 +33,24 @@ var plan = cfg.colorUnlockPlan();
 ok(plan.length === cfg.COLOR_KEYS.length, 'plan 长度 = 颜色总数 ' + cfg.COLOR_KEYS.length);
 ok(plan.map(function (p) { return p.key; }).join(',') === cfg.COLOR_KEYS.join(','), 'plan 顺序 == COLOR_KEYS（=解锁先后顺序）');
 ok(plan[0].key === 'red' && plan[0].name === '红' && plan[0].order === 1, '第 1 色：红/序号1');
-ok(plan[0].initial === true && plan[0].levelText === '开局解锁' && plan[0].endlessText === '开局解锁', '前 4 色开局解锁');
+ok(plan[0].initial === true && plan[0].endlessText === '开局解锁', '前 4 色开局解锁');
 ok(plan[3].key === 'orange' && plan[3].initial === true, '第 4 色 橙 仍开局解锁');
 ok(plan[4].key === 'purple' && plan[4].order === 5 && plan[4].initial === false, '第 5 色 紫 非开局');
-ok(plan[4].level === 3 && plan[4].levelText === '第 3 关解锁', '紫：闯关第 3 关解锁');
-ok(plan[4].sec === 45 && plan[4].endlessText === '存活 45 秒解锁', '紫：无尽存活 45 秒解锁');
-ok(plan[5].key === 'yellow' && plan[5].level === 5 && plan[5].sec === 90, '黄：第 5 关 / 存活 90 秒');
-ok(plan[6].key === 'teal' && plan[6].level === 7 && plan[6].sec === 135, '青：第 7 关 / 存活 135 秒');
-ok(plan[7].key === 'pink' && plan[7].order === 8 && plan[7].level === 9 && plan[7].sec === 180, '粉：第 8 色 / 第 9 关 / 存活 180 秒');
+ok(plan[4].sec === 45 && plan[4].endlessText === '存活 45 秒解锁', '紫：存活 45 秒解锁');
+ok(plan[5].key === 'yellow' && plan[5].sec === 90, '黄：存活 90 秒解锁');
+ok(plan[6].key === 'teal' && plan[6].sec === 135, '青：存活 135 秒解锁');
+ok(plan[7].key === 'pink' && plan[7].order === 8 && plan[7].sec === 180, '粉：第 8 色 / 存活 180 秒解锁');
 var tr = cfg.guideTabRects({ screenW: 400, screenH: 640 });
 ok(tr.tabItems && tr.tabColors, 'guideTabRects 返回居中页签（道具+颜色）2 个有效热区');
 ok(tr.tabColors.x > tr.tabItems.x, 'guideTabRects 颜色页签在道具页签右侧');
 var mid = 400 / 2; var tabCenter = (tr.tabItems.x + tr.tabColors.x + tr.tabColors.w) / 2;
 ok(Math.abs(tabCenter - mid) < 1, 'guideTabRects 页签组水平居中（误差<1px）', 'mid=' + mid + ' tabCenter=' + tabCenter.toFixed(1));
 
-// ---------------- 2. 关卡曲线（世界大地图） ----------------
-section('关卡曲线');
-var l1 = lv.levelConfig(1), l10 = lv.levelConfig(10);
-ok(l1.W === 1500 && l1.H === 1000, 'L1 世界 1500x1000（v2.5 起始更小）', l1.W + 'x' + l1.H);
-ok(l10.W === 4800 && l10.H === 3200, 'L10 世界 4800x3200（v2.5 随关卡递增）', l10.W + 'x' + l10.H);
-ok(l1.W > l1.H && l10.W > l10.H, '横版：所有关 宽>高');
-ok(l1.speed === 150 && l10.speed === 231, '蛇速 150→231 px/s');
-ok(l1.wallSegments === 3 && l10.wallSegments === 10, '墙段 3→10');
-ok(l1.targetScore === 60 && l10.targetScore === 240, '目标分 60→240');
+// ---------------- 2. 模式世界尺寸（世界大地图） ----------------
+section('模式世界尺寸');
 ok(cfg.ENDLESS.W === 3600 && cfg.ENDLESS.H === 2400, '无尽世界 3600x2400');
+ok(cfg.MULTI.W === 4200 && cfg.MULTI.H === 2800, '多人世界 4200x2800');
+ok(cfg.ENDLESS.W > cfg.ENDLESS.H && cfg.MULTI.W > cfg.MULTI.H, '横版：各模式 宽>高');
 
 // ---------------- 3. 头部插入（unshift 顺序） ----------------
 section('头部插入');
@@ -147,7 +135,7 @@ ok(ebNormal.length === 0 && eb.length() === 4, '普通规则：仅 2 连不触�
 var ebBomb = eb.eliminate(2, 2); // 炸弹：≥2 连即消
 ok(ebBomb.length === 2 && eb.colors.join(',') === 'blue,blue', '炸弹规则(2,2)：清除 2 连（剩保底 2 节）', 'removed=' + ebBomb.length);
 // 减速道具：currentSpeed 在 slowUntil 内 ×SLOW_FACTOR
-var sg2 = new CS.Game(960, 540); sg2.startLevel(1);
+var sg2 = new CS.Game(960, 540); sg2.startEndless();
 var spdNormal = sg2.currentSpeed();
 sg2.timeMs = 1000; sg2.slowUntil = sg2.timeMs + cfg.SLOW_MS; // 启用减速
 var spdSlow = sg2.currentSpeed();
@@ -159,10 +147,8 @@ ok(Math.abs(sg2.currentSpeed() - spdNormal) < 1e-9, '减速结束：速度恢复
 // ---------------- 4f. v2.5 调参锁定（边界墙 / 加速感知） ----------------
 section('v2.5 调参');
 ok(cfg.WALL_THICK >= 40, '边界墙加粗至 ' + cfg.WALL_THICK + 'px（可见；撞即死逻辑不变）', 'WALL_THICK=' + cfg.WALL_THICK);
-ok(cfg.SPEED_LEN_COEF >= 2 && cfg.LEVEL_SPEED_TIME_COEF >= 1,
-  '加速感知：长度加成系数 ' + cfg.SPEED_LEN_COEF + ' / 时间加成系数 ' + cfg.LEVEL_SPEED_TIME_COEF + '（均显著上调）');
-ok(lv.levelConfig(1).W < lv.levelConfig(5).W && lv.levelConfig(5).W < lv.levelConfig(10).W,
-  '关卡地图随关卡递增：L1(' + lv.levelConfig(1).W + ') < L5 < L10(' + lv.levelConfig(10).W + ')');
+ok(cfg.SPEED_LEN_COEF >= 2 && cfg.SPEED_TIME_COEF >= 1,
+  '加速感知：长度加成系数 ' + cfg.SPEED_LEN_COEF + ' / 时间加成系数 ' + cfg.SPEED_TIME_COEF + '（均显著上调）');
 
 // ---------------- 5. 转向速率钳制 + 轨迹跟随 ----------------
 section('转向与轨迹');
@@ -189,7 +175,7 @@ ok(ls.trail.length < 400, '轨迹裁剪生效（不会无限增长）', 'trail='
 // ---------------- 6. 相机钳制 ----------------
 section('相机钳制');
 var cg = new CS.Game(960, 540);
-cg.startLevel(1);
+cg.startEndless();
 var vw = cg.layout().areaW, vh = cg.screenH;
 cg.snake.x = 30; cg.snake.y = 30;      // 左上角
 cg.updateCamera(16);
@@ -205,7 +191,7 @@ ok(cg.camera.x >= -cfg.WALL_THICK - 1e-6 && cg.camera.y >= -cfg.WALL_THICK - 1e-
 section('墙壁生成');
 var wallOk = true, wallDetail = '';
 for (var t = 0; t < 20; t++) {
-  var lc = lv.levelConfig(1 + (t % 10));
+  var lc = (t % 2 === 0) ? cfg.ENDLESS : cfg.MULTI; // 两种模式世界尺寸轮换
   var wl = new CS.Walls(lc.W, lc.H, { x: lc.W / 2, y: lc.H / 2 });
   wl.generateWalls(lc.wallSegments);
   if (wl.area > lc.W * lc.H * cfg.WALL_MAX_RATIO + 1e-6) { wallOk = false; wallDetail = 'area over budget'; break; }
@@ -216,7 +202,7 @@ for (var t = 0; t < 20; t++) {
   }
   if (!wallOk) break;
 }
-ok(wallOk, '20 次生成（L1~L10 轮换）：面积 ≤8%、界内、出生安全区无墙', wallDetail);
+ok(wallOk, '20 次生成（无尽/多人尺寸轮换）：面积 ≤8%、界内、出生安全区无墙', wallDetail);
 // 撞墙判定
 var hw = new CS.Walls(2400, 1600, { x: 1200, y: 800 });
 hw.rects.push({ x: 500, y: 500, w: 96, h: 48 });
@@ -365,36 +351,29 @@ g2.unlockTo(cfg.unlockedCountForEndless(50));
 ok(g2.unlockedCount === 5 && g2.spawner.unlockedKeys.length === 5, 'unlockTo(5)：刷新池同步到 5 色');
 ok(!!g2.unlockBanner && g2.unlockBanner.keys.join(',') === 'purple', '解锁横幅弹出，新增色 = purple');
 
-// 闯关闭环：分数达标 → clear → 解锁下一关
+// 需求 4：多人速度 = 基础 + 长度加成 + 时间加成（开局 elapsed=0，时间加成为 0）
 var g3 = new CS.Game(960, 540);
-g3.startLevel(1);
-g3.elimScore = lv.levelConfig(1).targetScore; // 直接灌分
-g3.update(16);
-ok(g3.state === 'clear' && g3.unlocked === 2, 'L1 达标 → 过关并解锁第 2 关');
-g3.onButton('next');
-ok(g3.state === 'play' && g3.levelCfg.level === 2, '「下一关」进入 L2');
-// 需求 4：闯关速度 = 关卡基础 + 长度加成 + 时间加成（开局 elapsed=0，时间加成为 0）
-var base2 = lv.levelConfig(2).speed;
-ok(Math.abs(g3.snake.speed - (base2 + cfg.START_LENGTH * cfg.SPEED_LEN_COEF)) < 1e-9,
-  '闯关动态速度：开局 = 关卡基础 + 长度加成',
-  'speed=' + g3.snake.speed.toFixed(1) + ' 期望=' + (base2 + cfg.START_LENGTH * cfg.SPEED_LEN_COEF).toFixed(1));
+g3.startMulti();
+ok(Math.abs(g3.currentSpeed() - (cfg.SNAKE_SPEED + g3.snake.length() * cfg.SPEED_LEN_COEF)) < 1e-9,
+  '多人动态速度：开局 = 基础 + 长度加成',
+  'speed=' + g3.currentSpeed().toFixed(1) + ' 期望=' + (cfg.SNAKE_SPEED + g3.snake.length() * cfg.SPEED_LEN_COEF).toFixed(1));
 
 // ---------------- 9b. 动态速度公式（需求 4） ----------------
 section('动态速度公式');
 var sg = new CS.Game(960, 540);
-sg.startLevel(1);
-var base1 = lv.levelConfig(1).speed;
+sg.startMulti();
+var base1 = cfg.SNAKE_SPEED; // startMulti 的 levelCfg.speed = SNAKE_SPEED
 var v0 = sg.currentSpeed();
 ok(Math.abs(v0 - (base1 + cfg.START_LENGTH * cfg.SPEED_LEN_COEF)) < 1e-9 && v0 > base1,
-  '闯关开局：速度 = 基础 + 1.2×节数（大于裸基础速度）', 'v0=' + v0.toFixed(1));
+  '多人开局：速度 = 基础 + 长度系数×节数（大于裸基础速度）', 'v0=' + v0.toFixed(1));
 sg.elapsed = 20000; // 模拟存活 20 秒
 var v1 = sg.currentSpeed();
-ok(Math.abs(v1 - (base1 + cfg.START_LENGTH * cfg.SPEED_LEN_COEF + 20 * cfg.LEVEL_SPEED_TIME_COEF)) < 1e-9 && v1 > v0,
-  '存活 20s → 时间加成 +0.5×20 生效且速度变大', 'v1=' + v1.toFixed(1));
+ok(Math.abs(v1 - (base1 + cfg.START_LENGTH * cfg.SPEED_LEN_COEF + 20 * cfg.SPEED_TIME_COEF)) < 1e-9 && v1 > v0,
+  '存活 20s → 时间加成 SPEED_TIME_COEF×20 生效且速度变大', 'v1=' + v1.toFixed(1));
 for (var q = 0; q < 300; q++) sg.snake.colors.push('red'); // 人为拉长验证封顶
 var v2 = sg.currentSpeed();
-ok(v2 === base1 + cfg.LEVEL_SPEED_CAP_ADD,
-  '节数/时间过大 → 封顶 = 基础 + ' + cfg.LEVEL_SPEED_CAP_ADD, 'v2=' + v2.toFixed(1));
+ok(v2 === base1 + cfg.SPEED_CAP_ADD,
+  '节数/时间过大 → 封顶 = 基础 + ' + cfg.SPEED_CAP_ADD, 'v2=' + v2.toFixed(1));
 var se = new CS.Game(960, 540);
 se.startEndless();
 var e0 = se.currentSpeed();
@@ -420,16 +399,16 @@ ok(g4.timeMs >= 4000 * 16, '主循环时间正常推进', 'timeMs=' + g4.timeMs)
 console.log('  （期间撞墙重开 ' + restarts + ' 次，当前分数 ' + g4.score + '，蛇长 ' + (g4.snake ? g4.snake.length() : '-') + '）');
 
 var g5 = new CS.Game(960, 540);
-g5.startLevel(1);
+g5.startMulti();
 err = null;
 try {
   for (f = 0; f < 4000; f++) {
-    if (g5.state !== 'play') break; // 过关或结束即停
+    if (g5.state !== 'play') break; // 结束即停
     if (f % 5 === 0) g5.snake.setTargetAngle(Math.random() * Math.PI * 2 - Math.PI);
     g5.update(16);
   }
 } catch (e) { err = e; }
-ok(!err, '闯关 4000 帧随机转向输入无异常' + (err ? '：' + err.message : ''), err && err.stack);
+ok(!err, '多人 4000 帧随机转向输入无异常' + (err ? '：' + err.message : ''), err && err.stack);
 
 // 键盘 8 方向输入
 section('键盘 8 方向');
@@ -817,12 +796,12 @@ ok(Array.isArray(cfg.RARITY_ORDER) && cfg.RARITY_ORDER[0] === 'colorful', '彩�
 ok(cfg.ITEM_RARITY.grab === 'colorful', 'grab 道具品质 = colorful');
 ok(cfg.ITEM_GUIDE.some(function (it) { return it.kind === 'grab' && it.rarity === 'colorful'; }), '图鉴含彩色星条目');
 
-// 单/无尽模式默认不出现彩色星（grabEnabled 关闭）
-var lvG = new CS.Game(960, 540); lvG.startLevel(1);
-ok(!lvG.spawner.grabEnabled, '单/无尽模式 spawner.grabEnabled = false（默认不投放彩色星）');
+// 无尽模式默认不出现彩色星（grabEnabled 关闭）
+var lvG = new CS.Game(960, 540); lvG.startEndless();
+ok(!lvG.spawner.grabEnabled, '无尽模式 spawner.grabEnabled = false（默认不投放彩色星）');
 var eb = lvG.spawner;
 eb.grabTimer = 0; eb.updateGrab(16);
-ok(!eb.grabBlock, '单/无尽模式 updateGrab 不生成彩色星');
+ok(!eb.grabBlock, '无尽模式 updateGrab 不生成彩色星');
 
 // 多人模式：spawner 投放彩色星 + 字段齐全
 var mg = new CS.Game(960, 540); mg.startMulti();

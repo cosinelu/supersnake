@@ -12,7 +12,7 @@
  */
 var path = require('path');
 var JS = path.join(__dirname, '..', '..', 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'joystick',
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles', 'joystick',
   'layoutBus', 'ai', 'multiplayer', 'renderer', 'game'].forEach(function (f) { require(path.join(JS, f + '.js')); });
 
 var CS = globalThis.CS;
@@ -189,15 +189,14 @@ function t6() {
     [667, 375, 'SE横屏'], [390, 844, '竖屏'], [360, 800, '安卓竖屏'],
     [1280, 720, '桌面'], [1920, 1080, '大屏'], [320, 240, '极小'], [240, 320, '极小竖']
   ];
-  var states = ['menu', 'levels', 'clear', 'over', 'guide', 'matching'];
+  var states = ['menu', 'over', 'guide', 'matching'];
 
   sizes.forEach(function (sz) {
     var W = sz[0], H = sz[1], name = sz[2];
     var g = new CS.Game(W, H);
-    g.levelCfg = { level: 3, targetScore: 100 };
     var allIn = true, detail = [];
     states.forEach(function (st) {
-      g.mode = 'level';
+      g.mode = 'endless';
       g.setState(st);
       g.uiButtons.forEach(function (b) {
         if (b.y < 0 || b.y + b.h > H || b.x < 0 || b.x + b.w > W) {
@@ -223,9 +222,9 @@ function t6() {
   var gShort = new CS.Game(800, 360);
   gShort.setState('menu');
   var bsShort = gShort.uiButtons;
-  // v3.1 团队模式：菜单第 6 个按钮「在线团队赛」。矮屏分栏后 6 个按钮等比压缩到 44px，
-  // 仍在可点下限之上 —— 不隐藏功能、不遮品牌区即视为通过。
-  ok(bsShort.length === 6, '菜单仍有 6 个按钮（矮屏不隐藏功能）', '实际 ' + bsShort.length);
+  // v3.1 移除闯关模式：菜单 5 个按钮（无尽/AI对战/在线对战/在线团队赛/图鉴）。
+  // 矮屏分栏后不隐藏功能、不遮品牌区即视为通过。
+  ok(bsShort.length === 5, '菜单仍有 5 个按钮（矮屏不隐藏功能）', '实际 ' + bsShort.length);
   // 旧断言是「矮屏按钮必须被压缩」，那是 v3.0.3 纵向压缩方案的产物。
   // 方案 A 把按钮挪到右半区独占纵向空间后，54px 原始高度放得下 —— 不压缩才是对的。
   ok(bsShort[0].h >= 44, '矮屏分栏后按钮仍够大（' + Math.round(bsShort[0].h) + ' ≥ 44）',
@@ -234,9 +233,8 @@ function t6() {
 
   var gDesk = new CS.Game(1280, 720);
   gDesk.setState('menu');
-  // 6 按钮后桌面纵向空间不足 6*54+5*16=404px，等比压缩到 47px（≥44 舒适可点）。
-  // 这是新增「在线团队赛」的预期几何，非回归。
-  ok(gDesk.uiButtons[0].h === 47, '桌面按钮 47px（6 按钮等比压缩，预期）',
+  // 5 按钮后桌面纵向空间 5*54+4*16=334px 放得下，恢复 54px 满尺寸（不压缩）。
+  ok(gDesk.uiButtons[0].h === 54, '桌面按钮 54px（5 按钮无需压缩，预期）',
     '实际 ' + gDesk.uiButtons[0].h);
 
   // solveButtonStack 契约
@@ -270,7 +268,7 @@ function t7() {
     var bs = g.uiButtons;
     var ml = g.menuLayout();
     ok(ml.split === true, name + '：横屏矮屏启用左右分栏');
-    ok(bs.length === 6, name + '：仍是 6 个按钮（不隐藏功能）');
+    ok(bs.length === 5, name + '：仍是 5 个按钮（不隐藏功能）');
 
     var left = Math.min.apply(null, bs.map(function (b) { return b.x; }));
     var bot = Math.max.apply(null, bs.map(function (b) { return b.y + b.h; }));
@@ -423,14 +421,13 @@ function t8() {
                [320, 240, '极小横'], [240, 320, '极小竖']];
 
   // --- 8.1 任意界面：按钮两两不重叠 ---
-  var STATES = ['menu', 'levels', 'guide', 'matching', 'clear', 'over'];
+  var STATES = ['menu', 'guide', 'matching', 'over'];
   SIZES.forEach(function (c) {
     var W = c[0], H = c[1], nm = c[2];
     var overlaps = 0, outs = 0;
     STATES.forEach(function (st) {
       var g = new CS.Game(W, H);
-      g.levelCfg = { level: 3, targetScore: 100 };
-      g.mode = 'level';
+      g.mode = 'endless';
       g.setState(st);
       var bs = g.uiButtons;
       for (var i = 0; i < bs.length; i++) {

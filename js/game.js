@@ -1,18 +1,18 @@
 'use strict';
 /**
  * game.js — 游戏主控：状态机 + 主循环逻辑（v2：自由方向 + 大地图 + 跟随镜头，横版布局）
- * 状态：menu（主菜单）→ levels（选关）→ play（对局）→ clear（过关）/ over（结束）
- * 模式：level（闯关 10 关）/ endless（无尽）/ multi（多人对战：玩家 + AI 蛇，见 multiplayer.js）
+ * 状态：menu（主菜单）→ play（对局）→ over（结束）
+ * 模式：endless（无尽）/ multi（多人对战：玩家 + AI 蛇，见 multiplayer.js；联机局 online 非空）
+ * （闯关模式已于 v3.1 移除：无 levels/clear 状态与关卡数据。）
  *
  * 横版布局：左/中为视口区（相机跟随蛇头、钳制在世界内），右侧竖向 HUD 面板
- * （分数/目标/关卡/已解锁颜色预览 + 小地图；多人模式另有实时排行榜）。
+ * （分数/最高/已解锁颜色预览 + 小地图；多人模式另有实时排行榜）。
  * 除 resize/触摸入口外不含 DOM 依赖，可在 node 中加载做逻辑验证。
  */
 (function (root) {
   var CS = root.CS = root.CS || {};
   var cfg = CS.config;
   var u = CS.utils;
-  var lv = CS.levels;
   var store = CS.storage;
   var Walls = CS.Walls;
   var Snake = CS.Snake;
@@ -31,13 +31,12 @@
     this.timeMs = 0;
 
     // 持久化进度
-    this.unlocked = u.clamp(store.get(cfg.STORAGE_UNLOCKED, 1) | 0, 1, lv.LEVEL_COUNT);
     this.best = store.get(cfg.STORAGE_BEST, 0) | 0;
     var mpb = store.get(cfg.STORAGE_MP_BEST, null); // 多人最佳 {len, score}
     this.mpBest = (mpb && typeof mpb === 'object') ? { len: mpb.len | 0, score: mpb.score | 0 } : { len: 0, score: 0 };
 
     // 对局数据（startRun 时初始化）
-    this.mode = 'level';
+    this.mode = 'endless';
     this.levelCfg = null;
     this.walls = null;
     this.snake = null;
@@ -270,10 +269,8 @@
     var spawn = { x: W / 2, y: H / 2 }; // 出生在世界中心
     this.walls = new Walls(W, H, spawn);
     this.walls.generateWalls(levelCfg.wallSegments);
-    // 计算本局初始解锁颜色数（闯关按当前关卡、无尽按 0 秒）
-    this.unlockedCount = (mode === 'level')
-      ? cfg.unlockedCountForLevel(levelCfg.level)
-      : cfg.unlockedCountForEndless(0);
+    // 本局初始解锁颜色数（所有模式统一按存活时间，开局 = 0 秒）
+    this.unlockedCount = cfg.unlockedCountForEndless(0);
     this.unlockedKeys = cfg.unlockedColorKeys(this.unlockedCount);
     // 先清零计时/计分，再算开局速度（动态速度含时间加成，必须在 elapsed=0 时初始化）
     this.elapsed = 0;
@@ -298,19 +295,6 @@
     this.syncJoystick();
     if (Audio) Audio.startBgm();  // 对局开始 → 启动背景音乐
     this.setState('play');
-  };
-
-  Game.prototype.startLevel = function (n) {
-    var prevCount = this.unlockedCount; // 进入前已解锁数（菜单首进为 0）
-    this.startRun('level', lv.levelConfig(n));
-    // 仅在"从已有对局推进关卡"且颜色增多时弹横幅（菜单首进 prev=0 不弹）
-    if (this.unlockedCount > prevCount && prevCount >= cfg.INITIAL_UNLOCKED) {
-      this.unlockBanner = {
-        text: '新颜色解锁！',
-        until: this.timeMs + cfg.UNLOCK_BANNER_MS,
-        keys: cfg.COLOR_KEYS.slice(prevCount, this.unlockedCount) // 本次新增颜色
-      };
-    }
   };
 
   Game.prototype.startEndless = function () {
@@ -447,8 +431,8 @@
 
   /**
    * 当前蛇速（px/s）——局内动态加速，每帧按公式重算（平滑，无跳变）：
-   *   闯关：min(基础 + LEVEL_SPEED_CAP_ADD, 基础 + SPEED_LEN_COEF×当前节数 + LEVEL_SPEED_TIME_COEF×存活秒)
    *   无尽：min(SPEED_MAX, SNAKE_SPEED + ENDLESS_SPEEDUP_PER_SEC×存活秒 + SPEED_LEN_COEF×当前节数)
+   *   多人：min(基础 + SPEED_CAP_ADD, 基础 + SPEED_LEN_COEF×当前节数 + SPEED_TIME_COEF×存活秒)
    * 只改速度数值；节间距、消除/收集/撞墙判定等几何参数不受影响。
    */
   Game.prototype.currentSpeed = function () {
@@ -460,8 +444,8 @@
       sp = Math.min(cfg.SPEED_MAX, sp);
     } else {
       base = this.levelCfg.speed;
-      sp = base + len * cfg.SPEED_LEN_COEF + sec * cfg.LEVEL_SPEED_TIME_COEF;
-      sp = Math.min(base + cfg.LEVEL_SPEED_CAP_ADD, sp);
+      sp = base + len * cfg.SPEED_LEN_COEF + sec * cfg.SPEED_TIME_COEF;
+      sp = Math.min(base + cfg.SPEED_CAP_ADD, sp);
     }
     if (this.slowUntil && this.timeMs < this.slowUntil) sp *= cfg.SLOW_FACTOR; // 减速道具
     return sp;
@@ -683,10 +667,6 @@
 
     this.spawner.specialChance = cfg.specialChanceForElapsed(this.elapsed); // 越后期特殊道具越多
     this.spawner.update(dt);
-
-    if (this.state === 'play' && this.mode === 'level' && this.score >= this.levelCfg.targetScore) {
-      this.levelClear();
-    }
   };
 
   Game.prototype.gameOver = function () {
@@ -697,15 +677,6 @@
     }
     this.overAt = this.timeMs;
     this.setState('over');
-  };
-
-  Game.prototype.levelClear = function () {
-    var n = this.levelCfg.level;
-    if (n >= this.unlocked && this.unlocked < lv.LEVEL_COUNT) {
-      this.unlocked = n + 1;
-      store.set(cfg.STORAGE_UNLOCKED, this.unlocked);
-    }
-    this.setState('clear');
   };
 
   // ---------------- UI 状态与按钮 ----------------
@@ -785,7 +756,7 @@
     var top = Math.max(H * 0.35 + 16, tY + tSize * 0.95 + 20);  // 让开副标题与蛇动画
     var bottom = H * 0.89 - 14 - inset.bottom;                  // 让开底部两行信息
     var showStat = true, showSub = true, showAnim = true;
-    var minNeed = 6 * 34 + 5 * 6;   // 菜单 6 个按钮（含在线团队赛）
+    var minNeed = 5 * 34 + 4 * 6;   // 菜单 5 个按钮（无尽/AI对战/在线对战/在线团队赛/图鉴）
     if (bottom - top < minNeed) {                               // 极端小屏兜底
       // 空间不足时逐级让位。优先级：**按钮可点 > 蛇动画 > 副标题 > 历史成绩**
       //（点不到的按钮比看不到的装饰严重得多）。
@@ -872,8 +843,8 @@
     var bw = Math.min(220, W * 0.3), bh = 54;
     var i;
     if (this.state === 'menu') {
-      var ids = ['level', 'endless', 'multi', 'online', 'team', 'guide'];
-      var labels = ['闯关模式', '无尽模式', 'AI对战', '在线对战', '在线团队赛', '图鉴'];
+      var ids = ['endless', 'multi', 'online', 'team', 'guide'];
+      var labels = ['无尽模式', 'AI对战', '在线对战', '在线团队赛', '图鉴'];
       var ml = this.menuLayout();
 
       if (ml.split) {
@@ -907,29 +878,6 @@
     } else if (this.state === 'guide') {
       // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
       this.addButton('back', W / 2, H - 28 - inset.bottom, 120, 38, '← 返回');
-    } else if (this.state === 'levels') {
-      // 关卡网格 3 行 + 返回按钮：同样按可用高度自适应（矮屏会压缩行高）
-      var cols = 5, lw = Math.min(64, (W - 80) / cols - 10);
-      var rows = Math.ceil(lv.LEVEL_COUNT / cols);
-      var gridW = cols * (lw + 12) - 12;
-      var startX = (W - gridW) / 2 + lw / 2;
-      // 行 + 返回按钮一起参与求解（返回按钮当作额外一"行"）
-      var gTop = H * 0.22 + 40, gBottom = H - 14 - inset.bottom;
-      var gMinNeed = (rows + 1) * 30 + rows * 5;
-      if (gBottom - gTop < gMinNeed) gTop = Math.max(inset.top + 8, gBottom - gMinNeed);
-      var gs = this.solveButtonStack(rows + 1, gTop, gBottom,
-        { bh: 50, gap: 16, minBh: 30, minGap: 5 });
-      for (i = 1; i <= lv.LEVEL_COUNT; i++) {
-        var col = (i - 1) % cols, row = Math.floor((i - 1) / cols);
-        this.addButton('lv' + i, startX + col * (lw + 12), gs.firstCy + row * gs.step,
-          lw, gs.bh, String(i), i <= this.unlocked);
-      }
-      this.addButton('back', cx, gs.firstCy + rows * gs.step, 160, Math.min(48, gs.bh), '返回');
-    } else if (this.state === 'clear') {
-      var hasNext = this.levelCfg.level < lv.LEVEL_COUNT;
-      var cs = this.solveButtonStack(hasNext ? 2 : 1, H * 0.50, H - 14 - inset.bottom);
-      if (hasNext) this.addButton('next', cx, cs.firstCy, bw, cs.bh, '下一关');
-      this.addButton('menu', cx, cs.firstCy + (hasNext ? cs.step : 0), bw, cs.bh, '返回菜单');
     } else if (this.state === 'over') {
       if (this.mode === 'multi') {
         // 多人结算：按钮并排贴底，把上方空间尽量让给记分牌卡片
@@ -953,8 +901,7 @@
 
   Game.prototype.onButton = function (id) {
     if (Audio) Audio.playClick();  // 按钮点击音效
-    if (id === 'level') this.setState('levels');
-    else if (id === 'endless') this.startEndless();
+    if (id === 'endless') this.startEndless();
     else if (id === 'multi') this.startMulti();
     else if (id === 'online') this.startOnline();
     else if (id === 'online_cancel') this.cancelOnline();
@@ -975,14 +922,8 @@
     else if (id === 'menu') { this._teardownOnline(); this.setState('menu'); }
     else if (id === 'retry') {
       if (this.online) this.startOnline(); // 在线结算「再来一局」→ 重新匹配
-      else if (this.mode === 'level') this.startLevel(this.levelCfg.level);
       else if (this.mode === 'multi') this.startMulti();
       else this.startEndless();
-    }
-    else if (id === 'next') this.startLevel(this.levelCfg.level + 1);
-    else if (id.indexOf('lv') === 0) {
-      var n = parseInt(id.slice(2), 10);
-      if (n >= 1 && n <= this.unlocked) this.startLevel(n);
     }
   };
 
