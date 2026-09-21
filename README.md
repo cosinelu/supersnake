@@ -304,7 +304,8 @@ node test/smoke.js
 |---|---|---|
 | 基础蛇速 / 无尽提速 / 无尽上限 | `SNAKE_SPEED` / `ENDLESS_SPEEDUP_PER_SEC` / `SPEED_MAX` | 150 px/s · +2.5 · 380 |
 | 动态加速：长度/时间加成、多人封顶 | `SPEED_LEN_COEF` / `SPEED_TIME_COEF` / `SPEED_CAP_ADD` | +2.5/节 · +1.2/s · 基础+170 |
-| 转向手感（越大越灵活） | `TURN_RATE` | 9.0 rad/s（≈515°/s） |
+| 转向手感（越大越灵活） | `TURN_RATE` | 13.0 rad/s（≈745°/s，90° 转向约 120ms） |
+| 摇杆死区 / 摇杆头最大偏移 | `JOYSTICK_DEAD_ZONE` / `JOYSTICK_KNOB_MAX` | 10 px / 40 px（浮动摇杆：接管触点即移到触点，松手回左下角默认位） |
 | 节半径 / 节间距 / 节描边 | `SEG_RADIUS` / `SEG_SPACING` / `SEG_STROKE` | 13 px / 30 px（直径26+4间隙）/ 3 px |
 | 撞墙宽容度 | `HEAD_HIT_RADIUS` | 10 px |
 | 相机跟手程度 | `CAMERA_LERP` | 5.0 /s |

@@ -42,7 +42,9 @@
     this.snake = null;
     this.spawner = null;
     this.particles = new Particles();
-    this.joystick = new Joystick(); // 固定底座：浮在视口区左下角
+    this.joystick = new Joystick(); // 浮动摇杆：接管触点即移到触点，松手回默认位（视口左下角）
+    this.cursorX = null;            // PC 光标位置（CSS 像素，main.js mousemove 始终跟踪；null=未知）
+    this.cursorY = null;            //   play 态无键盘/摇杆输入时蛇朝光标方向转（鼠标跟随，§3.7）
     this.camera = { x: 0, y: 0 };   // 相机左上角世界坐标
     this.elapsed = 0;
     this.score = 0;
@@ -154,6 +156,7 @@
     var margin = l.portrait ? 42 : 30;
     var x = l.viewX + r + margin + inset.left;
     var y = l.viewY + l.viewH - r - margin - inset.bottom;
+    this.joystick.setViewport(this.screenW, this.screenH); // 浮动底座钳制范围（屏幕内）
     this.joystick.setBase(x, y, r);
   };
 
@@ -348,8 +351,8 @@
     this.elapsed += dt;
     this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
 
-    // 输入：摇杆/键盘给出目标角（与 AI 同规则：只设目标角，转向速率由 Snake 钳制）
-    var ang = this.joystick.currentAngle();
+    // 输入：键盘/摇杆/鼠标跟随给出目标角（与 AI 同规则：只设目标角，转向速率由 Snake 钳制）
+    var ang = this.steeringAngle();
     if (ang !== null && this.mp.playerEntry.alive) this.snake.setTargetAngle(ang);
 
     this.mp.update(dt);
@@ -563,8 +566,8 @@
     this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
     this.score = this.survivalScore + this.elimScore;
 
-    // 输入：摇杆/键盘给出目标角（无输入则保持上一目标角，蛇继续沿原方向）
-    var ang = this.joystick.currentAngle();
+    // 输入：键盘/摇杆/鼠标跟随给出目标角（无输入则保持上一目标角，蛇继续沿原方向）
+    var ang = this.steeringAngle();
     if (ang !== null) this.snake.setTargetAngle(ang);
 
     // 推进蛇（转向速率钳制 + 恒速前进 + 轨迹跟随在 snake 内完成）
@@ -965,8 +968,46 @@
 
   // ---------------- 触摸/鼠标入口（main.js 转发，坐标为 CSS 逻辑像素） ----------------
 
+  /**
+   * 本帧期望目标角（§3.7 输入优先级）：
+   *   键盘（8 方向）> 触屏/拖拽摇杆（joystick.active 期间，死区内保持上一角）> 鼠标跟随（PC）。
+   * 鼠标跟随：方向 = 蛇头屏幕坐标 → 光标的 atan2；光标未知或几乎压在蛇头上时返回 null
+   * （保持最后方向，不乱转）。无输入返回 null（调用方保持蛇的上一目标角）。
+   */
+  Game.prototype.steeringAngle = function () {
+    var kv = this.joystick.keyVector();
+    if (kv) return Math.atan2(kv.y, kv.x);
+    if (this.joystick.active) return this.joystick.angle;
+    if (this.cursorX === null || this.cursorY === null || !this.snake) return null;
+    // 世界坐标 → 屏幕坐标：减去相机原点，加上视口偏移（与 renderer 同一换算；事件坐标是 CSS 像素）
+    var l = this.layout();
+    var hx = l.viewX + (this.snake.x - this.camera.x);
+    var hy = l.viewY + (this.snake.y - this.camera.y);
+    var dx = this.cursorX - hx, dy = this.cursorY - hy;
+    if (dx * dx + dy * dy < 9) return null; // 光标几乎在蛇头上（<3px）：方向保持，避免原地乱转
+    return Math.atan2(dy, dx);
+  };
+
+  /** PC 光标跟踪（main.js mousemove 无条件转发）：play 态立即应用鼠标跟随转向 */
+  Game.prototype.onCursorMove = function (x, y) {
+    this.cursorX = x; this.cursorY = y;
+    this._applySteeringNow();
+  };
+
+  /**
+   * 即帧生效（§3.7）：touch/mouse 事件路径更新输入后立即 setTargetAngle，不等下一帧 update。
+   * 键盘优先语义由 steeringAngle 内部保证。在线局跳过：输入走 onlineMatch.update
+   * 节流上行 + 预测体每帧取 steeringAngle，事件路径不直接改预测蛇。
+   */
+  Game.prototype._applySteeringNow = function () {
+    if (this.state !== 'play' || !this.snake || this.online) return;
+    if (this.mode === 'multi' && this.mp && this.mp.playerEntry && !this.mp.playerEntry.alive) return;
+    var ang = this.steeringAngle();
+    if (ang !== null) this.snake.setTargetAngle(ang);
+  };
+
   Game.prototype.onTouchStart = function (x, y, id) {
-    if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); return; }
+    if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); this._applySteeringNow(); return; }
     // 非 play 态也要登记触点：否则「倒计时按住手指 → 开局」时摇杆不知道手指还在屏上，
     // 后续只有 touchmove 在流，原实现会整局锁死（见 docs/design §3.7）。
     this.joystick.touches[id] = { x: x, y: y };
@@ -1005,7 +1046,7 @@
   };
 
   Game.prototype.onTouchMove = function (x, y, id) {
-    if (this.state === 'play') { this.joystick.onTouchMove(x, y, id); return; }
+    if (this.state === 'play') { this.joystick.onTouchMove(x, y, id); this._applySteeringNow(); return; }
     // 非 play 态同样跟踪触点位置，保证进入 play 时 latchExisting 能拿到最新坐标
     if (this.joystick.touches[id]) { this.joystick.touches[id].x = x; this.joystick.touches[id].y = y; }
   };

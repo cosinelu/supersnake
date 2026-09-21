@@ -396,7 +396,8 @@
     var g = this.game, r = this.remote;
     if (!r || this._finished) return;
 
-    var ang = g.joystick.currentAngle();
+    // 输入优先级 键盘 > 摇杆 > 鼠标跟随 由 game.steeringAngle 统一裁决（§3.7）
+    var ang = g.steeringAngle();
     var selfAlive = !!(r.playerEntry && r.playerEntry.alive);
 
     // 上行输入（节流 30Hz；只在有方向输入且存活时发）

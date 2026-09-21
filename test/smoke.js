@@ -421,6 +421,104 @@ ok(js2.currentAngle() === null, '无按键无摇杆 → 无输入（保持原方
 js2.angle = 1.2;
 ok(Math.abs(js2.currentAngle() - 1.2) < 1e-9, '摇杆自由角度直接透传（不量化）');
 
+// ---------------- 10c. 浮动摇杆（v3.2，docs/design §3.7） ----------------
+section('浮动摇杆');
+ok(cfg.TURN_RATE === 13.0, 'TURN_RATE = 13.0 rad/s（90° 转向约 120ms）', 'TURN_RATE=' + cfg.TURN_RATE);
+ok(cfg.JOYSTICK_DEAD_ZONE === 10 && cfg.JOYSTICK_KNOB_MAX === 40,
+  '摇杆死区/摇杆头偏移迁入 config：10px / 40px',
+  'DEAD_ZONE=' + cfg.JOYSTICK_DEAD_ZONE + ' KNOB_MAX=' + cfg.JOYSTICK_KNOB_MAX);
+ok(CS.joystick.DEAD_ZONE === cfg.JOYSTICK_DEAD_ZONE && CS.joystick.KNOB_MAX === cfg.JOYSTICK_KNOB_MAX,
+  'joystick.js 从 CS.config 读取死区与摇杆头参数');
+var fj = new CS.Joystick();
+fj.setViewport(960, 540);
+fj.setBase(82, 458, 52); // 横屏默认位（视口左下角）
+fj.onTouchStart(300, 200, 1);
+ok(fj.active && fj.baseX === 300 && fj.baseY === 200, '浮动摇杆：接管触点即把底座移到触点');
+ok(fj.angle === null && fj.knobX === 300 && fj.knobY === 200, '接管瞬间摇杆头居中、死区内无目标角');
+fj.onTouchMove(308, 200, 1);
+ok(fj.angle === null, '死区内拖动（8px < 10px）不产生目标角');
+fj.onTouchMove(330, 200, 1);
+ok(fj.angle !== null && Math.abs(fj.angle) < 1e-9, '拖出死区（30px）→ 目标角 = 向量方向（右=0）', 'angle=' + fj.angle);
+fj.onTouchStart(600, 400, 2);
+ok(fj.touchId === '1' && fj.baseX === 300 && fj.baseY === 200, '第二指不抢接管（底座不动）');
+fj.onTouchEnd(1);
+ok(fj.touchId === '2' && fj.baseX === 600 && fj.baseY === 400 && fj.active,
+  '接管者抬起 → 转交给在屏手指，底座跟随浮到新手指位置');
+fj.onTouchEnd(2);
+ok(!fj.active && fj.baseX === 82 && fj.baseY === 458 && fj.angle === null && !fj.floating,
+  '松开所有触点 → 释放并回默认位（82,458）');
+fj.onTouchStart(5, 5, 3);
+ok(fj.baseX === 52 && fj.baseY === 52, '贴边触点：底座钳制在屏幕内（radius=52）', fj.baseX + ',' + fj.baseY);
+fj.onTouchEnd(3);
+fj.onTouchStart(300, 200, 4);
+fj.setBase(999, 999, 52);
+ok(fj.baseX === 300 && fj.defX === 999 && fj.defY === 999, 'floating 期间 setBase 不打断底座、只更新默认位');
+fj.onTouchEnd(4);
+ok(fj.baseX === 999 && fj.baseY === 999, '松手后回新的默认位');
+// latchExisting 同样浮动
+var fj2 = new CS.Joystick();
+fj2.setViewport(960, 540);
+fj2.setBase(82, 458, 52);
+fj2.touches[9] = { x: 250, y: 250 };
+ok(fj2.latchExisting() === true && fj2.baseX === 250 && fj2.baseY === 250,
+  'latchExisting 接管时底座同样浮到该触点');
+
+// ---------------- 10d. 鼠标跟随转向 + 输入优先级（v3.2，docs/design §3.7） ----------------
+section('鼠标跟随转向');
+var fg = new CS.Game(960, 540);
+fg.startEndless();
+// 960x540 横屏：面板宽 clamp(960*0.19,148,230)=182 → 视口 [0,0,778,540]；
+// 蛇出生世界中心 (1800,1200)，snapCamera 后蛇头屏幕坐标 = 视口中心 (389,270)
+var fl = fg.layout();
+var headSx = fl.viewX + (fg.snake.x - fg.camera.x);
+var headSy = fl.viewY + (fg.snake.y - fg.camera.y);
+ok(Math.abs(headSx - fl.viewW / 2) < 1e-9 && Math.abs(headSy - fl.viewH / 2) < 1e-9,
+  '开局蛇头位于视口中心（鼠标跟随坐标换算基准）', headSx.toFixed(1) + ',' + headSy.toFixed(1));
+ok(fg.steeringAngle() === null, '光标未知（cursorX=null）→ 无输入保持方向');
+fg.onCursorMove(headSx + 200, headSy);
+ok(Math.abs(fg.steeringAngle() - 0) < 1e-9, '鼠标跟随：光标在蛇头正右 → 目标角 0');
+fg.onCursorMove(headSx, headSy - 150);
+ok(Math.abs(fg.steeringAngle() - (-Math.PI / 2)) < 1e-9, '光标在蛇头正上 → -π/2');
+fg.onCursorMove(headSx + 1, headSy + 1);
+ok(fg.steeringAngle() === null, '光标几乎压在蛇头上（<3px）→ 不乱转，保持最后方向');
+// 优先级：键盘 > 摇杆激活 > 鼠标跟随（光标放正下 π/2 以区分三路）
+fg.onCursorMove(headSx, headSy + 200);
+fg.onTouchStart(400, 300, 7);
+ok(fg.steeringAngle() === null, '摇杆激活（死区内）优先于鼠标跟随：返回摇杆角 null 而非鼠标角');
+fg.onTouchMove(400, 240, 7);
+ok(Math.abs(fg.steeringAngle() - (-Math.PI / 2)) < 1e-9, '摇杆拖出死区 → 摇杆角（非鼠标角）');
+fg.joystick.keysDown = { d: { x: 1, y: 0 } };
+ok(Math.abs(fg.steeringAngle() - 0) < 1e-9, '键盘优先于摇杆与鼠标跟随（D → 0）');
+fg.joystick.keysDown = {};
+fg.onTouchEnd(7);
+ok(Math.abs(fg.steeringAngle() - Math.PI / 2) < 1e-9, '摇杆释放且无按键 → 回落到鼠标跟随（π/2）');
+// 即帧生效：touchmove 后立即 setTargetAngle，不等下一帧 update
+fg.onCursorMove(headSx + 999, headSy + 999); // 挪开光标排除干扰
+fg.snake.setTargetAngle(0.5);
+fg.onTouchStart(500, 300, 8);
+ok(Math.abs(fg.snake.targetAngle - 0.5) < 1e-9, '接管瞬间（死区内）不改蛇目标角');
+fg.onTouchMove(500, 200, 8);
+ok(Math.abs(u.normAngle(fg.snake.targetAngle - (-Math.PI / 2))) < 1e-9,
+  '即帧生效：touchmove 后 snake.targetAngle 立即更新（未经 update）', 'target=' + fg.snake.targetAngle);
+fg.onTouchEnd(8);
+// 按住手指开局：startRun 清触点集合后，仍按住的手指靠 touchmove 自动 latch，且底座浮到触点
+var fg2 = new CS.Game(960, 540);
+fg2.onTouchStart(200, 300, 5); // menu 态：登记触点（200,300 不在任何按钮上）
+fg2.startEndless();            // startRun 内 joystick.reset() 清触点集合
+fg2.onTouchMove(200, 300, 5);  // 手指仍按着，move 流入 → 自动 latch
+ok(fg2.joystick.active && fg2.joystick.baseX === 200 && fg2.joystick.baseY === 300,
+  '按住手指开局：touchmove 自动 latch 且底座浮到该触点');
+fg2.onTouchEnd(5);
+// latchExisting 路径（在线局 _onMatched 用 release 保留触点）：进 play 时接管并浮动
+var fg3 = new CS.Game(960, 540);
+fg3.joystick.touches[6] = { x: 260, y: 260 };
+fg3.joystick.release();
+fg3.setState('play'); // 无对局数据的裸状态切换，仅验证 latchExisting 接线
+ok(fg3.joystick.active && fg3.joystick.baseX === 260 && fg3.joystick.baseY === 260,
+  'setState(play) → latchExisting：底座浮到仍按住的手指');
+fg3.setState('menu');
+fg3.joystick.reset();
+
 // ---------------- 11. storage 容错 ----------------
 section('storage');
 store.set('smoke_test_key', 42);

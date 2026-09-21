@@ -96,7 +96,7 @@
     SPEED_LEN_COEF: 2.5,         // 长度加成：每节 +2.5 px/s（无尽/多人通用，加速更明显）
     SPEED_TIME_COEF: 1.2,        // 多人时间加成：每存活 1 秒 +1.2 px/s
     SPEED_CAP_ADD: 170,          // 多人封顶 = 基础速度 + 170 px/s
-    TURN_RATE: 9.0,              // 最大转向速率（rad/s）≈ 515°/s；调高后快速变向能拐进相邻行/列的砖块（原 4.5 太钝，来不及拦截）
+    TURN_RATE: 13.0,             // 最大转向速率（rad/s）≈ 745°/s；90° 转向约 120ms（9.0→13.0：转向跟手，快速变向能拐进相邻行/列的砖块）
     SEG_RADIUS: 13,              // 节半径（px）
     SEG_SPACING: 30,             // 节间弧长间距（px）= 直径 26 + 4px 纸色间隙，保证节可逐个数清
     SEG_STROKE: 3.0,             // 节描边粗细（px，深色 INK，相邻节边界一眼可辨）
@@ -110,6 +110,10 @@
 
     // ---------- 相机 ----------
     CAMERA_LERP: 5.0,            // 跟随平滑系数（/s，帧率无关指数趋近）
+
+    // ---------- 摇杆（浮动摇杆，见 docs/design §3.7；js/joystick.js 从这里读）----------
+    JOYSTICK_DEAD_ZONE: 10,      // 死区半径（px）：触点距底座中心小于此不产生目标角（16→10：轻推即有响应）
+    JOYSTICK_KNOB_MAX: 40,       // 摇杆头最大偏移（px）
 
     // ---------- 色块 ----------
     BLOCK_RADIUS: 12,            // 色块半径（px）
@@ -1552,11 +1556,13 @@
 /* ===== 内联自 js/joystick.js（勿手改，源文件为准） ===== */
 'use strict';
 /**
- * joystick.js — 虚拟摇杆 + 键盘输入（浏览器版 v2：输出目标角度；v3.0.2 修多点触控卡死）
- *  - 摇杆：固定底座浮在棋盘区左下角，半透明手绘风；
- *    触屏 touchstart/touchmove/touchend 与鼠标 mousedown/mousemove/mouseup 均可控制
- *    （事件转发在 main.js，鼠标 id 固定为 'mouse'）；
- *    向量方向即目标角（弧度，不再量化 4 向），死区保留。
+ * joystick.js — 虚拟摇杆 + 键盘输入（浏览器版 v2：输出目标角度；v3.0.2 修多点触控卡死；v3.2 浮动摇杆）
+ *  - 摇杆（v3.2 浮动摇杆，见 docs/design/01-game-design.md §3.7）：
+ *    底座不再固定——play 态首个接管触点落下时，底座瞬时移到触点处（钳制在屏幕内），
+ *    摇杆头居中、无方向；手指拖出死区才产生目标角（弧度，不量化）。
+ *    松开所有触点后底座回到 setBase 设置的默认位（视口左下角布局位）。
+ *    触屏 touchstart/touchmove/touchend 可控制（事件转发在 main.js）；
+ *    PC 端 play 态鼠标拖拽已由「鼠标跟随转向」取代（main.js 不再把 play 态 mousedown 转发进来）。
  *  - 键盘：方向键 / WASD，按住期间有效；支持组合键（如 W+D = 右上），即 8 方向目标角；
  *    键盘优先于摇杆。
  *  - node 环境下构造安全（无 window 时跳过键盘绑定，keysDown/angle 可被测试直接注入）。
@@ -1566,13 +1572,17 @@
  * 这会造成输入永久卡死：A 按着 → B 触屏被忽略 → 抬起 A → B 仍在屏上却永不响应；
  * 或倒计时按住手指、开局后摇杆从未激活 → 整局锁死。
  * 现规则：任意在屏手指均可接管；未激活时收到 move 即自动 latch；
- * 接管者抬起时把控制权转交给其它在屏手指；触点集合空才真正释放。
+ * 接管者抬起时把控制权转交给其它在屏手指（底座跟随浮到新手指位置）；
+ * 触点集合空才真正释放（底座回默认位）。
  */
 (function (root) {
   var CS = root.CS = root.CS || {};
 
-  var DEAD_ZONE = 16;   // 死区半径（px）：触点距底座中心小于此不产生目标角
-  var KNOB_MAX = 40;    // 摇杆头最大偏移（px）
+  // 手感参数统一从 config.js 读（加载顺序：config.js 先于 joystick.js）；
+  // 防御性回退保证 config 缺失时仍可构造（node 裁剪场景）。
+  var _cfg = CS.config || {};
+  var DEAD_ZONE = (typeof _cfg.JOYSTICK_DEAD_ZONE === 'number') ? _cfg.JOYSTICK_DEAD_ZONE : 10; // 死区半径（px）
+  var KNOB_MAX = (typeof _cfg.JOYSTICK_KNOB_MAX === 'number') ? _cfg.JOYSTICK_KNOB_MAX : 40;     // 摇杆头最大偏移（px）
 
   function mapKey(k) {
     if (!k) return null;
@@ -1588,6 +1598,9 @@
     this.active = false;
     this.touchId = null;
     this.baseX = 0; this.baseY = 0;
+    this.defX = 0; this.defY = 0; // 默认位（setBase 设置的布局位；floating 期间 base 与它分离）
+    this.floating = false;        // 底座当前是否浮在触点处（true 时 base≠default）
+    this.viewW = 0; this.viewH = 0; // 屏幕尺寸（浮动钳制用；0=未知不钳制，game.syncJoystick 注入）
     this.radius = 52;         // 底座半径（渲染用，由 game.syncJoystick 按布局调整）
     this.knobX = 0; this.knobY = 0;
     this.angle = null;        // 摇杆当前目标角（弧度，死区内保持上一值）
@@ -1615,21 +1628,49 @@
     });
   };
 
-  /** 设置固定底座位置（窗口 resize / 布局变化时调用；激活中不打断） */
+  /**
+   * 设置默认底座位置（窗口 resize / 布局变化时调用；floating/激活中不打断当前底座）。
+   * 默认位始终更新：松手（release）后底座回到这里。
+   */
   Joystick.prototype.setBase = function (x, y, r) {
     if (typeof r === 'number') this.radius = r;
+    this.defX = x; this.defY = y;
     if (this.active) return;
+    this.floating = false;
     this.baseX = x; this.baseY = y;
     this.knobX = x; this.knobY = y;
   };
 
-  /** 按下：记入触点集合；无人接管时由该指接管 */
+  /** 注入屏幕尺寸（浮动底座钳制用；game.syncJoystick 每次布局时调用） */
+  Joystick.prototype.setViewport = function (w, h) {
+    this.viewW = w; this.viewH = h;
+  };
+
+  /**
+   * 浮动摇杆：把底座瞬时移到触点处（钳制在屏幕内，贴边触点不把底座顶出屏幕），
+   * 摇杆头居中。接管（onTouchStart/latch/latchExisting）与转交（onTouchEnd）时调用。
+   */
+  Joystick.prototype._floatBase = function (x, y) {
+    var m = this.radius;
+    if (this.viewW > 0) x = Math.max(m, Math.min(this.viewW - m, x));
+    if (this.viewH > 0) y = Math.max(m, Math.min(this.viewH - m, y));
+    this.floating = true;
+    this.baseX = x; this.baseY = y;
+    this.knobX = x; this.knobY = y;
+  };
+
+  /** id 归一化为字符串：touches 的键恒为字符串，避免数字 id 与字符串键严格比较失配 */
+  function sid(id) { return String(id); }
+
+  /** 按下：记入触点集合；无人接管时由该指接管（底座浮到触点） */
   Joystick.prototype.onTouchStart = function (x, y, id) {
+    id = sid(id);
     this.touches[id] = { x: x, y: y };
     if (!this.active) {
       this.active = true;
       this.touchId = id;
-      this.updateKnob(x, y);
+      this._floatBase(x, y);   // 浮动摇杆：底座瞬移到触点
+      this.updateKnob(x, y);   // dist=0：摇杆头居中、死区内不产生目标角
       return true;
     }
     return false;
@@ -1637,15 +1678,18 @@
 
   /**
    * 移动：任意在屏手指都能驱动摇杆。
-   * 未激活时收到 move 即由这根手指**自动接管**（latch）——覆盖「倒计时按住手指」、
-   * 「代码强制重置过摇杆」、「touchstart 被状态门槛吞掉」等一切代码态与物理态脱钩的情况。
+   * 未激活时收到 move 即由这根手指**自动接管**（latch，底座同样浮到触点）——
+   * 覆盖「倒计时按住手指」、「代码强制重置过摇杆」、「touchstart 被状态门槛吞掉」
+   * 等一切代码态与物理态脱钩的情况。
    * 已有接管者且不是这根手指时忽略，避免两指互抢导致方向抖动。
    */
   Joystick.prototype.onTouchMove = function (x, y, id) {
+    id = sid(id);
     this.touches[id] = { x: x, y: y };
     if (!this.active) {
       this.active = true;
       this.touchId = id;
+      this._floatBase(x, y);
       this.updateKnob(x, y);
       return;
     }
@@ -1653,7 +1697,7 @@
     this.updateKnob(x, y);
   };
 
-  /** 触点 → 摇杆头位置 + 自由方向目标角（相对固定底座，保留死区） */
+  /** 触点 → 摇杆头位置 + 自由方向目标角（相对浮动底座，保留死区） */
   Joystick.prototype.updateKnob = function (x, y) {
     var dx = x - this.baseX, dy = y - this.baseY;
     var dist = Math.sqrt(dx * dx + dy * dy);
@@ -1671,32 +1715,38 @@
 
   /**
    * 抬起：移出触点集合。
-   * 若抬起的是当前接管者，把控制权**转交**给任意其它在屏手指（而非直接失效）；
+   * 若抬起的是当前接管者，把控制权**转交**给任意其它在屏手指（而非直接失效），
+   * 底座跟随浮到新手指位置（更直觉；方向保持最后值，拖出死区才更新）。
    * 没有其它触点时才真正释放。这样「A 按着→B 触屏→抬起 A」后 B 能立即接手。
    */
   Joystick.prototype.onTouchEnd = function (id) {
+    id = sid(id);
     delete this.touches[id];
     if (!this.active) return;
     if (id !== this.touchId) return;   // 非接管者抬起：不影响当前操作
     for (var other in this.touches) {  // 转交给下一根还在屏上的手指
       this.touchId = other;
+      this._floatBase(this.touches[other].x, this.touches[other].y);
       this.updateKnob(this.touches[other].x, this.touches[other].y);
       return;
     }
     this.release();
   };
 
-  /** 真正释放摇杆（已无在屏触点）：清激活态与角度，摇杆头归位 */
+  /** 真正释放摇杆（已无在屏触点）：清激活态与角度，底座回默认位、摇杆头归位 */
   Joystick.prototype.release = function () {
     this.active = false;
     this.touchId = null;
     this.angle = null;
+    this.floating = false;
+    this.baseX = this.defX;
+    this.baseY = this.defY;
     this.knobX = this.baseX;
     this.knobY = this.baseY;
   };
 
   /**
-   * 场景切换/对局开始时的硬重置：连在屏触点集合一并清空。
+   * 场景切换/对局开始时的硬重置：连在屏触点集合一并清空（底座随 release 回默认位）。
    * 注意：对局开始时应优先用 latchExisting（若手指还按着，直接接管而不是丢弃）。
    */
   Joystick.prototype.reset = function () {
@@ -1705,7 +1755,7 @@
   };
 
   /**
-   * 进入 play 态时若已有在屏触点，立即用它 latch。
+   * 进入 play 态时若已有在屏触点，立即用它 latch（底座同样浮到该触点）。
    * 覆盖「倒计时就按住手指、开局后只有 touchmove 在流」的场景（原会整局锁死）。
    * @returns {boolean} 是否成功接管
    */
@@ -1714,6 +1764,7 @@
     for (var id in this.touches) {
       this.active = true;
       this.touchId = id;
+      this._floatBase(this.touches[id].x, this.touches[id].y);
       this.updateKnob(this.touches[id].x, this.touches[id].y);
       return true;
     }
@@ -5812,7 +5863,8 @@
     var g = this.game, r = this.remote;
     if (!r || this._finished) return;
 
-    var ang = g.joystick.currentAngle();
+    // 输入优先级 键盘 > 摇杆 > 鼠标跟随 由 game.steeringAngle 统一裁决（§3.7）
+    var ang = g.steeringAngle();
     var selfAlive = !!(r.playerEntry && r.playerEntry.alive);
 
     // 上行输入（节流 30Hz；只在有方向输入且存活时发）
@@ -8722,7 +8774,9 @@
     this.snake = null;
     this.spawner = null;
     this.particles = new Particles();
-    this.joystick = new Joystick(); // 固定底座：浮在视口区左下角
+    this.joystick = new Joystick(); // 浮动摇杆：接管触点即移到触点，松手回默认位（视口左下角）
+    this.cursorX = null;            // PC 光标位置（CSS 像素，main.js mousemove 始终跟踪；null=未知）
+    this.cursorY = null;            //   play 态无键盘/摇杆输入时蛇朝光标方向转（鼠标跟随，§3.7）
     this.camera = { x: 0, y: 0 };   // 相机左上角世界坐标
     this.elapsed = 0;
     this.score = 0;
@@ -8834,6 +8888,7 @@
     var margin = l.portrait ? 42 : 30;
     var x = l.viewX + r + margin + inset.left;
     var y = l.viewY + l.viewH - r - margin - inset.bottom;
+    this.joystick.setViewport(this.screenW, this.screenH); // 浮动底座钳制范围（屏幕内）
     this.joystick.setBase(x, y, r);
   };
 
@@ -9028,8 +9083,8 @@
     this.elapsed += dt;
     this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
 
-    // 输入：摇杆/键盘给出目标角（与 AI 同规则：只设目标角，转向速率由 Snake 钳制）
-    var ang = this.joystick.currentAngle();
+    // 输入：键盘/摇杆/鼠标跟随给出目标角（与 AI 同规则：只设目标角，转向速率由 Snake 钳制）
+    var ang = this.steeringAngle();
     if (ang !== null && this.mp.playerEntry.alive) this.snake.setTargetAngle(ang);
 
     this.mp.update(dt);
@@ -9243,8 +9298,8 @@
     this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
     this.score = this.survivalScore + this.elimScore;
 
-    // 输入：摇杆/键盘给出目标角（无输入则保持上一目标角，蛇继续沿原方向）
-    var ang = this.joystick.currentAngle();
+    // 输入：键盘/摇杆/鼠标跟随给出目标角（无输入则保持上一目标角，蛇继续沿原方向）
+    var ang = this.steeringAngle();
     if (ang !== null) this.snake.setTargetAngle(ang);
 
     // 推进蛇（转向速率钳制 + 恒速前进 + 轨迹跟随在 snake 内完成）
@@ -9645,8 +9700,46 @@
 
   // ---------------- 触摸/鼠标入口（main.js 转发，坐标为 CSS 逻辑像素） ----------------
 
+  /**
+   * 本帧期望目标角（§3.7 输入优先级）：
+   *   键盘（8 方向）> 触屏/拖拽摇杆（joystick.active 期间，死区内保持上一角）> 鼠标跟随（PC）。
+   * 鼠标跟随：方向 = 蛇头屏幕坐标 → 光标的 atan2；光标未知或几乎压在蛇头上时返回 null
+   * （保持最后方向，不乱转）。无输入返回 null（调用方保持蛇的上一目标角）。
+   */
+  Game.prototype.steeringAngle = function () {
+    var kv = this.joystick.keyVector();
+    if (kv) return Math.atan2(kv.y, kv.x);
+    if (this.joystick.active) return this.joystick.angle;
+    if (this.cursorX === null || this.cursorY === null || !this.snake) return null;
+    // 世界坐标 → 屏幕坐标：减去相机原点，加上视口偏移（与 renderer 同一换算；事件坐标是 CSS 像素）
+    var l = this.layout();
+    var hx = l.viewX + (this.snake.x - this.camera.x);
+    var hy = l.viewY + (this.snake.y - this.camera.y);
+    var dx = this.cursorX - hx, dy = this.cursorY - hy;
+    if (dx * dx + dy * dy < 9) return null; // 光标几乎在蛇头上（<3px）：方向保持，避免原地乱转
+    return Math.atan2(dy, dx);
+  };
+
+  /** PC 光标跟踪（main.js mousemove 无条件转发）：play 态立即应用鼠标跟随转向 */
+  Game.prototype.onCursorMove = function (x, y) {
+    this.cursorX = x; this.cursorY = y;
+    this._applySteeringNow();
+  };
+
+  /**
+   * 即帧生效（§3.7）：touch/mouse 事件路径更新输入后立即 setTargetAngle，不等下一帧 update。
+   * 键盘优先语义由 steeringAngle 内部保证。在线局跳过：输入走 onlineMatch.update
+   * 节流上行 + 预测体每帧取 steeringAngle，事件路径不直接改预测蛇。
+   */
+  Game.prototype._applySteeringNow = function () {
+    if (this.state !== 'play' || !this.snake || this.online) return;
+    if (this.mode === 'multi' && this.mp && this.mp.playerEntry && !this.mp.playerEntry.alive) return;
+    var ang = this.steeringAngle();
+    if (ang !== null) this.snake.setTargetAngle(ang);
+  };
+
   Game.prototype.onTouchStart = function (x, y, id) {
-    if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); return; }
+    if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); this._applySteeringNow(); return; }
     // 非 play 态也要登记触点：否则「倒计时按住手指 → 开局」时摇杆不知道手指还在屏上，
     // 后续只有 touchmove 在流，原实现会整局锁死（见 docs/design §3.7）。
     this.joystick.touches[id] = { x: x, y: y };
@@ -9685,7 +9778,7 @@
   };
 
   Game.prototype.onTouchMove = function (x, y, id) {
-    if (this.state === 'play') { this.joystick.onTouchMove(x, y, id); return; }
+    if (this.state === 'play') { this.joystick.onTouchMove(x, y, id); this._applySteeringNow(); return; }
     // 非 play 态同样跟踪触点位置，保证进入 play 时 latchExisting 能拿到最新坐标
     if (this.joystick.touches[id]) { this.joystick.touches[id].x = x; this.joystick.touches[id].y = y; }
   };
@@ -9857,13 +9950,18 @@
     canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
 
-    // ---------- 鼠标输入（桌面端拖动摇杆 / 点按钮） ----------
+    // ---------- 鼠标输入（桌面端：鼠标跟随转向 + 点按钮） ----------
+    // v3.2（docs/design §3.7）：play 态蛇朝光标方向转（slither.io 式，免拖拽），
+    // mousedown 不再驱动摇杆拖拽；非 play 态的按钮点击路径完全不受影响。
+    // 触屏设备无持续 mousemove，天然不受影响。
     var mouseDown = false;
     canvas.addEventListener('mousedown', function (e) {
+      if (game.state === 'play') return; // play 态：鼠标跟随取代拖拽，按下不驱动摇杆
       mouseDown = true;
       game.onTouchStart(e.clientX, e.clientY, 'mouse');
     });
     window.addEventListener('mousemove', function (e) {
+      game.onCursorMove(e.clientX, e.clientY); // 不按按键也跟踪光标（鼠标跟随转向用）
       if (mouseDown) game.onTouchMove(e.clientX, e.clientY, 'mouse');
     });
     window.addEventListener('mouseup', function (e) {

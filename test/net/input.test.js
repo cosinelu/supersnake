@@ -43,7 +43,11 @@ function t1() {
   section('断点1 多点触控：A 按着 → B 触屏 → 抬起 A');
   var j = mkJoy();
   j.onTouchStart(300, 400, 'A');
-  ok(j.currentAngle() !== null, 'A 按下后有角度');
+  // v3.2 浮动摇杆：按下时底座浮到触点，摇杆头居中（死区内）暂无角度；拖出死区才有
+  ok(j.baseX === 300 && j.baseY === 400 && j.currentAngle() === null,
+    'A 按下：底座浮到触点、死区内暂无角度（v3.2 浮动摇杆）');
+  j.onTouchMove(340, 400, 'A');
+  ok(j.currentAngle() !== null, 'A 拖出死区后有角度');
   j.onTouchStart(500, 300, 'B');           // B 加入（A 仍接管）
   ok(j.touchId === 'A', 'A 仍是接管者（避免两指互抢抖动）');
   j.onTouchEnd('A');                       // A 抬起 → 应转交给 B
@@ -92,7 +96,11 @@ function t3() {
   j.release();                              // 模拟 onlineMatch._onMatched 的释放
   ok(!!j.touches['X'], 'release() 保留在屏触点集合（不清物理状态）');
   j.onTouchMove(400, 300, 'X');
-  ok(j.currentAngle() !== null, 'release 后拖动自动重新接管（原实现被吞）');
+  // v3.2 浮动摇杆：重新接管时底座浮到 move 触点（死区内无角度），再拖出死区才出角度
+  ok(j.active && j.baseX === 400 && j.baseY === 300,
+    'release 后拖动自动重新接管、底座浮到触点（原实现被吞）');
+  j.onTouchMove(440, 300, 'X');
+  ok(j.currentAngle() !== null, '重新接管后拖出死区产生角度');
 
   // reset() 才是硬清零
   var j2 = mkJoy();
@@ -123,6 +131,8 @@ function t4() {
 
   g.setState('play');
   ok(g.joystick.active === true, 'play 态自动接管该手指');
+  g.onTouchMove(650, 300, 'f1');           // v3.2 浮动摇杆：接管时底座浮到触点，拖出死区才有角度
+  ok(g.joystick.currentAngle() !== null, '接管后拖出死区产生角度');
 
   // 让 remote 处于可上行状态（存活），跑几帧看是否真的发包
   om.remote = { playerEntry: { alive: true }, renderSample: function () {}, timeMs: 0 };

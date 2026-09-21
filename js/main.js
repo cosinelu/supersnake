@@ -133,13 +133,18 @@
     canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
 
-    // ---------- 鼠标输入（桌面端拖动摇杆 / 点按钮） ----------
+    // ---------- 鼠标输入（桌面端：鼠标跟随转向 + 点按钮） ----------
+    // v3.2（docs/design §3.7）：play 态蛇朝光标方向转（slither.io 式，免拖拽），
+    // mousedown 不再驱动摇杆拖拽；非 play 态的按钮点击路径完全不受影响。
+    // 触屏设备无持续 mousemove，天然不受影响。
     var mouseDown = false;
     canvas.addEventListener('mousedown', function (e) {
+      if (game.state === 'play') return; // play 态：鼠标跟随取代拖拽，按下不驱动摇杆
       mouseDown = true;
       game.onTouchStart(e.clientX, e.clientY, 'mouse');
     });
     window.addEventListener('mousemove', function (e) {
+      game.onCursorMove(e.clientX, e.clientY); // 不按按键也跟踪光标（鼠标跟随转向用）
       if (mouseDown) game.onTouchMove(e.clientX, e.clientY, 'mouse');
     });
     window.addEventListener('mouseup', function (e) {
