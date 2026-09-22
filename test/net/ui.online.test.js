@@ -132,7 +132,7 @@ ft.cancelMatch = function () {};
 ft.sendInput = function () {};
 ft.accelDiag = {
   state: 'fallback', phase: 'hello', reason: 'hello_ack_timeout',
-  target: 'https://dev-snake.pippocao.top:8093/wt',
+  target: 'https://wt-fixture.example.invalid:8093/wt',
   webTransportSupported: true, secureContext: true, helloSent: 5
 };
 ft.diagnostics = function () {
