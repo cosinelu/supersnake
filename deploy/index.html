@@ -1,4 +1,4 @@
-<!-- 本文件由 scripts/pack-share.js 自动生成（v3.0.5），请勿手工修改；改动请改源文件后重新打包 -->
+<!-- 本文件由 scripts/pack-share.js 自动生成（v3.1.1），请勿手工修改；改动请改源文件后重新打包 -->
 <!DOCTYPE html>
 <html lang="zh-CN" data-page-node-id="ATwgaSbx44PSV0oVnAFqYo">
 <head data-page-node-id="9vQtmzA4KJaVotoUs08mHC">
@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<title>消食蛇 · 网页版（分享版 v3.0.5）</title>
+<title>消食蛇 · 网页版（分享版 v3.1.1）</title>
 <style>
   html, body {
     margin: 0;
@@ -110,6 +110,12 @@
 
     // ---------- 相机 ----------
     CAMERA_LERP: 5.0,            // 跟随平滑系数（/s，帧率无关指数趋近）
+
+    // ---------- 联机远端回放（只影响显示，不影响服务器判定）----------
+    SERVER_TICK_MS: 33,          // 服务器固定模拟步长；用于把快照 tick 还原成权威时间线
+    REMOTE_EXTRAPOLATE_MS: 260,  // 缓冲耗尽后的短外推上限；超过则停住，避免长期偏离/穿墙
+    REMOTE_CLOCK_SHIFT_MS: 120,  // 网络偏移明显变大才考虑重锚（普通抖动不改变时间线）
+    REMOTE_REANCHOR_MS: 1000,    // 高偏移持续这么久才后移锚点，避免 TCP 突发批量到达造成跳变
 
     // ---------- 摇杆（浮动摇杆，见 docs/design §3.7；js/joystick.js 从这里读）----------
     JOYSTICK_DEAD_ZONE: 10,      // 死区半径（px）：触点距底座中心小于此不产生目标角（16→10：轻推即有响应）
@@ -1117,6 +1123,11 @@
       if (floorHit) break; // 已决定重置，无需继续连锁
     }
     if (removed.length) this.computeBody(); // 身体由轨迹派生，消除后自然收缩
+    // 标准消除入口同时承担“存活蛇长度不变量”的最终兜底。
+    // clear / clear3 / rand* 会先直接删节，再调用 eliminate；若直接删除已经把颜色节
+    // 降到 minLen 以下，此时 findRuns() 为空，旧代码不会设置 floorHit，蛇可存活到 0 节。
+    // 这会让 renderer 把唯一的 segPos[0] 当尾巴画，玩家看到的就是“头掉了”。
+    if (runLen === cfg.ELIM_RUN && this.colors.length < minLen) floorHit = true;
     // 保底触发：整段消除后，随机补满 REFILL_ON_FLOOR 块「已解锁颜色」砖（保留残余的非消除节），让游戏继续
     if (floorHit) {
       var pool = (this.colorKeys && this.colorKeys.length) ? this.colorKeys : cfg.COLOR_KEYS;
@@ -1162,8 +1173,9 @@
     this.snake = snake;
     this.blocks = []; // {x, y, color, phase, kind}（世界坐标）
     this.timer = 0;
-    this.meteors = [];   // 流星砖块：{x,y,vx,vy,color,ttl,trail,phase}（移动实体）
+    this.meteors = [];   // 流星砖块：{mid,x,y,vx,vy,color,ttl,trail,phase}（移动实体）
     this.meteorTimer = 0;
+    this._nextMeteorId = 1; // 联机客户端按它做跨快照轨迹关联；单机无需展示但保持同构
     this.others = []; // 其他活蛇数组（多人模式由 multiplayer 挂活引用，刷新时同样避让）
     this.unlockedKeys = cfg.COLOR_KEYS.slice(); // 默认全部；game 会按本局解锁数覆盖
     this.specialChance = cfg.ITEM_SPECIAL_CHANCE; // 每帧由 game/mp 按存活时间更新（越后期越高）
@@ -1360,7 +1372,10 @@
       my = d.y > 0 ? -40 : H + 40;
       vx = 0; vy = d.y * spd;
     }
+    var mid = this._nextMeteorId;
+    this._nextMeteorId = this._nextMeteorId >= 65535 ? 1 : this._nextMeteorId + 1;
     this.meteors.push({
+      mid: mid,
       x: mx, y: my, vx: vx, vy: vy,
       color: this.unlockedKeys[Math.floor(Math.random() * this.unlockedKeys.length)],
       ttl: cfg.METEOR_TTL_MS,
@@ -2729,6 +2744,10 @@
       this.particles.burst(px, py, '#E8552F', 12, 1.5);
       var rem = e.snake.eliminate(2, 2);
       this.scoreChain(e, rem, 1.4, cfg.BOMB_SCORE);
+      // 炸弹自己的 2 连规则允许暂时降到 2 节；多人路径不像单人 Game.update
+      // 那样在本帧末尾统一再跑标准消除，所以必须在这里执行长度保底。
+      var rem2 = e.snake.eliminate(cfg.MIN_LENGTH, cfg.ELIM_RUN);
+      this.scoreChain(e, rem2, 1, 0);
     } else if (b.kind === 'slow') {
       if (CS.audio) CS.audio.playSpecial();
       e.slowUntil = this.timeMs + cfg.SLOW_MS;
@@ -2976,13 +2995,13 @@
  *            co[colors], sg[[x,y]节心含尾巴节], kl(kills), es(elimScore), et(elimTotal),
  *            ml(maxLen), bt(bittenUntil), sl(slowUntil) }
  *   block: { x, y, c(color|null), k(kind), r(rarity|null), ph(phase), ttl, rr(收集半径) }
- *   meteor:{ x, y, vx, vy, c, ph, tr[[x,y]轨迹] }
+ *   meteor:{ id(mid), x, y, vx, vy, c, ph, tr[[x,y]轨迹] }
  */
 (function (root) {
   var CS = root.CS = root.CS || {};
 
-  // v2：二进制快照升级为 BIN_VER=2（kind/null color/meteors），不允许新旧两端混跑。
-  var PROTO_VER = 2;
+  // v3：流星补稳定实体 id（mid），客户端才能跨快照做连续轨迹；不允许新旧两端混跑。
+  var PROTO_VER = 3;
 
   // ---------------- 消息类型 ----------------
   // 客户端 → 服务器
@@ -3116,7 +3135,8 @@
   function serMeteor(m) {
     var tr = [];
     for (var i = 0; i < (m.trail || []).length; i++) tr.push(qCoord(m.trail[i].x), qCoord(m.trail[i].y));
-    return { x: qCoord(m.x), y: qCoord(m.y), vx: qCoord(m.vx), vy: qCoord(m.vy), c: cShort(m.color), ph: Math.round((m.phase || 0) * 100) / 100, tr: tr };
+    var mid = m.mid != null ? m.mid : (m.id != null ? m.id : 0);
+    return { id: mid & 0xFFFF, x: qCoord(m.x), y: qCoord(m.y), vx: qCoord(m.vx), vy: qCoord(m.vy), c: cShort(m.color), ph: Math.round((m.phase || 0) * 100) / 100, tr: tr };
   }
 
   /** 组装一帧快照 */
@@ -3159,7 +3179,7 @@
   function deMeteor(d) {
     var tr = [];
     for (var i = 0; i + 1 < (d.tr || []).length; i += 2) tr.push({ x: d.tr[i], y: d.tr[i + 1] });
-    return { x: d.x, y: d.y, vx: d.vx, vy: d.vy, color: cLong(d.c), phase: d.ph, trail: tr };
+    return { mid: d.id || 0, x: d.x, y: d.y, vx: d.vx, vy: d.vy, color: cLong(d.c), phase: d.ph, trail: tr };
   }
 
   CS.protocol = {
@@ -3508,8 +3528,8 @@
 
   var MAGIC_SNAP = 0x53;  // 'S'
   var MAGIC_INPUT = 0x49; // 'I'
-  // v2：色块补 kind/null-color，快照补移动流星；否则加速路径会丢失道具语义。
-  var BIN_VER = 2;
+  // v3：移动流星补稳定 mid，客户端跨快照关联轨迹并按速度连续渲染。
+  var BIN_VER = 3;
 
   // flags 位定义
   var F_ALIVE = 1;
@@ -3720,6 +3740,7 @@
     w.u8(Math.min(255, meteors.length));
     for (i = 0; i < meteors.length && i < 255; i++) {
       var mt = meteors[i], trail = mt.trail || [];
+      w.u16((mt.mid != null ? mt.mid : 0) & 0xFFFF);
       w.i16(mt.x); w.i16(mt.y); w.i16(mt.vx); w.i16(mt.vy);
       w.u8(cIdx(mt.color));
       w.u8(Math.round((((mt.phase || 0) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2) * 255));
@@ -3769,11 +3790,12 @@
 
     var nMt = r.u8(), meteors = [];
     for (i = 0; i < nMt; i++) {
+      var mid = r.u16();
       var mx = r.i16(), my = r.i16(), vx = r.i16(), vy = r.i16();
       var mc = cName(r.u8()), phase = r.u8() / 255 * Math.PI * 2;
       var nTrail = r.u8(), trail = [];
       for (var ti = 0; ti < nTrail; ti++) trail.push({ x: r.i16(), y: r.i16() });
-      meteors.push({ x: mx, y: my, vx: vx, vy: vy, color: mc, phase: phase, trail: trail });
+      meteors.push({ mid: mid, x: mx, y: my, vx: vx, vy: vy, color: mc, phase: phase, trail: trail });
     }
     if (r.overflow || r.remain() !== 2) return null;
     return {
@@ -3927,7 +3949,14 @@
     this.stats = {
       sent: 0, recv: 0, dupDropped: 0, decodeFail: 0, fallbacks: 0, socketErrors: 0,
       rawSnaps: 0, missingFrames: 0, outOfOrder: 0,
+      rxBytes: 0, txBytes: 0,   // 真实字节计数（HUD 流量速率的数据源）
       pathRttMs: 0, pathRttJitterMs: 0, pathRttMinMs: 0, pathRttMaxMs: 0
+    };
+    // 玩家侧仍然静默回落 WSS，但工程诊断不能再静默：否则手机只显示 TCP，
+    // 无法区分“不支持 WebTransport”“QUIC/端口被拦”与“运行中断链”。
+    this.diag = {
+      state: 'not_attempted', phase: '', reason: '', target: '',
+      lastError: '', failedAt: 0, helloSent: 0, ackedAt: 0, firstSnapAt: 0
     };
 
     this._hsTimer = null;
@@ -3937,16 +3966,35 @@
     this._pending = [];         // 打散发送的定时器句柄，dispose 时清理
   }
 
+  UdpAccel.prototype._markFailure = function (reason, phase, err, terminal) {
+    this.diag.state = terminal ? 'terminal' : 'fallback';
+    this.diag.reason = reason || 'unknown';
+    this.diag.phase = phase || '';
+    this.diag.failedAt = Date.now();
+    this.diag.lastError = err && (err.message || String(err)) || '';
+  };
+
   /**
    * 用 matched 下发的信息建立 UDP 旁路。
    * @param {object} info { udpPort, udpToken, host }
    */
   UdpAccel.prototype.attach = function (info) {
-    if (!info || !info.udpPort || info.udpToken == null) return false;
-    if (!this.socketFactory) return false;
+    if (!info || !info.udpPort || info.udpToken == null) {
+      this._markFailure('invalid_offer', 'offer');
+      return false;
+    }
+    if (!this.socketFactory) {
+      this._markFailure('factory_unavailable', 'factory');
+      return false;
+    }
     this.host = info.host || this._defaultHost();
     this.port = info.udpPort;
     this.token = info.udpToken >>> 0;
+    this.diag.state = 'connecting';
+    this.diag.phase = 'factory';
+    var diagHost = this.host.indexOf(':') >= 0 && this.host.charAt(0) !== '['
+      ? '[' + this.host + ']' : this.host;
+    this.diag.target = diagHost + ':' + this.port;
     if (info.snapIntervalMs) this.frameIntervalMs = info.snapIntervalMs;
     if (info.tickStep > 0) this.tickStep = info.tickStep | 0;
     if (info.expectedDup > 0) {
@@ -3957,14 +4005,26 @@
     var self = this;
     try {
       this.sock = this.socketFactory();
-    } catch (e) { return false; }
-    if (!this.sock) return false;
+    } catch (e) {
+      this._markFailure('constructor_throw', 'factory', e, true);
+      return false;
+    }
+    if (!this.sock) {
+      var ff = this.socketFactory.lastFailure;
+      this._markFailure(ff && ff.reason || 'factory_unavailable',
+        ff && ff.phase || 'factory', ff && ff.error, true);
+      return false;
+    }
+    if (this.sock.target) this.diag.target = this.sock.target;
 
+    this.diag.phase = 'hello';
     this.sock.onMessage(function (u8) { self._onMessage(u8); });
     if (typeof this.sock.onError === 'function') {
-      this.sock.onError(function () {
+      this.sock.onError(function (err) {
         self.stats.socketErrors++;
         self.available = false;
+        self._markFailure(err && err.transportReason || 'socket_error',
+          err && err.transportPhase || 'runtime', err, true);
         // WebTransport writable/reader/会话关闭属于终止性错误：当前 socket 已不可恢复。
         // 停掉握手、保活、探测和打散定时器，避免每 300ms/5s 重复发送 accel(0)。
         if (self._hsTimer) { clearInterval(self._hsTimer); self._hsTimer = null; }
@@ -3984,11 +4044,12 @@
       if (self.available) { clearInterval(self._hsTimer); self._hsTimer = null; return; }
       tries++;
       if (tries * 300 >= HANDSHAKE_TIMEOUT_MS) {
-        // 判定 UDP 不可用：静默走 TCP，不打扰玩家（架构文档 §4.3）
+        // 判定 UDP 不可用：玩家无感走 TCP，但把失败阶段留给 __net()。
         clearInterval(self._hsTimer); self._hsTimer = null;
         // 即使 active 从未变成 true，也必须强制上报一次 false：服务端可能已经
         // 收到 hello 并开始发二进制，只是回程 ACK/快照全丢。不上报就会形成
         // 服务端持续抑制 TCP、客户端却等待 TCP 的“假回落”。
+        self._markFailure('hello_ack_timeout', 'hello');
         self._setActive(false, true);
         return;
       }
@@ -4006,6 +4067,7 @@
     var w = new B.BinWriter(8);
     w.u8(MAGIC_HELLO); w.u32(this.token); w.finishCrc16();
     this._lastHelloAt = Date.now();
+    this.diag.helloSent++;
     this._raw(w.bytes());
   };
 
@@ -4015,14 +4077,17 @@
       if (this.sock.send(u8, this.host, this.port) === false) {
         this.stats.socketErrors++;
         this.available = false;
+        this._markFailure('send_failed', 'write');
         this._setActive(false, true);
         return false;
       }
       this.stats.sent++;
+      this.stats.txBytes += u8.length;
       return true;
     } catch (e) {
       this.stats.socketErrors++;
       this.available = false;
+      this._markFailure('send_failed', 'write', e);
       this._setActive(false, true);
       return false;
     }
@@ -4032,12 +4097,19 @@
     if (this.active === v && !forceNotify) return;
     var wasActive = this.active;
     this.active = v;
+    if (v) {
+      this.diag.state = 'active';
+      this.diag.phase = 'snap';
+    }
     if (!v && wasActive) this.stats.fallbacks++;
     this.onStateChange(v);
   };
 
   UdpAccel.prototype._onMessage = function (u8) {
     if (!u8 || !u8.length) return;
+    // 流量计数在最外层：ACK / 快照 / 畸形包都是真实到达的字节，
+    // 只统计快照会把冗余副本与握手流量从 HUD 速率里抹掉。
+    this.stats.rxBytes += u8.length;
 
     if (u8[0] === MAGIC_HACK) {
       // ACK 与 hello 一样是 7B 完整帧：magic1 + token4 + crc16。
@@ -4049,6 +4121,7 @@
       var ackToken = new DataView(u8.buffer, u8.byteOffset, u8.byteLength).getUint32(1, true);
       if (ackToken !== this.token) { this.stats.decodeFail++; return; }
       this.lastRecvAt = Date.now();
+      this.diag.ackedAt = this.lastRecvAt;
       if (this._lastHelloAt > 0) {
         var rtt = Math.max(0, Date.now() - this._lastHelloAt);
         this.stats.pathRttMs = rtt;
@@ -4077,6 +4150,7 @@
     var dec = BP.decSnapBin(u8);
     if (!dec) { this.stats.decodeFail++; return; }
     this.lastRecvAt = Date.now();
+    if (!this.diag.firstSnapAt) this.diag.firstSnapAt = this.lastRecvAt;
     this.stats.rawSnaps++;
 
     // 下行去重：冗余副本与乱序。tick 是 uint16，需处理环回。
@@ -4185,7 +4259,10 @@
     if (this._stallTimer) return;
     this._stallTimer = setInterval(function () {
       if (!self.active) return;
-      if (Date.now() - self.lastRecvAt > STALL_MS) self._setActive(false);
+      if (Date.now() - self.lastRecvAt > STALL_MS) {
+        self._markFailure('downlink_stall', 'runtime');
+        self._setActive(false);
+      }
     }, 200);
   };
 
@@ -4266,37 +4343,58 @@
    */
   function makeWebTransportFactory(info) {
     var f = function () {
+      f.lastFailure = null;
       var WT = (typeof WebTransport !== 'undefined') ? WebTransport
         : (typeof globalThis !== 'undefined' ? globalThis.WebTransport : null);
-      if (!WT || !info || !info.wtPort) return null;
+      if (!WT) {
+        f.lastFailure = { reason: 'webtransport_unsupported', phase: 'factory' };
+        return null;
+      }
+      if (!info || !info.wtPort) {
+        f.lastFailure = { reason: 'invalid_offer', phase: 'offer' };
+        return null;
+      }
 
       var host = info.host ||
         (typeof location !== 'undefined' && location.hostname ? location.hostname : '127.0.0.1');
-      var url = 'https://' + host + ':' + info.wtPort + (info.wtPath || '/wt');
+      var authority = host.indexOf(':') >= 0 && host.charAt(0) !== '[' ? '[' + host + ']' : host;
+      var url = 'https://' + authority + ':' + info.wtPort + (info.wtPath || '/wt');
       var opts = {};
       if (info.certHashes) opts.serverCertificateHashes = info.certHashes;
 
       var wt;
-      try { wt = new WT(url, opts); } catch (e) { return null; }
+      try { wt = new WT(url, opts); } catch (e) {
+        f.lastFailure = { reason: 'constructor_throw', phase: 'factory', error: e };
+        return null;
+      }
 
       var writer = null, reader = null, onMsg = null, onError = null, closed = false;
       var queue = [];   // ready 之前的待发数据（限长，防异常场景无限增长）
 
-      function fail(err) {
+      function taggedError(err, reason, phase) {
+        var out = err instanceof Error ? err : new Error(reason);
+        out.transportReason = reason;
+        out.transportPhase = phase;
+        return out;
+      }
+
+      function fail(err, reason, phase) {
         if (closed) return;
         closed = true;
         queue.length = 0;
-        if (onError) onError(err || new Error('WebTransport datagram closed'));
+        if (onError) onError(taggedError(err, reason || 'socket_error', phase || 'runtime'));
       }
 
       function writeDatagram(u8) {
         if (!writer || closed) return false;
         try {
           var pending = writer.write(u8);
-          if (pending && typeof pending.catch === 'function') pending.catch(fail);
+          if (pending && typeof pending.catch === 'function') {
+            pending.catch(function (e) { fail(e, 'write_rejected', 'write'); });
+          }
           return true;
         } catch (e) {
-          fail(e);
+          fail(e, 'write_rejected', 'write');
           return false;
         }
       }
@@ -4313,8 +4411,12 @@
         if (closed) return;
         try {
           writer = makeWriter(wt.datagrams);
-          reader = wt.datagrams.readable.getReader();
-        } catch (e) { return; }
+          reader = wt.datagrams && wt.datagrams.readable && wt.datagrams.readable.getReader();
+          if (!writer || !reader) throw new Error('WebTransport datagram API unavailable');
+        } catch (e) {
+          fail(e, 'datagram_api_error', 'datagram_api');
+          return;
+        }
         for (var i = 0; i < queue.length; i++) {
           if (!writeDatagram(queue[i])) break;
         }
@@ -4322,19 +4424,24 @@
         (function pump() {
           if (closed || !reader) return;
           reader.read().then(function (res) {
-            if (res.done || closed) { if (res.done) fail(); return; }
+            if (res.done || closed) {
+              if (res.done) fail(null, 'session_closed', 'read');
+              return;
+            }
             if (onMsg) {
               var v = res.value;
               onMsg(v instanceof Uint8Array ? v : new Uint8Array(v));
             }
             pump();
-          }).catch(fail);
+          }).catch(function (e) { fail(e, 'read_rejected', 'read'); });
         })();
-      }).catch(fail);
+      }).catch(function (e) { fail(e, 'wt_ready_rejected', 'wt_ready'); });
 
-      wt.closed.then(function () { fail(); }).catch(fail);
+      wt.closed.then(function () { fail(null, 'session_closed', 'session'); })
+        .catch(function (e) { fail(e, 'session_closed', 'session'); });
 
       return {
+        target: url,
         onMessage: function (cb) { onMsg = cb; },
         onError: function (cb) { onError = cb; },
         send: function (u8) {
@@ -4429,6 +4536,26 @@
     return u.normAngle(a + u.normAngle(b - a) * t);
   }
 
+  /** TCP 完整 tick 与二进制 uint16 tick → 单调 tick；state 只保存上次原始/展开值 */
+  function normalizeTick16(state, rawTick) {
+    var raw = rawTick | 0;
+    var low = raw & 0xFFFF;
+    if (state.lastRawTick == null) {
+      state.lastRawTick = raw;
+      state.lastNormTick = raw;
+      return raw;
+    }
+    var delta = (low - (state.lastRawTick & 0xFFFF)) & 0xFFFF;
+    var norm = delta < 0x8000
+      ? state.lastNormTick + delta
+      : state.lastNormTick - (0x10000 - delta);
+    if (norm >= state.lastNormTick) {
+      state.lastRawTick = raw;
+      state.lastNormTick = norm;
+    }
+    return norm;
+  }
+
   /**
    * 由快照间隔推导渲染延迟。
    *
@@ -4461,14 +4588,20 @@
    * @param {number} [delayMs] 显式渲染延迟；缺省 120（旧默认）。
    *   通常不直接传，而是 new 完调用 setSnapInterval(matched.snapIntervalMs)。
    */
-  function InterpBuffer(delayMs) {
+  function InterpBuffer(delayMs, tickMs) {
     this.delay = delayMs || 120;
     this.snapIntervalMs = 0; // 0 = 未从服务器获知
     this.cap = 30;           // 与旧行为一致（15Hz 下约 2 秒历史）
-    this.snaps = []; // [{ time(本地接收时刻), byId: {id: deSnake} }] 按时间升序
-    // 缓冲是否够用必须可观测：renderT 越过最新帧时只能钳住不动，
-    // 这正是玩家看到「停一下、再跳一下」的直接原因。
-    this.stats = { samples: 0, interpolated: 0, latestClamps: 0, oldestClamps: 0 };
+    this.tickMs = tickMs || (CS.config && CS.config.SERVER_TICK_MS) || 33;
+    this._timeBaseMs = null; // tick×tickMs → 本地时钟的锚点；取观测到的最小网络偏移
+    this.lastRawTick = null; // 原始 tick（二进制会 16 位截断，JSON 不截断）
+    this.lastNormTick = null; // 展开后的单调 tick（跨 65536 回绕仍递增）
+    this._highBaseMs = 0;      // 持续高时延候选锚点
+    this._highBaseSince = 0;
+    this.snaps = []; // [{ time(权威时间线的本地等价), recvTime, byId, meteors, tick(单调) }]
+    // 缓冲是否够用必须可观测：renderT 越过最新帧时先短外推，
+    // 但 latestClamps 仍按原始耗尽统计，不能把问题粉饰掉。
+    this.stats = { samples: 0, interpolated: 0, latestClamps: 0, oldestClamps: 0, extrapolated: 0 };
     this.lastLeadMs = 0;     // 最新快照相对 renderT 还领先多少；负数 = 缓冲已耗尽
     this._lastBracketKind = 'none';
   }
@@ -4486,23 +4619,97 @@
     return true;
   };
 
+  /** 把 TCP 完整 tick 与二进制 uint16 tick 展开为同一条单调序号（回绕安全） */
+  InterpBuffer.prototype._normalizeTick = function (rawTick) {
+    return normalizeTick16(this, rawTick);
+  };
+
+  InterpBuffer.prototype._shiftTimeBase = function (base) {
+    var delta = base - this._timeBaseMs;
+    if (!delta) return;
+    this._timeBaseMs = base;
+    for (var i = 0; i < this.snaps.length; i++) this.snaps[i].time += delta;
+  };
+
   /**
-   * 收到一帧快照（snap 为协议结构；deSnake 在 push 内完成，后续零解析成本）。
+   * 把服务器 tick 映射到本地渲染时钟。
+   *
+   * 不能用「每帧实际到达时刻」直接排列：TCP 队头阻塞解除后，多个快照会同一毫秒
+   * 批量到达，按收包时刻回放就会把等待期间的运动压缩成一帧，远端蛇看起来瞬移。
+   * tick 是服务器固定模拟步长，天然等间隔；这里只估计网络偏移，把权威时间线
+   * 平移到本地时钟。时延下降立即前锚；时延上升必须持续一段时间才后锚，避免一次
+   * TCP 突发把整条时间线打乱。
+   */
+  InterpBuffer.prototype._snapTime = function (tick, nowMs) {
+    var tickAbs = tick * this.tickMs;
+    var base = nowMs - tickAbs;
+    if (this._timeBaseMs === null) {
+      this._timeBaseMs = base;
+      return tickAbs + this._timeBaseMs;
+    }
+    if (base < this._timeBaseMs && Math.abs(this._timeBaseMs - base) < 10000) {
+      this._shiftTimeBase(base);
+      this._highBaseMs = 0;
+      this._highBaseSince = 0;
+      return tickAbs + this._timeBaseMs;
+    }
+
+    var shiftThreshold = (CS.config && CS.config.REMOTE_CLOCK_SHIFT_MS) || 120;
+    var reanchorMs = (CS.config && CS.config.REMOTE_REANCHOR_MS) || 1000;
+    if (base > this._timeBaseMs + shiftThreshold) {
+      if (!this._highBaseSince || base > this._highBaseMs) {
+        if (!this._highBaseSince) this._highBaseSince = nowMs;
+        this._highBaseMs = Math.max(this._highBaseMs || 0, base);
+      }
+      if (nowMs - this._highBaseSince >= reanchorMs) {
+        this._shiftTimeBase(this._highBaseMs);
+        this._highBaseMs = 0;
+        this._highBaseSince = 0;
+      }
+    } else {
+      this._highBaseMs = 0;
+      this._highBaseSince = 0;
+    }
+    return tickAbs + this._timeBaseMs;
+  };
+
+  /**
+   * 收到一帧快照（snap 为协议结构；反序列化在 push 内完成，后续零解析成本）。
    * @param {object} snap protocol.snap 消息
    * @param {number} nowMs 本地接收时刻（Date.now 风格）
    * @param {function} deSnake protocol.deSnake
+   * @param {function} [deMeteor] protocol.deMeteor；提供后移动流星进入同一时间线
    */
-  InterpBuffer.prototype.push = function (snap, nowMs, deSnake) {
+  InterpBuffer.prototype.push = function (snap, nowMs, deSnake, deMeteor) {
+    var normTick = this._normalizeTick(snap.tk);
+    var last = this.snaps[this.snaps.length - 1];
+    if (last && normTick < last.tick) return false; // 跨通道迟到的旧帧，先判序再付解析成本
     var byId = {};
     for (var i = 0; i < snap.sn.length; i++) {
       var d = deSnake(snap.sn[i]);
       byId[d.id] = d;
     }
-    this.snaps.push({ time: nowMs, byId: byId, tick: snap.tk });
+    var meteors = [];
+    if (deMeteor && snap.mt) {
+      for (i = 0; i < snap.mt.length; i++) {
+        var m = deMeteor(snap.mt[i]);
+        // 协议 v3 起服务端保证稳定 mid；缺省键仅为旧测试/旧 JSON 数据兜底。
+        m._key = m.mid != null ? String(m.mid) : ('legacy-' + i);
+        meteors.push(m);
+      }
+    }
+    var item = { time: this._snapTime(normTick, nowMs), recvTime: nowMs, byId: byId, meteors: meteors, tick: normTick };
+    if (last && last.tick === item.tick) {
+      // TCP/加速探测期可能同 tick 双通道到达；同帧替换，不能把时间线插出两个并列点。
+      this.snaps[this.snaps.length - 1] = item;
+    } else {
+      this.snaps.push(item);
+    }
     // 保留最近约 2 秒历史（帧数由 cap 折算，见 deriveCap）。
     // **不能写死帧数**：30 帧在 15Hz 是 2 秒，在 30Hz 只剩 1 秒，
     // 提频等于悄悄砍掉一半历史窗口。
     while (this.snaps.length > this.cap) this.snaps.shift();
+    return true;
   };
 
   /** 取渲染时刻的前后两帧快照（不足两帧时返回 [最新, 最新]） */
@@ -4525,22 +4732,73 @@
     return [ss[0], ss[0], 0];
   };
 
+  /** 整体平移点列（短外推时身体/拖尾必须跟随，不允许只移动头部或本体） */
+  function shiftPoints(points, dx, dy) {
+    var out = [];
+    for (var i = 0; i < (points || []).length; i++) {
+      out.push({ x: points[i].x + dx, y: points[i].y + dy });
+    }
+    return out;
+  }
+
+  /** 流星显示态：普通括号插值；越过最新帧时按速度短外推 */
+  function sampleMeteor(a, b, t, overMs) {
+    var x, y, angleDx, angleDy;
+    if (overMs > 0) {
+      x = b.x + b.vx * overMs / 1000;
+      y = b.y + b.vy * overMs / 1000;
+    } else if (a && a !== b) {
+      x = a.x + (b.x - a.x) * t;
+      y = a.y + (b.y - a.y) * t;
+    } else {
+      x = b.x; y = b.y;
+    }
+    angleDx = x - b.x; angleDy = y - b.y;
+    return {
+      mid: b.mid, x: x, y: y, vx: b.vx, vy: b.vy,
+      color: b.color, phase: b.phase, trail: shiftPoints(b.trail, angleDx, angleDy)
+    };
+  }
+
   /**
-   * 采样一帧插值结果：{ id: {x,y,angle,segPos, ...静态字段取较新帧} }
+   * 采样一帧插值结果：{ snakes: {id: ...}, meteors: [...] }
+   * 兼容旧调用方：返回值本身仍可直接按 snake id 索引（snakes 字段是同一对象）。
    * 节心插值要求两帧节数一致（变长/消除瞬间取较新帧，一跳可接受）。
    */
   InterpBuffer.prototype.sample = function (nowMs) {
-    var br = this._bracket(nowMs - this.delay);
+    var renderT = nowMs - this.delay;
+    var br = this._bracket(renderT);
     if (!br) return null;
     this.stats.samples++;
     if (this._lastBracketKind === 'latest') this.stats.latestClamps++;
     else if (this._lastBracketKind === 'oldest') this.stats.oldestClamps++;
     else if (this._lastBracketKind === 'interpolate') this.stats.interpolated++;
     var s0 = br[0], s1 = br[1], t = Math.max(0, Math.min(1, br[2]));
+    var maxExtra = (CS.config && CS.config.REMOTE_EXTRAPOLATE_MS) || 260;
+    var overMs = this._lastBracketKind === 'latest'
+      ? Math.min(maxExtra, Math.max(0, renderT - s1.time)) : 0;
+    if (overMs > 0) this.stats.extrapolated++;
+
     var out = {};
     for (var id in s1.byId) {
       var b = s1.byId[id], a = s0.byId[id];
-      if (!a || a === b) { out[id] = b; continue; }
+      if (!a || a === b) {
+        if (overMs > 0) {
+          var dx = Math.cos(b.angle) * (b.speed || 0) * overMs / 1000;
+          var dy = Math.sin(b.angle) * (b.speed || 0) * overMs / 1000;
+          out[id] = {
+            id: b.id, name: b.name, isPlayer: b.isPlayer, alive: b.alive,
+            x: b.x + dx, y: b.y + dy, angle: b.angle, speed: b.speed,
+            colors: b.colors, segPos: shiftPoints(b.segPos, dx, dy),
+            kills: b.kills, elimScore: b.elimScore, elimTotal: b.elimTotal, maxLen: b.maxLen,
+            bittenUntil: b.bittenUntil, slowUntil: b.slowUntil,
+            extrapolated: overMs
+          };
+        } else {
+          out[id] = b;
+        }
+        continue;
+      }
       var segPos = b.segPos;
       if (a.segPos.length === b.segPos.length) {
         segPos = [];
@@ -4559,14 +4817,29 @@
         speed: b.speed,
         colors: b.colors, segPos: segPos,
         kills: b.kills, elimScore: b.elimScore, elimTotal: b.elimTotal, maxLen: b.maxLen,
-        bittenUntil: b.bittenUntil, slowUntil: b.slowUntil
+        bittenUntil: b.bittenUntil, slowUntil: b.slowUntil,
+        extrapolated: 0
       };
     }
+
+    var meteors = [];
+    var aByKey = {}, i;
+    for (i = 0; i < (s0.meteors || []).length; i++) aByKey[s0.meteors[i]._key] = s0.meteors[i];
+    for (i = 0; i < (s1.meteors || []).length; i++) {
+      var mb = s1.meteors[i];
+      meteors.push(sampleMeteor(aByKey[mb._key], mb, t, overMs));
+    }
+
+    // 旧测试与旧调用方期望 sample(...)[id] 直接取蛇；附加字段不可枚举，
+    // 避免 RemoteMatch 的 for..in 把 meteors/snakes 当成蛇 id。
+    Object.defineProperty(out, 'snakes', { value: out, enumerable: false });
+    Object.defineProperty(out, 'meteors', { value: meteors, enumerable: false });
     return out;
   };
 
   CS.InterpBuffer = InterpBuffer;
   CS.lerpAngle = lerpAngle;
+  CS.normalizeTick16 = normalizeTick16;
   CS.deriveInterpDelay = deriveDelay;
   CS.deriveInterpCap = deriveCap;
   if (typeof module !== 'undefined' && module.exports) module.exports = InterpBuffer;
@@ -4901,13 +5174,16 @@
     this.timeMs = 0;
     this.tick = 0;
     this.lastAck = 0;
+    this._lastSnapTick = null;
+    this._tickState = {}; // 即使插值关闭也要展开 uint16 tick，避免回绕后永久拒绝快照
     this._byId = {};
     // 团队模式元数据（matched 下发；FFA 时 mode='ffa'、teams=null、myTeam=-1）
     this.mode = (opts && opts.mode) || 'ffa';
     this.teams = (opts && opts.teams) || null;
     this.myTeam = (opts && typeof opts.myTeam === 'number') ? opts.myTeam : -1;
     var delay = opts && 'interpDelayMs' in opts ? opts.interpDelayMs : 120;
-    this._interp = (delay && CS.InterpBuffer) ? new CS.InterpBuffer(delay) : null;
+    var tickMs = opts && opts.tickMs || (CS.config && CS.config.SERVER_TICK_MS) || 33;
+    this._interp = (delay && CS.InterpBuffer) ? new CS.InterpBuffer(delay, tickMs) : null;
     if (this._interp && opts && opts.snapIntervalMs) {
       this._interp.setSnapInterval(opts.snapIntervalMs);
     }
@@ -4929,11 +5205,19 @@
 
   /** 应用一帧快照（protocol.snap 结构）；色块/流星取最新，蛇进插值缓冲 */
   RemoteMatch.prototype.applySnap = function (snap, nowMs) {
-    this.tick = snap.tk;
+    // RemoteMatch 自身也做 tick 判序：传输层有过滤，但 LocalTransport/测试可绕过它；
+    // 旧 tick 不得先把 blocks/meteors 刷成旧状态、再被插值层丢弃。
+    var tick = this._interp ? this._interp._normalizeTick(snap.tk)
+      : (CS.normalizeTick16 ? CS.normalizeTick16(this._tickState, snap.tk) : (snap.tk | 0));
+    if (this._lastSnapTick !== null && tick < this._lastSnapTick) return false;
+    this._lastSnapTick = tick;
+    snap.tk = tick;
+    this.tick = tick;
     this.timeMs = snap.tm;
     this.lastAck = snap.ack;
     this._applyLatest(snap);
-    if (this._interp) this._interp.push(snap, nowMs || Date.now(), P.deSnake);
+    if (this._interp) this._interp.push(snap, nowMs || Date.now(), P.deSnake, P.deMeteor);
+    return true;
   };
 
   /** 最新快照直达（M2 行为；插值关闭时渲染也用它） */
@@ -4963,11 +5247,13 @@
     if (!this._interp) return;
     var s = this._interp.sample(nowMs || Date.now());
     if (!s) return;
-    for (var id in s) {
+    var snakes = s.snakes || s;
+    for (var id in snakes) {
       if (+id === this.playerId) continue; // 本机蛇走预测
       var e = this._byId[id];
-      if (e) updateEntryView(e, s[id]);
+      if (e) updateEntryView(e, snakes[id]);
     }
+    if (s.meteors) this.meteors = s.meteors;
   };
 
   // ---- 与 CS.Multiplayer 同构的只读接口（renderer/game 复用） ----
@@ -5092,6 +5378,12 @@
     this.udpFactoryOverride = opts.udpSocketFactory || null;   // 测试可注入
     this.udpFactory = null;    // 由 _setupUdp 依 matched 信息选定
     this.udp = null;
+    this.accelDiag = {
+      state: 'not_attempted', phase: '', reason: '', target: '',
+      webTransportSupported: false, secureContext: true,
+      lastError: '', failedAt: 0, helloSent: 0, ackedAt: 0, firstSnapAt: 0
+    };
+    this.bytes = { rx: 0, tx: 0 }; // 真实收发字节计数（HUD 流量速率的唯一数据源）
     this.meta = {};        // 低频通道缓存：id → { nm, kl, es, ... }
     this._metaTick = -1;
     this._blocksById = {}; // 二进制色块增量的本地基线；1Hz meta / TCP 全量会校正
@@ -5192,13 +5484,15 @@
       self._dropped = false;
       self._emit('open');
       // 首次 RTT 不应等 5 秒心跳周期；联机一建立就测一次，HUD 开局即可显示。
-      if (ws.readyState === 1) ws.send(P.encode(P.ping(Date.now())));
+      self._sendRaw(P.encode(P.ping(Date.now())));
       self._hbTimer = setInterval(function () {
-        if (ws.readyState === 1) ws.send(P.encode(P.ping(Date.now())));
+        self._sendRaw(P.encode(P.ping(Date.now())));
       }, self.heartbeatMs);
     };
     ws.onmessage = function (ev) {
-      var msg = P.decode(typeof ev === 'string' ? ev : ev.data);
+      var data = typeof ev === 'string' ? ev : ev.data;
+      self.bytes.rx += typeof data === 'string' ? data.length : (data && data.byteLength || 0);
+      var msg = P.decode(data);
       if (!msg) return; // 服务器消息畸形：忽略（协议内错误走 error 类型）
       switch (msg.t) {
         case P.S2C.QUEUED: self._emit('queued', msg); break;
@@ -5251,8 +5545,14 @@
     ws.onerror = function () { /* close 随后触发 drop */ };
   };
 
+  WsTransport.prototype._sendRaw = function (data) {
+    if (!this.ws || this.ws.readyState !== 1) return;
+    this.bytes.tx += typeof data === 'string' ? data.length : (data && data.byteLength || 0);
+    this.ws.send(data);
+  };
+
   WsTransport.prototype._send = function (obj) {
-    if (this.ws && this.ws.readyState === 1) this.ws.send(P.encode(obj));
+    this._sendRaw(P.encode(obj));
   };
 
   /**
@@ -5264,13 +5564,32 @@
    * 两条通道在服务端是**独立的会话表**，token 各用各的，绝不能混。
    */
   WsTransport.prototype._setupUdp = function (msg) {
-    if (!this.udpEnabled || !CS.UdpAccel) return;
+    var hasWT = (typeof WebTransport !== 'undefined') ||
+      (typeof globalThis !== 'undefined' && !!globalThis.WebTransport);
+    var secure = typeof isSecureContext === 'undefined' ? true : !!isSecureContext;
+    this.accelDiag = {
+      state: 'not_attempted', phase: 'offer', reason: '', target: '',
+      webTransportSupported: !!hasWT, secureContext: secure,
+      lastError: '', failedAt: 0, helloSent: 0, ackedAt: 0, firstSnapAt: 0
+    };
+    if (!this.udpEnabled) { this.accelDiag.reason = 'client_disabled'; return; }
+    if (!CS.UdpAccel) { this.accelDiag.reason = 'module_missing'; return; }
 
     var host = null;
     if (typeof location !== 'undefined' && location.hostname) host = location.hostname;
     else if (this.url) {
-      var m = /^wss?:\/\/([^:/]+)/.exec(this.url);
-      if (m) host = m[1];
+      try {
+        host = new URL(this.url).hostname;
+        // URL.hostname 对 IPv6 可能保留方括号；后续统一按裸 host 处理。
+        if (host.charAt(0) === '[' && host.charAt(host.length - 1) === ']') host = host.slice(1, -1);
+      } catch (e) {
+        var m = /^wss?:\/\/(\[[^\]]+\]|[^:/]+)/.exec(this.url);
+        if (m) host = m[1].replace(/^\[|\]$/g, '');
+      }
+    }
+    if (msg && msg.wtPort) {
+      var authority = host && host.indexOf(':') >= 0 && host.charAt(0) !== '[' ? '[' + host + ']' : host;
+      this.accelDiag.target = 'https://' + authority + ':' + msg.wtPort + (msg.wtPath || '/wt');
     }
 
     // 选工厂：注入优先（测试），否则按环境自动选。
@@ -5281,7 +5600,13 @@
          host: host, wtPort: msg.wtPort, wtPath: msg.wtPath,
          certHashes: msg.wtCertHashes || null   // 仅测试环境会带
        }));
-    if (!this.udpFactory) return;   // 无可用通道（如无 WebTransport 的旧浏览器）
+    if (!this.udpFactory) {
+      this.accelDiag.reason = msg && msg.wtPort
+        ? (hasWT ? 'factory_unavailable' : 'webtransport_unsupported')
+        : 'offer_missing';
+      this.accelDiag.phase = msg && msg.wtPort ? 'factory' : 'offer';
+      return;
+    }
 
     // 走哪条通道就用哪套 port/token。
     //
@@ -5297,7 +5622,11 @@
       port = msg.wtPort;
       token = msg.wtToken;
     }
-    if (!port || token == null) return;
+    if (!port || token == null) {
+      this.accelDiag.reason = 'invalid_offer';
+      this.accelDiag.phase = 'offer';
+      return;
+    }
 
     var self = this;
     this.udpKind = kind;
@@ -5321,6 +5650,9 @@
       // 确认 active=true。这样 7B ACK 可达但大 datagram 不通时不会周期性黑屏。
       onProbe: function (probing) { self._send(P.accel(probing ? 2 : 0)); }
     });
+    this.accelDiag = this.udp.diag;
+    this.accelDiag.webTransportSupported = !!hasWT;
+    this.accelDiag.secureContext = secure;
     if (!this.udp.attach({
       udpPort: port, udpToken: token, host: host,
       snapIntervalMs: msg.accelSnapIntervalMs || msg.snapIntervalMs,
@@ -5583,7 +5915,8 @@
           : kind === 'udp' ? '裸 UDP（二进制）'
             : 'TCP（wss + JSON）';
         ch.snapIntervalMs = kind === 'tcp' ? ch.tcpIntervalMs : ch.accelIntervalMs;
-        // 通道物理特性不同：WT/UDP 30Hz 用 70ms；wss 15Hz 用约 119ms。
+        // 通道间隔由服务器 matched 下发并随通道切换（v3.1.1 起两通道同为 30Hz/70ms，
+        // 服务器若降配 TCP_SNAP_EVERY=2 则 wss 自动回到 119ms）。
         // 若只改 HUD 不改插值层，就会出现「显示已降级，但仍拿 70ms 缓冲扛 TCP
         // 队头阻塞」的假修复。这里必须让真实渲染参数同步切换。
         if (self.remote) self.remote.setSnapInterval(ch.snapIntervalMs);
@@ -5624,6 +5957,9 @@
     this.channel.accelIntervalMs = m.accelSnapIntervalMs || m.snapIntervalMs || 33;
     this.channel.snapIntervalMs = this.channel.kind === 'tcp'
       ? this.channel.tcpIntervalMs : this.channel.accelIntervalMs;
+    // 诊断 HUD 显隐由服务器按环境下发（dev 开 / official 关），客户端不猜域名。
+    // 字段缺失（旧服务器）按 false 处理 —— 与 official 的目标行为一致。
+    this.debugHud = m.debugHud === true;
 
     g.mode = 'multi';
     g.levelCfg = { level: 0, W: m.W, H: m.H, wallSegments: 0, targetScore: 0, speed: cfg.SNAKE_SPEED };
@@ -5649,6 +5985,7 @@
 
     this.remote = new CS.RemoteMatch(this.playerId, {
       snapIntervalMs: this.channel.snapIntervalMs,
+      tickMs: m.tickMs || cfg.SERVER_TICK_MS,
       mode: m.mode, teams: m.teams, myTeam: m.myTeam
     });
     // 团队字段透传给 game（渲染名牌/结算用）
@@ -5674,6 +6011,7 @@
     var ch = this.channel;
     var udp = this.transport && this.transport.udp;
     var s = udp && udp.stats;
+    var ad = udp && udp.diag || this.transport && this.transport.accelDiag || {};
     var d = this.transport && typeof this.transport.diagnostics === 'function'
       ? this.transport.diagnostics(ch.kind) : {};
     var interp = this.remote && this.remote._interp;
@@ -5682,6 +6020,24 @@
     var frameTotal = s ? s.recv + s.missingFrames : 0;
     var expectedCopies = s ? frameTotal * (udp.expectedDup || 1) : 0;
     function pct(n, total) { return total > 0 ? Math.round(n * 1000 / total) / 10 : 0; }
+
+    // 流量速率：1 秒采样窗口，HUD 每秒跳变一次而不是每帧抖动。
+    // 字节数直接读传输层的真实收发计数（ws.bytes / udp.stats.rxBytes|txBytes），
+    // 不在这里另记一份 —— 复刻计数迟早与真值分叉。
+    // JSON 按 string.length 近似字节（协议载荷几乎全 ASCII，误差可忽略）。
+    var nowMs = Date.now();
+    var rp = this._ratePrev;
+    if (!rp) rp = this._ratePrev = { at: 0, wsRx: 0, wsTx: 0, acRx: 0, acTx: 0, down: 0, up: 0 };
+    if (nowMs - rp.at >= 1000) {
+      var wsB = this.transport && this.transport.bytes || { rx: 0, tx: 0 };
+      var acRx = s ? (s.rxBytes || 0) : 0, acTx = s ? (s.txBytes || 0) : 0;
+      if (rp.at > 0) {
+        var dtS = (nowMs - rp.at) / 1000;
+        rp.down = Math.round(((wsB.rx - rp.wsRx) + (acRx - rp.acRx)) / dtS / 102.4) / 10;
+        rp.up = Math.round(((wsB.tx - rp.wsTx) + (acTx - rp.acTx)) / dtS / 102.4) / 10;
+      }
+      rp.at = nowMs; rp.wsRx = wsB.rx; rp.wsTx = wsB.tx; rp.acRx = acRx; rp.acTx = acTx;
+    }
     return {
       通道: ch.label,
       kind: ch.kind,
@@ -5690,6 +6046,17 @@
       TCP快照间隔ms: ch.tcpIntervalMs,
       加速快照间隔ms: ch.accelIntervalMs,
       通道切换次数: ch.switches,
+      WebTransport支持: !!ad.webTransportSupported,
+      安全上下文: ad.secureContext !== false,
+      加速状态: ad.state || 'not_attempted',
+      加速失败阶段: ad.phase || '',
+      加速失败原因: ad.reason || '',
+      加速目标: ad.target || '',
+      加速错误摘要: ad.lastError || '',
+      加速Hello次数: ad.helloSent || 0,
+      加速ACK时间: ad.ackedAt || 0,
+      加速首帧时间: ad.firstSnapAt || 0,
+      Socket错误: s ? s.socketErrors : 0,
       WSS延迟ms: d.rttMs || 0,
       WSS延迟P50ms: d.rttP50Ms || 0,
       WSS延迟P95ms: d.rttP95Ms || 0,
@@ -5705,6 +6072,8 @@
       快照迟到率: Math.round((d.latePct || 0) * 10) / 10,
       长卡顿次数: d.stalls || 0,
       WSS待发送字节: d.wsBufferedBytes || 0,
+      下行KBs: rp.down,
+      上行KBs: rp.up,
       // recv 是去重后的二进制逻辑帧；rawSnaps 含冗余副本。
       二进制帧: s ? s.recv : 0,
       逻辑帧丢失: s ? s.missingFrames : 0,
@@ -5718,6 +6087,7 @@
       插值延迟ms: interp ? interp.delay : 0,
       插值缓冲领先ms: interp ? Math.round(interp.lastLeadMs) : 0,
       插值缓冲耗尽率: is ? pct(is.latestClamps, is.samples) : 0,
+      远端短外推率: is ? pct(is.extrapolated || 0, is.samples) : 0,
       预测误差px: Math.round((pred.lastErr || 0) * 10) / 10,
       预测硬校正: pred.hardSnaps || 0,
       预测最大软校正px: Math.round((pred.maxCorrectionPx || 0) * 10) / 10,
@@ -5725,16 +6095,43 @@
     };
   };
 
+  /**
+   * HUD 专用的节流视图：同一秒内返回缓存的 netInfo。
+   * 诊断面板按 rAF 每帧重绘，若数值也每帧变化（RTT 抖动、速率瞬时跳变），
+   * 文字会闪烁不可读；产品要求 HUD 数据 1 秒刷新一次。
+   * __net() 控制台诊断仍走 netInfo() 实时值，不受节流影响。
+   */
+  OnlineMatch.prototype.netInfoHud = function () {
+    var now = Date.now();
+    if (!this._hudCache || now - this._hudCache.at >= 1000) {
+      this._hudCache = { at: now, info: this.netInfo() };
+    }
+    return this._hudCache.info;
+  };
+
   /** 手机/桌面 HUD 共用的单行摘要；完整明细仍由 __net() 提供。 */
   OnlineMatch.prototype.netSummary = function () {
-    var n = this.netInfo();
+    var n = this.netInfoHud();
     var tag = this.channel.kind === 'wt' ? 'WebTransport'
       : this.channel.kind === 'udp' ? '裸UDP' : 'WSS';
     var rtt = this.channel.kind === 'tcp' ? n.WSS延迟ms : n.加速通道延迟ms;
     var quality = this.channel.kind === 'tcp'
       ? ('卡 ' + n.快照迟到率 + '%')
       : ('丢 ' + n.逻辑帧丢失率 + '%');
-    return tag + ' · ' + (rtt ? rtt + 'ms' : '--ms') + ' · ' + quality;
+    if (this.channel.kind === 'tcp' && n.加速失败原因) {
+      var reasonText = {
+        webtransport_unsupported: '不支持WT', offer_missing: '无WT入口',
+        invalid_offer: 'WT入口异常', factory_unavailable: 'WT不可用',
+        constructor_throw: 'WT创建失败', wt_ready_rejected: 'WT握手失败',
+        datagram_api_error: 'WT接口异常', hello_ack_timeout: 'WT超时',
+        write_rejected: 'WT发送失败', read_rejected: 'WT接收失败',
+        session_closed: 'WT已断开', downlink_stall: 'WT停滞',
+        send_failed: 'WT发送失败', socket_error: 'WT连接错误'
+      };
+      quality = reasonText[n.加速失败原因] || 'WT回落';
+    }
+    return tag + ' · ' + (rtt ? rtt + 'ms' : '--ms') + ' · ' + quality +
+      ' · ↓' + n.下行KBs + 'K';
   };
 
   /** 快照：应用视图 + 本机 reconcile；首帧挂接预测体并切入 play */
@@ -5766,11 +6163,12 @@
   OnlineMatch.prototype._syncSpawner = function () {
     var g = this.game, r = this.remote;
     if (!g.spawner || !r) return;
-    g.spawner.blocks = r.blocks;
-    g.spawner.meteors = r.meteors;
+    var blocks = r.blocks || [], meteors = r.meteors || [];
+    g.spawner.blocks = blocks;
+    g.spawner.meteors = meteors;
     var grab = null;
-    for (var i = 0; i < r.blocks.length; i++) {
-      if (r.blocks[i].kind === cfg.GRAB_KIND) { grab = r.blocks[i]; break; }
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].kind === cfg.GRAB_KIND) { grab = blocks[i]; break; }
     }
     g.spawner.grabBlock = grab;
   };
@@ -5877,6 +6275,7 @@
     // 本机预测 + 他机插值
     if (this._attached) this.predictor.update(dt, ang === null ? undefined : ang);
     r.renderSample(Date.now());
+    this._syncSpawner(); // renderSample 会推进流星显示态；spawner 必须每帧跟随
 
     // 本机 Entry 视图与预测体对齐（名牌/排行榜/小地图读它）
     // colors/segPos 必须拷贝：早期按引用赋值会让视图与预测体共享同一数组，
@@ -6732,7 +7131,9 @@
         }
         continue;
       }
-      if (i >= snake.colors.length) { // 尾巴节：深色圆润圆块 + 小尾尖，朝向 = 前一节 → 尾巴节
+      // 正常情况下 colors 至少有 MIN_LENGTH 节；若异常/降级快照只剩 segPos[0]，
+      // i=0 仍必须按“头”画，不能因为 0 >= colors.length 就误画成无眼睛的尾巴。
+      if (i > 0 && i >= snake.colors.length) { // 尾巴节：深色圆润圆块 + 小尾尖，朝向 = 前一节 → 尾巴节
         var prev = snake.segPos[i - 1] ||
           { x: p.x - Math.cos(snake.angle) * cfg.SEG_SPACING, y: p.y - Math.sin(snake.angle) * cfg.SEG_SPACING };
         var tdx = p.x - prev.x, tdy = p.y - prev.y;
@@ -6742,7 +7143,8 @@
       }
       var rot = (u.hash2(i, 77, 3) - 0.5) * 0.5;
       var wob = i === 0 ? 0.8 : 1.2;
-      drawCrayonBlock(ctx, px - ss / 2, py - ss / 2, ss, cfg.COLORS[snake.colors[i]], seedBase + i, 41, {
+      var color = cfg.COLORS[snake.colors[i]] || cfg.COLORS[cfg.COLOR_KEYS[0]] || '#E8552F';
+      drawCrayonBlock(ctx, px - ss / 2, py - ss / 2, ss, color, seedBase + i, 41, {
         rot: rot, wobble: wob, stroke: cfg.SEG_STROKE
       });
       if (shake > 0) { // 闪白覆盖（纸白蜡笔块，透明度随剩余时间衰减）
@@ -7036,9 +7438,9 @@
     var idealMapW = pw - 28;
     var blocks = {
       header: 46,                       // 标题 + 模式
-      // 传输通道诊断：静默降级必须始终可见，否则玩家无法区分 WT 与 wss。
-      // 两行：协议 + RTT/丢帧（或 TCP 迟到率）。
-      channel: (game.mode === 'multi' && game.online) ? 30 : 0,
+      // 传输通道诊断：三行 = 协议 + RTT/丢帧（或 TCP 迟到率）+ 上下行流量。
+      // 只在服务器下发 debugHud 的环境显示（dev）；official 为 0，不占预算。
+      channel: (game.mode === 'multi' && game.online && game.online.debugHud) ? 42 : 0,
       score: 54,                        // 「分数」标签 + 大号分数
       target: 26,                       // 最高/最佳成绩行
       detail: 34,                       // 分数构成 + 速度
@@ -7118,10 +7520,13 @@
     // 走加速通道 = 墨绿，回落 TCP = 赭红（不是错误，但确实没吃到收益）。
     // 取深色调是因为面板底是米白纸色（rgba(255,253,245,.72)），
     // 亮色荧光调在这上面几乎看不见。
-    if (game.mode === 'multi' && game.online && game.online.channel) {
+    // 诊断行只在服务器允许的环境显示（dev 开 / official 关，matched.debugHud 下发）。
+    // official 面向真实玩家：协议/RTT/流量是工程诊断信息，不应出现在正式界面。
+    if (game.mode === 'multi' && game.online && game.online.channel && game.online.debugHud) {
       var ch = game.online.channel;
       var accel = (ch.kind !== 'tcp');
-      var ni = typeof game.online.netInfo === 'function' ? game.online.netInfo() : null;
+      var ni = typeof game.online.netInfoHud === 'function' ? game.online.netInfoHud()
+        : (typeof game.online.netInfo === 'function' ? game.online.netInfo() : null);
       ctx.font = 'bold ' + Math.round(10 * Math.min(1, k + 0.2)) + 'px sans-serif';
       ctx.fillStyle = accel ? '#2e7d6b' : '#a5592b';
       var chText = accel
@@ -7139,6 +7544,9 @@
         ? ('RTT ' + (rtt || '--') + 'ms · 丢 ' + (ni ? ni.逻辑帧丢失率 : 0) + '%')
         : ('RTT ' + (rtt || '--') + 'ms · 迟到 ' + (ni ? ni.快照迟到率 : 0) + '%');
       ctx.fillText(qText, cx, y + 3);
+      adv(12);
+      // 流量速率：netInfo 内部按 1 秒窗口采样，这里读到的就是每秒跳变一次的值
+      ctx.fillText('↓' + (ni ? ni.下行KBs : 0) + ' ↑' + (ni ? ni.上行KBs : 0) + ' KB/s', cx, y + 2);
       ctx.globalAlpha = 1;
       ctx.fillStyle = cfg.INK;   // 必须还原成墨色：面板是浅底，白字会看不见
       adv(16);
@@ -7363,9 +7771,11 @@
     var spdText = '速度 ' + spd + (slow ? ' (减速)' : '');
     ctx.font = '10px sans-serif';
     var spdW = ctx.measureText(spdText).width;
-    if (game.mode === 'multi' && game.online && typeof game.online.netSummary === 'function') {
+    if (game.mode === 'multi' && game.online && game.online.debugHud &&
+        typeof game.online.netSummary === 'function') {
       // 竖屏旧实现完全没有通道行；手机上因此看不到协议。网络诊断优先于颜色格，
       // 直接占用行 2 左侧，且不参与「空间不足就丢弃」逻辑。
+      // 仅 dev 环境显示（debugHud 由服务器 matched 下发）；official 回落到颜色格。
       var netText = game.online.netSummary();
       var maxNetW = Math.max(60, availW - spdW - 12);
       while (netText.length > 4 && ctx.measureText(netText).width > maxNetW) {
