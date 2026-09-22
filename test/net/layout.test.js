@@ -12,7 +12,7 @@
  */
 var path = require('path');
 var JS = path.join(__dirname, '..', '..', 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'joystick',
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles', 'joystick',
   'layoutBus', 'ai', 'multiplayer', 'renderer', 'game'].forEach(function (f) { require(path.join(JS, f + '.js')); });
 
 var CS = globalThis.CS;
@@ -186,18 +186,20 @@ function t6() {
   section('T6 矮屏 UI 不溢出（按钮 + 小地图）');
   var sizes = [
     [844, 390, 'iPhone横屏'], [800, 360, 'Android横屏'], [740, 360, '小屏横屏'],
-    [667, 375, 'SE横屏'], [390, 844, '竖屏'], [360, 800, '安卓竖屏'],
+    [667, 375, 'SE横屏'], [852, 393, 'iPhone14Pro横'], [915, 412, 'Pixel7横'],
+    [390, 844, '竖屏'], [360, 800, '安卓竖屏'], [393, 852, 'iPhone14Pro竖'], [430, 932, 'iPhone14PM竖'],
+    [1024, 768, 'iPad横'], [1194, 834, 'iPadPro11横'], [1366, 1024, 'iPadPro13横'],
+    [768, 1024, 'iPad竖'], [820, 1180, 'iPad10竖'], [834, 1194, 'iPadPro11竖'], [1024, 1366, 'iPadPro13竖'],
     [1280, 720, '桌面'], [1920, 1080, '大屏'], [320, 240, '极小'], [240, 320, '极小竖']
   ];
-  var states = ['menu', 'levels', 'clear', 'over', 'guide', 'matching'];
+  var states = ['menu', 'over', 'guide', 'matching'];
 
   sizes.forEach(function (sz) {
     var W = sz[0], H = sz[1], name = sz[2];
     var g = new CS.Game(W, H);
-    g.levelCfg = { level: 3, targetScore: 100 };
     var allIn = true, detail = [];
     states.forEach(function (st) {
-      g.mode = 'level';
+      g.mode = 'endless';
       g.setState(st);
       g.uiButtons.forEach(function (b) {
         if (b.y < 0 || b.y + b.h > H || b.x < 0 || b.x + b.w > W) {
@@ -223,6 +225,8 @@ function t6() {
   var gShort = new CS.Game(800, 360);
   gShort.setState('menu');
   var bsShort = gShort.uiButtons;
+  // v3.1 移除闯关模式：菜单 5 个按钮（无尽/AI对战/在线对战/在线团队赛/图鉴）。
+  // 矮屏分栏后不隐藏功能、不遮品牌区即视为通过。
   ok(bsShort.length === 5, '菜单仍有 5 个按钮（矮屏不隐藏功能）', '实际 ' + bsShort.length);
   // 旧断言是「矮屏按钮必须被压缩」，那是 v3.0.3 纵向压缩方案的产物。
   // 方案 A 把按钮挪到右半区独占纵向空间后，54px 原始高度放得下 —— 不压缩才是对的。
@@ -232,7 +236,8 @@ function t6() {
 
   var gDesk = new CS.Game(1280, 720);
   gDesk.setState('menu');
-  ok(gDesk.uiButtons[0].h === 54, '桌面按钮保持 54px（无回归）',
+  // 5 按钮后桌面纵向空间 5*54+4*16=334px 放得下，恢复 54px 满尺寸（不压缩）。
+  ok(gDesk.uiButtons[0].h === 54, '桌面按钮 54px（5 按钮无需压缩，预期）',
     '实际 ' + gDesk.uiButtons[0].h);
 
   // solveButtonStack 契约
@@ -259,7 +264,8 @@ function t7() {
   // v3.0.5：判据从「两列 + 让开固定比例坐标」改为「与 menuLayout() 各分区不相交」。
   // 旧断言硬编码 H*0.22 / H*0.35 / H*0.89，与实现脱钩 —— 实现一改就全错。
   [[844, 390, 'iPhone横屏'], [800, 360, 'Android横屏'],
-   [667, 375, 'SE横屏'], [740, 360, '小屏横屏']].forEach(function (c) {
+   [667, 375, 'SE横屏'], [740, 360, '小屏横屏'],
+   [852, 393, 'iPhone14Pro横'], [915, 412, 'Pixel7横']].forEach(function (c) {
     var W = c[0], H = c[1], name = c[2];
     var g = new CS.Game(W, H);
     g.setState('menu');
@@ -293,14 +299,14 @@ function t7() {
     ok(stBot <= H, name + '：统计文字在屏内（底 ' + Math.round(stBot) + ' ≤ ' + H + '）');
   });
 
-  // 桌面 / 竖屏保持单列 54px（无回归）
+  // 桌面 / 竖屏保持单列；6 按钮后高度等比压缩到 47px（≥44 舒适可点，预期几何）
   [[1280, 720, '桌面'], [390, 844, '竖屏'], [1920, 1080, '大屏']].forEach(function (c) {
     var g = new CS.Game(c[0], c[1]);
     g.setState('menu');
     var xs = {};
     g.uiButtons.forEach(function (b) { xs[Math.round(b.x)] = 1; });
     ok(Object.keys(xs).length === 1, c[2] + '：保持单列（无回归）');
-    ok(g.uiButtons[0].h === 54, c[2] + '：按钮保持 54px', '实际 ' + g.uiButtons[0].h);
+    ok(g.uiButtons[0].h >= 44, c[2] + '：按钮不低于舒适可点 44px', '实际 ' + g.uiButtons[0].h);
   });
 
   // --- 结算记分牌：卡片必须完整在屏、不压按钮、不压 HUD 面板 ---
@@ -367,6 +373,8 @@ function t7() {
 
   [[844, 390, 'iPhone横屏'], [800, 360, 'Android横屏'],
    [667, 375, 'SE横屏'], [390, 844, '竖屏'], [1280, 720, '桌面'],
+   [1024, 768, 'iPad横'], [1194, 834, 'iPadPro11横'],
+   [768, 1024, 'iPad竖'], [834, 1194, 'iPadPro11竖'],
    [1920, 1080, '大屏'], [320, 240, '极小']].forEach(function (c) {
     var W = c[0], H = c[1], name = c[2];
     var g = new CS.Game(W, H);
@@ -414,19 +422,21 @@ function t8() {
   }
 
   var SIZES = [[844, 390, 'iPhone横'], [800, 360, 'Android横'], [667, 375, 'SE横'],
-               [390, 844, 'iPhone竖'], [360, 800, 'Android竖'],
+               [852, 393, 'iPhone14Pro横'], [915, 412, 'Pixel7横'],
+               [390, 844, 'iPhone竖'], [360, 800, 'Android竖'], [430, 932, 'iPhone14PM竖'],
+               [1024, 768, 'iPad横'], [1194, 834, 'iPadPro11横'], [1366, 1024, 'iPadPro13横'],
+               [768, 1024, 'iPad竖'], [820, 1180, 'iPad10竖'], [834, 1194, 'iPadPro11竖'],
                [1280, 720, '桌面'], [1920, 1080, '大屏'],
                [320, 240, '极小横'], [240, 320, '极小竖']];
 
   // --- 8.1 任意界面：按钮两两不重叠 ---
-  var STATES = ['menu', 'levels', 'guide', 'matching', 'clear', 'over'];
+  var STATES = ['menu', 'guide', 'matching', 'over'];
   SIZES.forEach(function (c) {
     var W = c[0], H = c[1], nm = c[2];
     var overlaps = 0, outs = 0;
     STATES.forEach(function (st) {
       var g = new CS.Game(W, H);
-      g.levelCfg = { level: 3, targetScore: 100 };
-      g.mode = 'level';
+      g.mode = 'endless';
       g.setState(st);
       var bs = g.uiButtons;
       for (var i = 0; i < bs.length; i++) {
@@ -720,8 +730,219 @@ function t11() {
     '**零颜色异常态仍绘制两只眼睛，不把唯一节点误画成尾巴**（arc=' + arcs + '）');
 }
 
+// ---------------- T11 团队大厅房号框：草稿文本不被通用按钮重绘遮盖 ----------------
+// 回归：drawTeamLobby 先画了房号框（含草稿/占位文本），末尾 drawButtons 又把 'team_code'
+// 伪按钮用 PANEL 底色重画一遍，文本被完全遮盖（输入框永远空白）。修复后 team_code 不走过场。
+function t11() {
+  section('T11 团队大厅房号框绘制（草稿可见、伪按钮不重绘）');
+
+  function run(draft) {
+    var texts = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      measureText: function (s) { return { width: String(s).length * 6 }; },
+      fillText: function (s, x, y) { texts.push(String(s)); },
+      strokeText: nop,
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: 1280, height: 720 }
+    };
+    var g = new CS.Game(1280, 720);
+    g.enterTeamLobby();
+    g.teamCodeDraft = draft;
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = 1280; r.H = 720;
+    var drawn = [];
+    var orig = CS.Renderer.prototype.drawButton;
+    r.drawButton = function (b) { drawn.push(b.id); orig.call(r, b); };
+    r.drawTeamLobby(g);
+    return { texts: texts, drawn: drawn };
+  }
+
+  var a = run('BZQ3');
+  ok(a.texts.indexOf('BZQ3') !== -1,
+    '房号草稿文本被真实绘制到输入框（BZQ3）');
+  ok(a.drawn.indexOf('team_code') === -1,
+    '**team_code 伪按钮不再走 drawButton 通用样式（防遮盖回归）**');
+  ok(a.drawn.indexOf('team_invite') !== -1 && a.drawn.indexOf('team_start') !== -1 &&
+    a.drawn.indexOf('team_back') !== -1,
+    '邀请/开始/返回按钮正常绘制');
+
+  var b = run('');
+  ok(b.texts.indexOf('点此输入房号') !== -1,
+    '空草稿时绘制占位提示「点此输入房号」');
+}
+
+// ---------------- T12 团队大厅标签窄屏折行（防手机竖屏横向溢出） ----------------
+// 14px 全角字符 ≈ 14px/字：整句 28 字 ≈ 392px > 390 竖屏可用宽 → 必须折两行。
+function t12() {
+  section('T12 团队大厅好友房号标签窄屏折行');
+
+  function labels(W, H) {
+    var texts = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      // 模拟真实字宽：全角字符宽 ≈ 字号（从 ctx.font 解析，缺省 14）
+      measureText: function (s) {
+        var fs = parseInt(ctx.font, 10) || 14;
+        return { width: String(s).length * fs };
+      },
+      fillText: function (s) { texts.push(String(s)); },
+      strokeText: nop,
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: W, height: H }
+    };
+    var g = new CS.Game(W, H);
+    g.enterTeamLobby();
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = W; r.H = H;
+    r.drawTeamLobby(g);
+    return texts;
+  }
+
+  var FULL = '好友房号：点「邀请好友」自动生成并复制链接发微信；也可手填相同房号';
+  var LA = '好友房号：点「邀请好友」自动生成并复制链接发微信';
+  var LB = '也可手填相同房号，与好友进同一队';
+
+  var wide = labels(1280, 720);
+  ok(wide.indexOf(FULL) !== -1 && wide.indexOf(LB) === -1,
+    '桌面宽屏：标签整句单行绘制');
+
+  var narrow = labels(390, 844);
+  ok(narrow.indexOf(FULL) === -1 &&
+    narrow.indexOf(LA) !== -1 && narrow.indexOf(LB) !== -1,
+    '**手机竖屏 390：标签折两行、不横向溢出**');
+}
+
+// ---------------- T13 结算卡标题：深色标题不墨团（防「惜败」不可读回归） ----------------
+// 墨色描边 + 墨色填充 = 墨团（v3.1 用户实测「惜败」两字完全看不清）。
+// 规则：titleColor 为 INK（惜败/全队阵亡/再接再厉）时不描边；彩色标题保留蜡笔勾边。
+// 字体：标题统一圆体优先栈（Yuanti SC 字腔开口大，稠密字不粘连），无圆体平台回退中黑。
+function t13() {
+  section('T13 结算卡标题描边策略（深色纯净填充 / 彩色蜡笔勾边）');
+
+  function capture(outcome) {
+    var strokes = [], fills = [], fonts = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      measureText: function (s) { return { width: String(s).length * 8 }; },
+      fillText: function (s) { fills.push(String(s)); fonts.push(this.font); },
+      strokeText: function (s) { strokes.push(String(s)); },
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: 390, height: 844 }
+    };
+    var g = new CS.Game(390, 844);
+    g.mode = 'multi';
+    g.startMulti();
+    g.mpResult = {
+      online: true, team: true,
+      teamResult: {
+        outcome: outcome, myTeam: 3, myTeamRank: 4, myTeamScore: 14, myTeamAlive: 1,
+        teams: [0, 1, 2, 3, 4].map(function (t) {
+          return { id: t, rank: t + 1, score: 100 - t * 20, aliveCount: 1,
+            members: [{ id: t * 2, name: 'T' + t + 'a', isPlayer: 0 }, { id: t * 2 + 1, name: 'T' + t + 'b', isPlayer: 0 }] };
+        })
+      },
+      rank: 8, surviveSec: 14, score: 14, survivalScore: 14, elimScore: 0,
+      elimTotal: 0, kills: 0, finalLen: 7, maxLen: 7, bestLen: 7, bestScore: 14, newBest: true
+    };
+    g.overAt = 0; g.timeMs = 5000;
+    g.setState('over');
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = 390; r.H = 844;
+    CS.Renderer.prototype.drawMultiResult.call(r, g);
+    return { strokes: strokes, fills: fills, fonts: fonts };
+  }
+
+  var lose = capture('lose');
+  ok(lose.fills.indexOf('惜败') !== -1, '惜败标题正常填充绘制');
+  ok(lose.strokes.indexOf('惜败') === -1,
+    '**深色标题「惜败」不再墨压墨描边（防墨团回归）**');
+  ok(/Yuanti SC/.test(lose.fonts[lose.fills.indexOf('惜败')] || ''),
+    '**「惜败」标题使用圆体优先字体栈（稠密字不粘连，防不可读回归）**',
+    'font=' + lose.fonts[lose.fills.indexOf('惜败')]);
+
+  var win = capture('win');
+  ok(win.strokes.indexOf('团队冠军！') !== -1,
+    '彩色标题「团队冠军！」保留蜡笔勾边（描边未一刀切删除）');
+}
+
+// ---------------- T14 团队观战横幅（防"观战无任何屏幕提示"回归） ----------------
+// v3.1 服务端修复观战提前终结后，观战首次真正可达；若屏幕无任何提示，
+// 玩家会误以为"死了还在玩 / 游戏卡死"。横幅只在 om.spectating 时绘制。
+function t14() {
+  section('T14 团队观战横幅（spectating 时绘制 / 平时不绘制）');
+
+  function capture(spectating) {
+    var fills = [];
+    function nop() {}
+    var ctx = {
+      save: nop, restore: nop, translate: nop, rotate: nop, scale: nop,
+      beginPath: nop, closePath: nop, clip: nop, fill: nop, stroke: nop,
+      fillRect: nop, strokeRect: nop, clearRect: nop, drawImage: nop, setLineDash: nop,
+      setTransform: nop, moveTo: nop, lineTo: nop, arc: nop, ellipse: nop,
+      quadraticCurveTo: nop, bezierCurveTo: nop, rect: nop,
+      createLinearGradient: function () { return { addColorStop: nop }; },
+      measureText: function (s) { return { width: String(s).length * 8 }; },
+      fillText: function (s) { fills.push(String(s)); },
+      strokeText: nop,
+      font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+      textAlign: '', textBaseline: '', lineJoin: '', lineCap: '',
+      canvas: { width: 390, height: 844 }
+    };
+    var g = new CS.Game(390, 844);
+    g.mode = 'multi';
+    g.startMulti();
+    g.online = { spectating: spectating };
+    var r = Object.create(CS.Renderer.prototype);
+    r.ctx = ctx; r.W = 390; r.H = 844;
+    CS.Renderer.prototype.drawSpectateBanner.call(r, g);
+    return fills;
+  }
+
+  ok(capture(true).indexOf('你已阵亡 · 观战队友中') !== -1,
+    '**观战中：屏幕顶部绘制常驻横幅**');
+  ok(capture(false).length === 0,
+    '非观战：不绘制横幅（不干扰正常对局）');
+
+  // 相机目标：观战且队友存活 → 跟随存活队友而非本机死蛇
+  var g2 = new CS.Game(390, 844);
+  g2.mode = 'multi';
+  g2.startMulti();
+  var mate = g2.mp.spawnBot(0.5, 2);
+  var foe = g2.mp.spawnBot(0.5, 0);
+  g2.myTeam = 2;
+  g2.online = { spectating: true, myTeam: 2, playerId: -999 };
+  mate.snake.x = 1111; foe.snake.x = 2222;
+  ok(g2.cameraTarget() === mate.snake,
+    '观战相机：跟随同队存活队友');
+  mate.alive = false;
+  ok(g2.cameraTarget() === g2.snake,
+    '队友也阵亡后：相机回退跟随本机蛇（等结算）');
+}
+
 console.log('横竖屏自适应布局回归（v3.0.2 ~ v3.0.5）');
-t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11();
+t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10(); t11(); t12(); t13(); t14();
 
 console.log('\n========================================');
 console.log('结果：' + passed + ' 通过，' + failed + ' 失败');

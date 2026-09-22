@@ -5,10 +5,11 @@
  *
  * 颜色解锁规则（调优只改下方带「解锁」注释的常量即可）：
  *   颜色池共 MAX_COLORS=8 色；开局解锁 INITIAL_UNLOCKED=4 色（红蓝绿橙）；
- *   闯关模式每 LEVEL_UNLOCK_STEP_LEVELS=2 关 +1 色；无尽模式每 ENDLESS_UNLOCK_INTERVAL_SEC=45 秒 +1 色；上限 8 色。
+ *   所有模式统一按存活时间解锁：每 ENDLESS_UNLOCK_INTERVAL_SEC=45 秒 +1 色；上限 8 色。
+ *   （闯关模式及其按关卡解锁规则已于 v3.1 移除。）
  *
  * v2 与 v1 差异：废弃网格/四方向，蛇头连续坐标 (x,y) + 朝向角 θ，
- * 世界为像素坐标大地图（尺寸见 levels.js），相机平滑跟随蛇头。
+ * 世界为像素坐标大地图（尺寸见下方 ENDLESS / MULTI 配置），相机平滑跟随蛇头。
  */
 (function (root) {
   var CS = root.CS = root.CS || {};
@@ -32,8 +33,6 @@
     // ---------- 颜色解锁系统参数（调优只改这里）----------
     MAX_COLORS: 8,                    // 颜色池总数（默认与 COLOR_KEYS 长度一致）
     INITIAL_UNLOCKED: 4,              // 对局开局已解锁颜色数（红蓝绿橙）
-    LEVEL_UNLOCK_BASE: 4,             // 闯关解锁基数（第 1 关起点）
-    LEVEL_UNLOCK_STEP_LEVELS: 2,      // 闯关：每多少关 +1 色（每 2 关解锁 1 色）
     ENDLESS_UNLOCK_BASE: 4,           // 无尽解锁基数
     ENDLESS_UNLOCK_INTERVAL_SEC: 45,  // 无尽：每存活多少秒 +1 色（每 45 秒解锁 1 色）
     UNLOCK_BANNER_MS: 1500,           // 「新颜色解锁！」横幅停留时长（毫秒）
@@ -45,14 +44,14 @@
     PANEL: '#FFFDF5',      // 面板/按钮底色
 
     // ---------- 蛇与连续移动（贪食蛇大作战式）----------
-    SNAKE_SPEED: 150,            // 初始前进速度（px/s），闯关由 levels.js 覆盖
+    SNAKE_SPEED: 150,            // 初始前进速度（px/s），无尽/多人共用
     SPEED_MAX: 380,              // 无尽模式提速上限（px/s）
     ENDLESS_SPEEDUP_PER_SEC: 2.5,// 无尽：每秒速度提升（px/s）
     // ---- 局内动态加速（只改速度，不改节间距/判定等几何参数）----
-    SPEED_LEN_COEF: 2.5,         // 长度加成：每节 +2.5 px/s（闯关/无尽通用，加速更明显）
-    LEVEL_SPEED_TIME_COEF: 1.2,  // 闯关时间加成：每存活 1 秒 +1.2 px/s
-    LEVEL_SPEED_CAP_ADD: 170,    // 闯关封顶 = 关卡基础速度 + 170 px/s
-    TURN_RATE: 9.0,              // 最大转向速率（rad/s）≈ 515°/s；调高后快速变向能拐进相邻行/列的砖块（原 4.5 太钝，来不及拦截）
+    SPEED_LEN_COEF: 2.5,         // 长度加成：每节 +2.5 px/s（无尽/多人通用，加速更明显）
+    SPEED_TIME_COEF: 1.2,        // 多人时间加成：每存活 1 秒 +1.2 px/s
+    SPEED_CAP_ADD: 170,          // 多人封顶 = 基础速度 + 170 px/s
+    TURN_RATE: 13.0,             // 最大转向速率（rad/s）≈ 745°/s；90° 转向约 120ms（9.0→13.0：转向跟手，快速变向能拐进相邻行/列的砖块）
     SEG_RADIUS: 13,              // 节半径（px）
     SEG_SPACING: 30,             // 节间弧长间距（px）= 直径 26 + 4px 纸色间隙，保证节可逐个数清
     SEG_STROKE: 3.0,             // 节描边粗细（px，深色 INK，相邻节边界一眼可辨）
@@ -72,6 +71,10 @@
     REMOTE_EXTRAPOLATE_MS: 260,  // 缓冲耗尽后的短外推上限；超过则停住，避免长期偏离/穿墙
     REMOTE_CLOCK_SHIFT_MS: 120,  // 网络偏移明显变大才考虑重锚（普通抖动不改变时间线）
     REMOTE_REANCHOR_MS: 1000,    // 高偏移持续这么久才后移锚点，避免 TCP 突发批量到达造成跳变
+
+    // ---------- 摇杆（浮动摇杆，见 docs/design §3.7；js/joystick.js 从这里读）----------
+    JOYSTICK_DEAD_ZONE: 10,      // 死区半径（px）：触点距底座中心小于此不产生目标角（16→10：轻推即有响应）
+    JOYSTICK_KNOB_MAX: 40,       // 摇杆头最大偏移（px）
 
     // ---------- 色块 ----------
     BLOCK_RADIUS: 12,            // 色块半径（px）
@@ -174,6 +177,23 @@
     MP_BITE_MIN_LENGTH: 3,      // 咬断保底：被咬后节数低于此值 → 被撞者直接淘汰（计入撞者击杀）
     MP_BITE_FLASH_MS: 300,      // 被咬视觉反馈时长：闪白 + 抖动（毫秒）
 
+    // ---------- 团队战模式（2v2v2v2v2：5 队 × 2 人，纯联机，详见 docs/design/02-team-mode.md）----------
+    // 团队模式复用 MULTI 地图与全部道具/消除/咬断规则，仅碰撞免疫、编制、胜负、观战四处不同。
+    TEAM: { TEAMS: 5, SIZE: 2 }, // 队伍数 / 每队人数（必须与 server/config.TEAM_TEAMS/SIZE 一致）
+    // 5 队蜡笔配色（按队伍号顺序取用）：用于名牌、队伍色环、结算排行。
+    TEAM_COLORS: [
+      '#E8552F', // 队0 红
+      '#4A7FD4', // 队1 蓝
+      '#6FBF4A', // 队2 绿
+      '#F5A623', // 队3 橙
+      '#9B5DE5'  // 队4 紫
+    ],
+    TEAM_NAMES: ['红队', '蓝队', '绿队', '橙队', '紫队'],
+    // 邀请好友房号（§5.1）：点「邀请好友」自动生成的房号规格。
+    // 字符集去掉 0/O/1/I/L 等易混淆字符；长度 4 位（约 32^4 ≈ 100 万组合，口头报号也够短）。
+    TEAM_CODE_LEN: 4,
+    TEAM_CODE_CHARS: '23456789ABCDEFGHJKMNPQRSTUVWXYZ',
+
     // ---------- AI 决策参数（加权转向，见 ai.js）----------
     AI_DIRS: 24,                // 每帧评估的候选方向数（v2.9 起 24：转向更精细、更聪明）
     AI_FOOD_RANGE: 900,         // 寻食感知范围（px，再按贪食性格伸缩）
@@ -226,19 +246,8 @@
     ],
 
     // ---------- 存储 key ----------
-    STORAGE_UNLOCKED: 'crayon_snake_web_unlocked', // 闯关已解锁关卡数
     STORAGE_BEST: 'crayon_snake_web_best',         // 无尽最高分
     STORAGE_MP_BEST: 'crayon_snake_web_mp_best'    // 多人对战最佳 {len:最长节数, score:最高分}
-  };
-
-  /**
-   * 闯关模式：第 n 关解锁颜色数 = min(MAX_COLORS, BASE + floor((n-1)/STEP))
-   * 档位：L1/L2=4，L3/L4=5，L5/L6=6，L7/L8=7，L9/L10=8。
-   */
-  cfg.unlockedCountForLevel = function (n) {
-    var lvl = Math.max(1, n | 0);
-    var c = cfg.LEVEL_UNLOCK_BASE + Math.floor((lvl - 1) / cfg.LEVEL_UNLOCK_STEP_LEVELS);
-    return Math.min(cfg.MAX_COLORS, c);
   };
 
   /**
@@ -263,32 +272,27 @@
   /**
    * 颜色解锁顺序规划：按 COLOR_KEYS（=解锁先后顺序）返回每个颜色的解锁信息。
    * 用于图鉴「颜色解锁顺序」页签展示。纯函数，可在 smoke 测试中校验。
-   * 公式与 unlockedCountForLevel / unlockedCountForEndless 完全一致：
-   *   闯关：第 n 关解锁数 = BASE + floor((n-1)/STEP)
-   *   无尽：存活 s 秒解锁数 = BASE + floor(s/INTERVAL)
+   * 公式与 unlockedCountForEndless 完全一致：
+   *   存活 s 秒解锁数 = BASE + floor(s/INTERVAL)
    * 反解「第 i 个颜色（i 从 0）出现所需已解锁总数 c=i+1」：
-   *   闯关 n = 1 + STEP*(c-BASE)；无尽 s = (c-BASE)*INTERVAL（c<=BASE 即开局解锁）。
-   * @returns {Array<{order:number,key:string,name:string,hex:string,initial:boolean,level:number,sec:number,levelText:string,endlessText:string}>}
+   *   s = (c-BASE)*INTERVAL（c<=BASE 即开局解锁）。
+   * @returns {Array<{order:number,key:string,name:string,hex:string,initial:boolean,sec:number,endlessText:string}>}
    */
   cfg.colorUnlockPlan = function () {
     var plan = [];
-    var lvlBase = cfg.LEVEL_UNLOCK_BASE, step = cfg.LEVEL_UNLOCK_STEP_LEVELS;
     var enBase = cfg.ENDLESS_UNLOCK_BASE, interval = cfg.ENDLESS_UNLOCK_INTERVAL_SEC;
     for (var i = 0; i < cfg.COLOR_KEYS.length; i++) {
       var key = cfg.COLOR_KEYS[i];
       var c = i + 1;                                   // 该颜色出现所需的已解锁颜色总数
       var initial = i < cfg.INITIAL_UNLOCKED;          // 前 INITIAL_UNLOCKED 个为开局解锁
-      var lvl = initial ? 1 : 1 + step * (c - lvlBase); // 闯关解锁到该色所需关卡
-      var sec = initial ? 0 : (c - enBase) * interval;  // 无尽解锁到该色所需存活秒数
+      var sec = initial ? 0 : (c - enBase) * interval;  // 解锁到该色所需存活秒数
       plan.push({
         order: c,
         key: key,
         name: cfg.COLOR_NAMES[key],
         hex: cfg.COLORS[key],
         initial: initial,
-        level: lvl,
         sec: sec,
-        levelText: initial ? '开局解锁' : ('第 ' + lvl + ' 关解锁'),
         endlessText: initial ? '开局解锁' : ('存活 ' + sec + ' 秒解锁')
       });
     }
@@ -326,6 +330,29 @@
     var sec = Math.max(0, ms / 1000);
     var k = Math.min(1, sec / cfg.ITEM_RAMP_SEC);
     return cfg.ITEM_SPECIAL_CHANCE_MIN + (cfg.ITEM_SPECIAL_CHANCE_MAX - cfg.ITEM_SPECIAL_CHANCE_MIN) * k;
+  };
+
+  /**
+   * 取队伍配色（团队模式用）：队号 → 蜡笔色 hex。
+   * 越界队号回退到第 0 队色，避免渲染层拿到 undefined 描边。
+   * @param {number} t teamId
+   * @returns {string} 颜色 hex
+   */
+  cfg.teamColor = function (t) {
+    var i = (t | 0);
+    if (i < 0 || i >= cfg.TEAM_COLORS.length) i = 0;
+    return cfg.TEAM_COLORS[i];
+  };
+
+  /**
+   * 取队伍中文名（团队模式用）。
+   * @param {number} t teamId
+   * @returns {string} 队名
+   */
+  cfg.teamName = function (t) {
+    var i = (t | 0);
+    if (i < 0 || i >= cfg.TEAM_NAMES.length) i = 0;
+    return cfg.TEAM_NAMES[i];
   };
 
   CS.config = cfg;

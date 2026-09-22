@@ -66,6 +66,49 @@
     }
     resize();
 
+    // ---------- 团队赛邀请链接（docs/design/02-team-mode.md §5.1）----------
+    // 好友点开 ?team=CODE 链接：进大厅并把房号填好（发起人那边点「邀请好友」复制的正是这个链接）。
+    var inviteCode = CS.utils.parseTeamInvite(location.search);
+    if (inviteCode) {
+      game.pendingTeamCode = inviteCode;
+      game.enterTeamLobby();
+    }
+
+    // 「邀请好友」按钮只置 game.inviteRequested 标志（逻辑层不碰 DOM）；
+    // 这里消费标志：拼出邀请链接并写剪贴板，结果写回 game.inviteNotice 给 renderer 画提示。
+    function syncInviteRequest() {
+      if (!game.inviteRequested) return;
+      game.inviteRequested = false;
+      var code = (game.teamCodeDraft || '').trim();
+      var url = location.origin + location.pathname + '?team=' + encodeURIComponent(code);
+      function done(ok, msg) {
+        game.inviteNotice = {
+          text: ok ? '邀请链接已复制，粘贴到微信发给好友（房号 ' + code + '）'
+                   : (msg || '复制失败，请手动把房号 ' + code + ' 发给好友'),
+          until: Date.now() + 3000
+        };
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () { done(true); }, function () { fallbackCopy(url, done); });
+      } else {
+        fallbackCopy(url, done);
+      }
+    }
+    // 旧浏览器/非安全上下文兜底：隐藏 textarea + execCommand('copy')
+    function fallbackCopy(text, done) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        done(!!ok);
+      } catch (e) { done(false); }
+    }
+
     // ---------- 触摸输入 ----------
     canvas.addEventListener('touchstart', function (e) {
       e.preventDefault();
@@ -90,13 +133,18 @@
     canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
 
-    // ---------- 鼠标输入（桌面端拖动摇杆 / 点按钮） ----------
+    // ---------- 鼠标输入（桌面端：鼠标跟随转向 + 点按钮） ----------
+    // v3.2（docs/design §3.7）：play 态蛇朝光标方向转（slither.io 式，免拖拽），
+    // mousedown 不再驱动摇杆拖拽；非 play 态的按钮点击路径完全不受影响。
+    // 触屏设备无持续 mousemove，天然不受影响。
     var mouseDown = false;
     canvas.addEventListener('mousedown', function (e) {
+      if (game.state === 'play') return; // play 态：鼠标跟随取代拖拽，按下不驱动摇杆
       mouseDown = true;
       game.onTouchStart(e.clientX, e.clientY, 'mouse');
     });
     window.addEventListener('mousemove', function (e) {
+      game.onCursorMove(e.clientX, e.clientY); // 不按按键也跟踪光标（鼠标跟随转向用）
       if (mouseDown) game.onTouchMove(e.clientX, e.clientY, 'mouse');
     });
     window.addEventListener('mouseup', function (e) {
@@ -105,6 +153,59 @@
         game.onTouchEnd('mouse');
       }
     });
+
+    // ---------- 团队赛大厅「好友房号」输入：canvas 收不到键盘，用 DOM <input> 覆盖 ----------
+    // 仅在 team_lobby 且聚焦 team_code 字段时显示，位置/尺寸对齐 renderer 写入的 game._lobbyCodeRect。
+    var lobbyInput = null, lobbyInputActive = false;
+    function ensureLobbyInput() {
+      if (lobbyInput) return lobbyInput;
+      lobbyInput = document.createElement('input');
+      lobbyInput.type = 'text';
+      lobbyInput.maxLength = 24;
+      lobbyInput.placeholder = '点此输入房号';
+      lobbyInput.setAttribute('autocomplete', 'off');
+      lobbyInput.setAttribute('autocorrect', 'off');
+      lobbyInput.setAttribute('autocapitalize', 'off');
+      lobbyInput.setAttribute('spellcheck', 'false');
+      lobbyInput.style.position = 'fixed';
+      lobbyInput.style.display = 'none';
+      lobbyInput.style.zIndex = '10';
+      lobbyInput.style.boxSizing = 'border-box';
+      lobbyInput.style.font = '18px sans-serif';
+      lobbyInput.style.textAlign = 'center';
+      lobbyInput.style.border = 'none';
+      lobbyInput.style.outline = 'none';
+      lobbyInput.style.background = 'transparent';
+      lobbyInput.style.color = '#3A3238';
+      lobbyInput.addEventListener('input', function () { game.teamCodeDraft = lobbyInput.value; });
+      lobbyInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); lobbyInput.blur(); game.onButton('team_start'); }
+        else if (e.key === 'Escape') { e.preventDefault(); lobbyInput.blur(); }
+      });
+      lobbyInput.addEventListener('blur', function () { game.lobbyField = null; });
+      document.body.appendChild(lobbyInput);
+      return lobbyInput;
+    }
+    function syncLobbyInput() {
+      var active = game.state === 'team_lobby' && game.lobbyField === 'code' && game._lobbyCodeRect;
+      if (active) {
+        var inp = ensureLobbyInput();
+        var rect = game._lobbyCodeRect;
+        inp.style.display = 'block';
+        inp.style.left = rect.x + 'px';
+        inp.style.top = rect.y + 'px';
+        inp.style.width = rect.w + 'px';
+        inp.style.height = rect.h + 'px';
+        if (!lobbyInputActive) {
+          inp.value = game.teamCodeDraft || '';
+          setTimeout(function () { try { inp.focus(); } catch (e) {} }, 0);
+        }
+        lobbyInputActive = true;
+      } else if (lobbyInputActive && lobbyInput) {
+        lobbyInput.style.display = 'none';
+        lobbyInputActive = false;
+      }
+    }
 
     // ---------- 主循环 ----------
     var last = 0;
@@ -116,6 +217,8 @@
       if (dt > 100) dt = 100; // 切后台回来防跳帧
       game.update(dt);
       renderer.draw(game);
+      syncLobbyInput();
+      syncInviteRequest();
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);

@@ -103,6 +103,43 @@
     return this.mp.players;
   };
 
+  /**
+   * 团队战建房（2v2v2v2v2）：按队伍规格一次性建满 5×2=10 条蛇并分配 teamId。
+   * 人类槽位由服务器在匹配阶段已确定（spec.isHuman=true，带 name）；AI 槽位（isHuman=false）
+   * 由本方法调用 mp.spawnBot 在边缘安全位生成（同 FFA 出生规则）。
+   * 不自动补 AI、且不重生 AI（编制固定；空位即该队减员，由 room 判定队伍淘汰）。
+   * @param {Array<Array<{isHuman:boolean, name?:string}>>} teamSpecs 二维：teams[teamId][slot]
+   * @returns {{teams: Entry[][]}} 与 teamSpecs 对齐的 Entry 二维数组（供 room 映射 connId→entry）
+   */
+  HeadlessGame.prototype.setupTeams = function (teamSpecs) {
+    this.spawner = new Spawner(this.walls, null); // 无主蛇：避让全靠 mp.liveSnakes（spawner.others）
+    this.spawner.unlockedKeys = this.unlockedKeys;
+    this.spawner.grabEnabled = true; // 多人对战：启用「彩色星」抢夺道具
+    this.spawner.target = u.clamp(Math.round(this.W * this.H / cfg.MP_BLOCK_AREA_DIV),
+      cfg.MP_BLOCKS_MIN, cfg.MP_BLOCKS_MAX);
+
+    this.mp = new CS.Multiplayer(this);
+    var entries = [];
+    for (var t = 0; t < teamSpecs.length; t++) {
+      var row = [];
+      for (var s = 0; s < teamSpecs[t].length; s++) {
+        var spec = teamSpecs[t][s];
+        if (spec && spec.isHuman) {
+          var pos = this.mp.findSpawn(); // 与 AI 同规则：边缘安全位（已注册真人被避让）
+          var angle = Math.atan2(this.H / 2 - pos.y, this.W / 2 - pos.x);
+          var snake = new Snake(pos.x, pos.y, cfg.START_LENGTH, angle, this.unlockedKeys);
+          row.push(this.mp.addPlayer(snake, String(spec.name || '玩家'), t));
+        } else {
+          row.push(this.mp.spawnBot(0, t)); // AI 占位，teamId = t
+        }
+      }
+      entries.push(row);
+    }
+    this.mp.setupTeamMode(entries); // 标记 teamMode + spawner.others，不补 AI
+    this.spawner.fillNow();
+    return { teams: entries };
+  };
+
   /** 写入真人输入（在 tick 前调用；死亡后忽略） */
   HeadlessGame.prototype.setInput = function (entry, angle) {
     if (entry && entry.alive && typeof angle === 'number') entry.snake.setTargetAngle(angle);

@@ -37,7 +37,7 @@
     START: 'start',     // { t, tick }
     SNAP: 'snap',       // { t, tk, ack, tm, sn, bl, mt }
     EVENT: 'event',     // { t, k(event kind), ... }（见 EVENT_KIND）
-    OVER: 'over',       // { t, reason, ranks:[{id,name,score,rank,alive}] }
+    OVER: 'over',       // { t, reason, ranks:[{id,name,score,rank,alive,team?}], teams?:[{id,score,aliveCount,rank,members}] }
     PONG: 'pong',       // { t, ts }
     ERROR: 'error'      // { t, code, msg }
   };
@@ -52,7 +52,8 @@
     METEOR: 'meteor',     // { k, id, idx, color, x, y }（流星注入）
     BITE: 'bite',         // { k, id(被咬者), seg, x, y, color }
     SELF_PULL: 'self_pull',// { k, id, x, y, color }
-    WALL: 'wall'          // { k, x, y, w, h }（动态墙体新增，客户端补画）
+    WALL: 'wall',          // { k, x, y, w, h }（动态墙体新增，客户端补画）
+    YOU_DIED: 'you_died'   // { k, team }（团队模式：本人死而队友活 → 客户端转观战）
   };
   // over.reason
   var OVER_REASON = {
@@ -60,7 +61,8 @@
     WIN: 'win',               // 你是最后存活者
     TIMEOUT: 'timeout',       // 对局到时，按总分
     OPPONENT_LEFT: 'op_left', // 对手全部掉线
-    DROPPED: 'dropped'        // 你掉线被判负（连接中断时本地合成，非服务器下发）
+    DROPPED: 'dropped',       // 你掉线被判负（连接中断时本地合成，非服务器下发）
+    LOSE: 'lose'              // 团队模式：本队未夺冠（被淘汰或超时未列第一）
   };
 
   // ---------------- 量化 ----------------
@@ -98,7 +100,15 @@
   }
 
   // ---------------- 客户端消息构造 ----------------
-  function join(name) { return { t: C2S.JOIN, ver: PROTO_VER, name: String(name || '玩家').slice(0, 12) }; }
+  // opts: { mode: 'ffa'|'team', teamCode: string|null }（团队模式用；FFA 不传保持向后兼容）
+  function join(name, opts) {
+    var m = { t: C2S.JOIN, ver: PROTO_VER, name: String(name || '玩家').slice(0, 12) };
+    if (opts) {
+      if (opts.mode) m.mode = opts.mode;               // 'ffa'（缺省）| 'team'
+      if (opts.teamCode != null && opts.teamCode !== '') m.teamCode = String(opts.teamCode);
+    }
+    return m;
+  }
   function cancel() { return { t: C2S.CANCEL }; }
   function input(seq, angle, boost) { return { t: C2S.INPUT, seq: seq | 0, a: qAngle(angle), bo: boost ? 1 : 0 }; }
   function ping(ts) { return { t: C2S.PING, ts: ts }; }
@@ -111,7 +121,7 @@
    * 序列化一条参赛蛇（Entry 或 RemoteEntry）。
    * sg 为扁平整数数组 [x0,y0,x1,y1,...]（含尾巴节），co 为 1 字符颜色短码串。
    * @param e Entry（见 multiplayer.js）：{ id, name, isPlayer, alive, kills, elimScore,
-   *          elimTotal, maxLen, bittenUntil, slowUntil, snake }
+   *          elimTotal, maxLen, bittenUntil, slowUntil, snake, teamId }
    */
   function serSnake(e) {
     var s = e.snake;
@@ -125,7 +135,8 @@
       co: packColors(s.colors), sg: sg,
       kl: e.kills | 0, es: e.elimScore | 0, et: e.elimTotal | 0, ml: e.maxLen | 0,
       sv: e.survivalScore | 0, mb: e.mpBonusScore | 0, // 生存分/彩色星加成（HUD 计分显示）
-      bt: e.bittenUntil | 0, sl: e.slowUntil | 0
+      bt: e.bittenUntil | 0, sl: e.slowUntil | 0,
+      tm: (e.teamId != null ? e.teamId : -1) // 队伍号（-1 = 无队伍，FFA 不影响）
     };
   }
 
@@ -174,7 +185,8 @@
       colors: unpackColors(d.co), segPos: segPos,
       kills: d.kl, elimScore: d.es, elimTotal: d.et, maxLen: d.ml,
       survivalScore: d.sv, mpBonusScore: d.mb,
-      bittenUntil: d.bt, slowUntil: d.sl
+      bittenUntil: d.bt, slowUntil: d.sl,
+      teamId: (d.tm != null ? d.tm : -1) // 队伍号（-1 = 无队伍）
     };
   }
 

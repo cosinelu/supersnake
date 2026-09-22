@@ -108,7 +108,7 @@ IIFE 同时挂 `CS.protocol`（浏览器）与 `module.exports`（server require
 
 | `t` | 字段 | 说明 |
 |---|---|---|
-| `join` | `name` | 进匹配队列 |
+| `join` | `name, mode, teamCode` | 进匹配队列；`mode` 缺省 `ffa`，团队战为 `team`；`teamCode` 好友房号（solo 为 null） |
 | `cancel` | — | 取消匹配 |
 | `input` | `seq, angle, boost` | 方向输入，30Hz 上限；`seq` 在 TCP/UDP/WT 间共享，服务端只保留最新 |
 | `accel` | `on` | 可靠控制面：0=TCP，1=加速，2=TCP+加速双发探测 |
@@ -118,12 +118,12 @@ IIFE 同时挂 `CS.protocol`（浏览器）与 `module.exports`（server require
 
 | `t` | 字段 | 说明 |
 |---|---|---|
-| `queued` | `pos, need` | 排队中，当前第几位/需几人 |
-| `matched` | `roomId, playerId, seed, players[], countdownMs, debugHud` | 匹配成功，含全部玩家名与配色；`debugHud` 见下 |
+| `queued` | `pos, need, mode` | 排队中，当前第几位/需几人；团队模式 `need` = 满编队伍数 |
+| `matched` | `roomId, playerId, seed, players[], countdownMs, mode, teams[], myTeam, debugHud` | 匹配成功，含全部玩家名与配色；团队模式附 `teams`（5 队编制）与 `myTeam`（本人队伍号）；`debugHud` 见下 |
 | `start` | `tick` | 倒计时结束，对局开始 |
-| `snap` | `tick, ack, snakes[], foods[], items[]` | 快照（`ack` = 已处理到哪个输入 seq，用于校正） |
-| `event` | `kind, …` | 离散事件：消除/咬断/死亡/道具/播报（驱动粒子音效） |
-| `over` | `reason, ranks[]` | 结算（对方全灭/超时/己方死亡且为旁观模式则省略） |
+| `snap` | `tick, ack, snakes[], foods[], items[]` | 快照（`ack` = 已处理到哪个输入 seq，用于校正）；蛇含 `tm`（teamId，-1 = 无队伍） |
+| `event` | `kind, …` | 离散事件：消除/咬断/死亡/道具/播报/`YOU_DIED`（团队模式：本人死而队友活 → 转观战） |
+| `over` | `reason, ranks[], teams[]` | 结算；`ranks[]` 每条蛇附 `team`；团队模式 `teams[]` 为队伍总排行，`reason` 增加 `LOSE`（未夺冠） |
 | `pong` | `ts` | 回心跳 |
 
 `matched.debugHud`（v3.1.1）：网络诊断 HUD（协议/RTT/丢包率/上下行 KB/s）是否对该环境
@@ -153,6 +153,11 @@ onMatched / onStart / onSnap / onEvent / onOver / onDrop  — 回调注册
 
 - `LocalTransport`：内部直接实例化现有 `CS.Multiplayer`（本地 AI 对战），把本地对局状态包装成与 `snap/event` 同构的对象。**联机 UI/渲染管线先用它开发**，服务器没好也能干活。
 - `WsTransport`：连 `wss://host/ws`，负责编码、心跳、断线回调（→ 直接进"掉线判负"结算页）。
+
+> **匹配阶段断线/连不上的 UX**：ws 在 `matching` 状态就 close（连不上服务器、握手即断）时，
+> 客户端回主菜单，但**不再静默**——会在主菜单弹出 4 秒提示
+> （连不上 →「无法连接服务器，请检查网络后重试」；服务器主动 error → 透传服务器消息，
+> 如「协议版本不匹配，请刷新页面」）。对局中途掉线仍走原「掉线判负」结算页，不变。
 
 > **v3.1 起新增加速传输层**：`UdpAccel` 在小游戏/Node 上使用裸 UDP，在浏览器使用
 > WebTransport datagram；两者共用二进制协议与冗余打散，WebSocket 保留为可靠控制面和
@@ -260,6 +265,27 @@ join → 队列（queued 回报位置）
 over → 10s 后房间销毁，各端回主菜单/结算页
 ```
 
+### 6.1 团队战生命周期（mode='team'，详见 `docs/design/02-team-mode.md`）
+
+```
+join{mode:'team', teamCode?} → 团队队列（queued 回报位置/need=满编队伍数）
+分组：同 teamCode 真人同队 → 余下 solo 两两配对 → 不足 5 队由 AI 队补齐；每队 2 槽，空槽 AI 补位
+  （单人：本人 + 1 AI 队友 + 4 个纯 AI 队）
+人类队 ≥ TEAM_TEAMS(5) 或 等待 > TEAM_MATCH_TIMEOUT_MS(20s) 且 ≥ TEAM_MIN_HUMANS(1) 真人
+  → 建房（带 teams 编制 + AI 补位）→ matched（含 3s 倒计时 + teams/myTeam）→ start
+对局中：
+  碰撞：同队 head→body / head→head 免死；异队身体接触即死、头对头双死（沿用 FFA）
+  掉线 → 该蛇死亡（尸体掉色块）；队友仍存活则继续
+  某队两人全灭 → 该队淘汰
+  存活队伍 ≤ 1 → 仅存队伍胜，over(WIN/LOSE)
+  满 5 分钟且 ≥ 2 队存活 → 按 teamScore 排名，over（teams[] 带队伍排行）
+  本人死而队友活 → 发 event YOU_DIED，客户端转观战（相机跟随队友），不结算
+over → 10s 后房间销毁，各端回主菜单/结算页
+```
+
+> 团队模式是**纯联机**体验；本地 AI 对战（`multi`）仍是无队伍 FFA，不受影响。
+> FFA 在线模式的全部行为（§6 主流程）保持不变，`mode` 缺省即 `ffa`。
+
 ## 7. 性能预算
 
 - 单房间模拟：8 蛇 × 30Hz，空间哈希碰撞检测，实测预期 < 0.5ms/tick（smoke 3000 帧模拟可作基准）。
@@ -306,4 +332,9 @@ over → 10s 后房间销毁，各端回主菜单/结算页
 
 ## 10. 明确不做（本期）
 
-断线重连 · 账号/登录 · 观战 · 好友/房间号开黑（预留协议空间）· 排位分 · 反作弊深度校验（仅服务器权威判定）· 多实例水平扩展
+断线重连 · 账号/登录 · 排位分 · 反作弊深度校验（仅服务器权威判定）· 多实例水平扩展
+
+> **已部分覆盖（非原 FFA 目标，团队模式新增）**：
+> - **好友房号开黑**：通过 `join.teamCode` 实现（两人填同一房号编入同队），见 §6.1。
+> - **观战**：团队模式中「本人死而队友活」时进入观战（相机跟随队友），属团队模式专属，非 FFA 通用观战。
+> 这两项仍不在 FFA 在线模式里提供。

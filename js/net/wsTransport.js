@@ -465,7 +465,7 @@
     return { t: P.S2C.SNAP, tk: dec.tk, ack: dec.ack, tm: dec.tm, sn: wireSn, bl: bl, mt: mt };
   };
 
-  WsTransport.prototype.joinMatch = function (name) { this._send(P.join(name)); };
+  WsTransport.prototype.joinMatch = function (name, opts) { this._send(P.join(name, opts)); };
   WsTransport.prototype.cancelMatch = function () { this._send(P.cancel()); };
 
   /**

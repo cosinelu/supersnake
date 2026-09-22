@@ -14,7 +14,7 @@
  */
 var path = require('path');
 var JS = path.join(__dirname, '..', '..', 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'joystick', 'ai', 'multiplayer', 'game']
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles', 'joystick', 'ai', 'multiplayer', 'game']
   .forEach(function (f) { require(path.join(JS, f + '.js')); });
 ['protocol', 'transport', 'headlessGame', 'localTransport', 'interpolation', 'prediction', 'netMatch', 'wsTransport', 'onlineMatch']
   .forEach(function (f) { require(path.join(JS, 'net', f + '.js')); });
@@ -175,6 +175,46 @@ ok(ni6.WebTransport支持 === true && ni6.加速状态 === 'fallback' &&
 ok(/WSS/.test(om6.netSummary()) && /48ms/.test(om6.netSummary()) && /WT超时/.test(om6.netSummary()),
   '手机 HUD 摘要包含实际协议、延迟与 WT 回落原因（' + om6.netSummary() + '）');
 om6.dispose();
+
+// ---- 10. 匹配阶段掉线：回菜单且必须留可见提示（不许静默弹回主界面） ----
+var c7 = makeOnline('掉线喵'); // begin 后仍处 matching（未收首帧快照）
+ok(c7.game.state === 'matching', '用例就位：matching 阶段');
+c7.om._finish(CS.protocol.OVER_REASON.DROPPED, null, true);
+ok(c7.game.state === 'menu', 'matching 阶段掉线 → 回主菜单');
+ok(!!c7.game.menuNotice && c7.game.menuNotice.until > Date.now() &&
+   /无法连接|断开/.test(c7.game.menuNotice.text),
+  '回菜单时留下可见提示 menuNotice（' + (c7.game.menuNotice && c7.game.menuNotice.text) + '）');
+ok(c7.game.online === null, 'online 控制器已清理');
+
+// 服务器错误文案优先于通用掉线文案（如「协议版本不匹配」要原样透传）
+var c8 = makeOnline('版本喵');
+c8.om.status = '服务器错误：协议版本不匹配，请刷新页面';
+c8.om._finish(CS.protocol.OVER_REASON.DROPPED, null, true);
+ok(c8.game.menuNotice && /协议版本不匹配/.test(c8.game.menuNotice.text),
+  '服务器错误文案优先透传到 menuNotice');
+
+// ---- 11. 团队模式中途整队淘汰：over(dead) 带 teams → 组队结算卡（防退化 FFA 卡） ----
+// 真实浏览器抓到的链路：room._checkPlayerDeaths 整队淘汰分支原先漏带 teams，
+// 客户端组不出 teamResult → 结算卡显示「再接再厉 · 在线对战真人匹配 · 个人第 N 名」。
+var c9 = makeOnline('团灭喵');
+drive(c9, 10); // 进 play，remote/预测体就位
+c9.om.matchMode = 'team';
+c9.om.myTeam = 2;
+var fakeTeams = [
+  { id: 0, rank: 1, score: 900, aliveCount: 2, members: [] },
+  { id: 1, rank: 2, score: 400, aliveCount: 1, members: [] },
+  { id: 2, rank: 5, score: 60, aliveCount: 0, members: [] },  // 本队：整队淘汰
+  { id: 3, rank: 3, score: 300, aliveCount: 2, members: [] },
+  { id: 4, rank: 4, score: 150, aliveCount: 1, members: [] }
+];
+c9.om._finish(CS.protocol.OVER_REASON.DEAD, null, false, fakeTeams);
+ok(c9.game.state === 'over', '团队整队淘汰 → 进入结算');
+ok(c9.game.mpResult && c9.game.mpResult.team === true,
+  '**mpResult.team=true（队伍结算卡，不退化 FFA 卡）**');
+var tr9 = c9.game.mpResult.teamResult;
+ok(tr9 && tr9.outcome === 'elim', '本队 aliveCount=0 → outcome=elim（标题「全队阵亡」）');
+ok(tr9 && tr9.myTeamRank === 5 && tr9.myTeamScore === 60,
+  '队伍名次/总分取自服务器 teams（rank=5 score=60）');
 
 console.log('');
 console.log('========================================');

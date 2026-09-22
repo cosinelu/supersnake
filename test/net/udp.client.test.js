@@ -12,7 +12,7 @@
  */
 var path = require('path');
 var JS = path.join(__dirname, '..', '..', 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles',
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles',
   'ai', 'multiplayer'].forEach(function (f) { require(path.join(JS, f + '.js')); });
 ['protocol', 'transport', 'binCodec', 'binProtocol', 'udpTransport', 'interpolation',
   'netMatch', 'wsTransport'].forEach(function (f) { require(path.join(JS, 'net', f + '.js')); });

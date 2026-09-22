@@ -10,7 +10,7 @@
  */
 var path = require('path');
 var JS = path.join(__dirname, '..', '..', 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'joystick', 'ai', 'multiplayer', 'game']
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles', 'joystick', 'ai', 'multiplayer', 'game']
   .forEach(function (f) { require(path.join(JS, f + '.js')); });
 ['protocol', 'transport', 'headlessGame', 'interpolation', 'prediction', 'netMatch', 'wsTransport', 'onlineMatch']
   .forEach(function (f) { require(path.join(JS, 'net', f + '.js')); });

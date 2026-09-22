@@ -1,18 +1,18 @@
 'use strict';
 /**
  * game.js — 游戏主控：状态机 + 主循环逻辑（v2：自由方向 + 大地图 + 跟随镜头，横版布局）
- * 状态：menu（主菜单）→ levels（选关）→ play（对局）→ clear（过关）/ over（结束）
- * 模式：level（闯关 10 关）/ endless（无尽）/ multi（多人对战：玩家 + AI 蛇，见 multiplayer.js）
+ * 状态：menu（主菜单）→ play（对局）→ over（结束）
+ * 模式：endless（无尽）/ multi（多人对战：玩家 + AI 蛇，见 multiplayer.js；联机局 online 非空）
+ * （闯关模式已于 v3.1 移除：无 levels/clear 状态与关卡数据。）
  *
  * 横版布局：左/中为视口区（相机跟随蛇头、钳制在世界内），右侧竖向 HUD 面板
- * （分数/目标/关卡/已解锁颜色预览 + 小地图；多人模式另有实时排行榜）。
+ * （分数/最高/已解锁颜色预览 + 小地图；多人模式另有实时排行榜）。
  * 除 resize/触摸入口外不含 DOM 依赖，可在 node 中加载做逻辑验证。
  */
 (function (root) {
   var CS = root.CS = root.CS || {};
   var cfg = CS.config;
   var u = CS.utils;
-  var lv = CS.levels;
   var store = CS.storage;
   var Walls = CS.Walls;
   var Snake = CS.Snake;
@@ -31,19 +31,20 @@
     this.timeMs = 0;
 
     // 持久化进度
-    this.unlocked = u.clamp(store.get(cfg.STORAGE_UNLOCKED, 1) | 0, 1, lv.LEVEL_COUNT);
     this.best = store.get(cfg.STORAGE_BEST, 0) | 0;
     var mpb = store.get(cfg.STORAGE_MP_BEST, null); // 多人最佳 {len, score}
     this.mpBest = (mpb && typeof mpb === 'object') ? { len: mpb.len | 0, score: mpb.score | 0 } : { len: 0, score: 0 };
 
     // 对局数据（startRun 时初始化）
-    this.mode = 'level';
+    this.mode = 'endless';
     this.levelCfg = null;
     this.walls = null;
     this.snake = null;
     this.spawner = null;
     this.particles = new Particles();
-    this.joystick = new Joystick(); // 固定底座：浮在视口区左下角
+    this.joystick = new Joystick(); // 浮动摇杆：接管触点即移到触点，松手回默认位（视口左下角）
+    this.cursorX = null;            // PC 光标位置（CSS 像素，main.js mousemove 始终跟踪；null=未知）
+    this.cursorY = null;            //   play 态无键盘/摇杆输入时蛇朝光标方向转（鼠标跟随，§3.7）
     this.camera = { x: 0, y: 0 };   // 相机左上角世界坐标
     this.elapsed = 0;
     this.score = 0;
@@ -67,6 +68,15 @@
     this.itemToast = null;      // 特殊道具效果提示 {text, until}（屏幕空间，HUD 层）
     this.guidePage = 0;         // 图鉴当前页码（0-based）
     this.guideTab = 'items';    // 图鉴页签：'items'=道具 / 'colors'=颜色解锁顺序
+
+    // ---- 团队赛大厅（team_lobby）状态 ----
+    this.teamCodeDraft = '';    // 好友房号输入草稿（开黑用；空=单人匹配）
+    this.lobbyField = null;     // 当前聚焦的输入字段：'code' | null（由 main.js 据此挂载 DOM 输入框）
+    this._lobbyCodeRect = null; // 大厅"好友房号"输入框的屏幕矩形（renderer 写入，main.js 定位 DOM 用）
+    this.pendingTeamCode = null; // 邀请链接带入的房号（main.js 解析 ?team= 写入；进大厅时消费）
+    this.inviteRequested = false; // 「邀请好友」点击标志：main.js（DOM 层）据此复制邀请链接
+    this.inviteNotice = null;   // 邀请操作结果提示 {text, until}（main.js 写入，renderer 绘制）
+    this.menuNotice = null;     // 主菜单错误提示 {text, until}（如匹配阶段连接失败回菜单时由 OnlineMatch 写入）
 
     this.uiButtons = [];
     this.buildButtons();
@@ -146,6 +156,7 @@
     var margin = l.portrait ? 42 : 30;
     var x = l.viewX + r + margin + inset.left;
     var y = l.viewY + l.viewH - r - margin - inset.bottom;
+    this.joystick.setViewport(this.screenW, this.screenH); // 浮动底座钳制范围（屏幕内）
     this.joystick.setBase(x, y, r);
   };
 
@@ -210,13 +221,34 @@
     return u.clamp(v, -T, world - view + T);
   }
 
+  /**
+   * 相机跟随目标：团队模式观战（本人阵亡、队友存活）时跟随存活队友，
+   * 其余情况跟随本机蛇。渲染/小地图只读这个返回值，无需关心观战状态。
+   * @returns {object} 带 x/y 的蛇视图或本机蛇
+   */
+  Game.prototype.cameraTarget = function () {
+    if (this.mode === 'multi' && this.online && this.online.spectating &&
+        this.online.myTeam >= 0 && this.mp) {
+      var es = this.mp.allEntries();
+      for (var i = 0; i < es.length; i++) {
+        var e = es[i];
+        if (e.alive && e.teamId === this.online.myTeam && e.id !== this.online.playerId) {
+          return e.snake;
+        }
+      }
+    }
+    return this.snake;
+  };
+
   /** 相机平滑跟随蛇头（帧率无关指数趋近）并钳制在世界边界内 */
   Game.prototype.updateCamera = function (dt) {
     if (!this.snake || !this.walls) return;
     var l = this.layout();
     var vw = l.viewW, vh = l.viewH;
-    var tx = clampCam(this.snake.x - vw / 2, this.walls.W, vw);
-    var ty = clampCam(this.snake.y - vh / 2, this.walls.H, vh);
+    var f = this.cameraTarget();
+    if (!f) return;
+    var tx = clampCam(f.x - vw / 2, this.walls.W, vw);
+    var ty = clampCam(f.y - vh / 2, this.walls.H, vh);
     var k = 1 - Math.exp(-cfg.CAMERA_LERP * dt / 1000); // lerp 系数
     this.camera.x = clampCam(this.camera.x + (tx - this.camera.x) * k, this.walls.W, vw);
     this.camera.y = clampCam(this.camera.y + (ty - this.camera.y) * k, this.walls.H, vh);
@@ -225,8 +257,10 @@
   /** 相机立即就位（开局调用，避免从原点飞入） */
   Game.prototype.snapCamera = function () {
     var l = this.layout();
-    this.camera.x = clampCam(this.snake.x - l.viewW / 2, this.walls.W, l.viewW);
-    this.camera.y = clampCam(this.snake.y - l.viewH / 2, this.walls.H, l.viewH);
+    var f = this.cameraTarget();
+    if (!f) return;
+    this.camera.x = clampCam(f.x - l.viewW / 2, this.walls.W, l.viewW);
+    this.camera.y = clampCam(f.y - l.viewH / 2, this.walls.H, l.viewH);
   };
 
   // ---------------- 对局生命周期 ----------------
@@ -238,10 +272,8 @@
     var spawn = { x: W / 2, y: H / 2 }; // 出生在世界中心
     this.walls = new Walls(W, H, spawn);
     this.walls.generateWalls(levelCfg.wallSegments);
-    // 计算本局初始解锁颜色数（闯关按当前关卡、无尽按 0 秒）
-    this.unlockedCount = (mode === 'level')
-      ? cfg.unlockedCountForLevel(levelCfg.level)
-      : cfg.unlockedCountForEndless(0);
+    // 本局初始解锁颜色数（所有模式统一按存活时间，开局 = 0 秒）
+    this.unlockedCount = cfg.unlockedCountForEndless(0);
     this.unlockedKeys = cfg.unlockedColorKeys(this.unlockedCount);
     // 先清零计时/计分，再算开局速度（动态速度含时间加成，必须在 elapsed=0 时初始化）
     this.elapsed = 0;
@@ -266,19 +298,6 @@
     this.syncJoystick();
     if (Audio) Audio.startBgm();  // 对局开始 → 启动背景音乐
     this.setState('play');
-  };
-
-  Game.prototype.startLevel = function (n) {
-    var prevCount = this.unlockedCount; // 进入前已解锁数（菜单首进为 0）
-    this.startRun('level', lv.levelConfig(n));
-    // 仅在"从已有对局推进关卡"且颜色增多时弹横幅（菜单首进 prev=0 不弹）
-    if (this.unlockedCount > prevCount && prevCount >= cfg.INITIAL_UNLOCKED) {
-      this.unlockBanner = {
-        text: '新颜色解锁！',
-        until: this.timeMs + cfg.UNLOCK_BANNER_MS,
-        keys: cfg.COLOR_KEYS.slice(prevCount, this.unlockedCount) // 本次新增颜色
-      };
-    }
   };
 
   Game.prototype.startEndless = function () {
@@ -332,8 +351,8 @@
     this.elapsed += dt;
     this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
 
-    // 输入：摇杆/键盘给出目标角（与 AI 同规则：只设目标角，转向速率由 Snake 钳制）
-    var ang = this.joystick.currentAngle();
+    // 输入：键盘/摇杆/鼠标跟随给出目标角（与 AI 同规则：只设目标角，转向速率由 Snake 钳制）
+    var ang = this.steeringAngle();
     if (ang !== null && this.mp.playerEntry.alive) this.snake.setTargetAngle(ang);
 
     this.mp.update(dt);
@@ -415,8 +434,8 @@
 
   /**
    * 当前蛇速（px/s）——局内动态加速，每帧按公式重算（平滑，无跳变）：
-   *   闯关：min(基础 + LEVEL_SPEED_CAP_ADD, 基础 + SPEED_LEN_COEF×当前节数 + LEVEL_SPEED_TIME_COEF×存活秒)
    *   无尽：min(SPEED_MAX, SNAKE_SPEED + ENDLESS_SPEEDUP_PER_SEC×存活秒 + SPEED_LEN_COEF×当前节数)
+   *   多人：min(基础 + SPEED_CAP_ADD, 基础 + SPEED_LEN_COEF×当前节数 + SPEED_TIME_COEF×存活秒)
    * 只改速度数值；节间距、消除/收集/撞墙判定等几何参数不受影响。
    */
   Game.prototype.currentSpeed = function () {
@@ -428,8 +447,8 @@
       sp = Math.min(cfg.SPEED_MAX, sp);
     } else {
       base = this.levelCfg.speed;
-      sp = base + len * cfg.SPEED_LEN_COEF + sec * cfg.LEVEL_SPEED_TIME_COEF;
-      sp = Math.min(base + cfg.LEVEL_SPEED_CAP_ADD, sp);
+      sp = base + len * cfg.SPEED_LEN_COEF + sec * cfg.SPEED_TIME_COEF;
+      sp = Math.min(base + cfg.SPEED_CAP_ADD, sp);
     }
     if (this.slowUntil && this.timeMs < this.slowUntil) sp *= cfg.SLOW_FACTOR; // 减速道具
     return sp;
@@ -547,8 +566,8 @@
     this.survivalScore = Math.floor(this.elapsed / 1000) * cfg.SURVIVE_SCORE_PER_SEC;
     this.score = this.survivalScore + this.elimScore;
 
-    // 输入：摇杆/键盘给出目标角（无输入则保持上一目标角，蛇继续沿原方向）
-    var ang = this.joystick.currentAngle();
+    // 输入：键盘/摇杆/鼠标跟随给出目标角（无输入则保持上一目标角，蛇继续沿原方向）
+    var ang = this.steeringAngle();
     if (ang !== null) this.snake.setTargetAngle(ang);
 
     // 推进蛇（转向速率钳制 + 恒速前进 + 轨迹跟随在 snake 内完成）
@@ -651,10 +670,6 @@
 
     this.spawner.specialChance = cfg.specialChanceForElapsed(this.elapsed); // 越后期特殊道具越多
     this.spawner.update(dt);
-
-    if (this.state === 'play' && this.mode === 'level' && this.score >= this.levelCfg.targetScore) {
-      this.levelClear();
-    }
   };
 
   Game.prototype.gameOver = function () {
@@ -665,15 +680,6 @@
     }
     this.overAt = this.timeMs;
     this.setState('over');
-  };
-
-  Game.prototype.levelClear = function () {
-    var n = this.levelCfg.level;
-    if (n >= this.unlocked && this.unlocked < lv.LEVEL_COUNT) {
-      this.unlocked = n + 1;
-      store.set(cfg.STORAGE_UNLOCKED, this.unlocked);
-    }
-    this.setState('clear');
   };
 
   // ---------------- UI 状态与按钮 ----------------
@@ -753,7 +759,7 @@
     var top = Math.max(H * 0.35 + 16, tY + tSize * 0.95 + 20);  // 让开副标题与蛇动画
     var bottom = H * 0.89 - 14 - inset.bottom;                  // 让开底部两行信息
     var showStat = true, showSub = true, showAnim = true;
-    var minNeed = 5 * 34 + 4 * 6;
+    var minNeed = 5 * 34 + 4 * 6;   // 菜单 5 个按钮（无尽/AI对战/在线对战/在线团队赛/图鉴）
     if (bottom - top < minNeed) {                               // 极端小屏兜底
       // 空间不足时逐级让位。优先级：**按钮可点 > 蛇动画 > 副标题 > 历史成绩**
       //（点不到的按钮比看不到的装饰严重得多）。
@@ -767,7 +773,12 @@
         showAnim = false;                                       // 蛇动画（纯装饰）让位
         top = Math.max(inset.top + 4, tY + tSize * 0.55 + 6);
       }
-      if (bottom - top < minNeed) top = Math.max(inset.top + 4, bottom - minNeed);
+      if (bottom - top < minNeed) {
+        // 最后兜底：抬顶腾空间，但**不许压到标题**（标题是唯一不让位的品牌层）。
+        // 剩余缺口交给 solveButtonStack 的二次压缩（间距→0、高度→20px 绝对下限）消化。
+        var titleBot = tY + tSize * 0.5 + 4;
+        top = Math.max(inset.top + 4, titleBot, bottom - minNeed);
+      }
     }
     // 蛇动画是纯装饰：只要它的轨道会被按钮区压到，就直接不画（而不是硬挤）。
     // 判据用**实际占用**（轨道下沿 animY+17）与按钮区顶 top 比较 ——
@@ -835,8 +846,8 @@
     var bw = Math.min(220, W * 0.3), bh = 54;
     var i;
     if (this.state === 'menu') {
-      var ids = ['level', 'endless', 'multi', 'online', 'guide'];
-      var labels = ['闯关模式', '无尽模式', 'AI对战', '在线对战', '图鉴'];
+      var ids = ['endless', 'multi', 'online', 'team', 'guide'];
+      var labels = ['无尽模式', 'AI对战', '在线对战', '在线团队赛', '图鉴'];
       var ml = this.menuLayout();
 
       if (ml.split) {
@@ -857,32 +868,19 @@
       }
     } else if (this.state === 'matching') {
       this.addButton('online_cancel', cx, Math.min(H * 0.72, H - 40 - inset.bottom), bw, bh, '取消匹配');
+    } else if (this.state === 'team_lobby') {
+      // 团队赛开房间界面：昵称 + 好友房号输入框（team_code，供 main.js 挂载 DOM 输入框）
+      // + 邀请好友（生成房号并复制邀请链接）+ 开始/返回
+      var fw = Math.min(360, W * 0.82);
+      this.addButton('team_code', cx, H * 0.42, fw, 48, ''); // 空 label：由 renderer 画"好友房号"提示与输入内容
+      this.addButton('team_invite', cx, H * 0.53, Math.min(240, W * 0.5), 40, '邀请好友（复制链接）');
+      var sBtnW = Math.min(170, W * 0.4);
+      var sY = H * 0.66;
+      this.addButton('team_start', cx - sBtnW / 2 - 10, sY, sBtnW, 54, '开始匹配');
+      this.addButton('team_back', cx + sBtnW / 2 + 10, sY, sBtnW, 54, '返回');
     } else if (this.state === 'guide') {
       // 返回按钮与 drawGuideFooter 居中位置对齐：底部居中 120×38
       this.addButton('back', W / 2, H - 28 - inset.bottom, 120, 38, '← 返回');
-    } else if (this.state === 'levels') {
-      // 关卡网格 3 行 + 返回按钮：同样按可用高度自适应（矮屏会压缩行高）
-      var cols = 5, lw = Math.min(64, (W - 80) / cols - 10);
-      var rows = Math.ceil(lv.LEVEL_COUNT / cols);
-      var gridW = cols * (lw + 12) - 12;
-      var startX = (W - gridW) / 2 + lw / 2;
-      // 行 + 返回按钮一起参与求解（返回按钮当作额外一"行"）
-      var gTop = H * 0.22 + 40, gBottom = H - 14 - inset.bottom;
-      var gMinNeed = (rows + 1) * 30 + rows * 5;
-      if (gBottom - gTop < gMinNeed) gTop = Math.max(inset.top + 8, gBottom - gMinNeed);
-      var gs = this.solveButtonStack(rows + 1, gTop, gBottom,
-        { bh: 50, gap: 16, minBh: 30, minGap: 5 });
-      for (i = 1; i <= lv.LEVEL_COUNT; i++) {
-        var col = (i - 1) % cols, row = Math.floor((i - 1) / cols);
-        this.addButton('lv' + i, startX + col * (lw + 12), gs.firstCy + row * gs.step,
-          lw, gs.bh, String(i), i <= this.unlocked);
-      }
-      this.addButton('back', cx, gs.firstCy + rows * gs.step, 160, Math.min(48, gs.bh), '返回');
-    } else if (this.state === 'clear') {
-      var hasNext = this.levelCfg.level < lv.LEVEL_COUNT;
-      var cs = this.solveButtonStack(hasNext ? 2 : 1, H * 0.50, H - 14 - inset.bottom);
-      if (hasNext) this.addButton('next', cx, cs.firstCy, bw, cs.bh, '下一关');
-      this.addButton('menu', cx, cs.firstCy + (hasNext ? cs.step : 0), bw, cs.bh, '返回菜单');
     } else if (this.state === 'over') {
       if (this.mode === 'multi') {
         // 多人结算：按钮并排贴底，把上方空间尽量让给记分牌卡片
@@ -906,35 +904,53 @@
 
   Game.prototype.onButton = function (id) {
     if (Audio) Audio.playClick();  // 按钮点击音效
-    if (id === 'level') this.setState('levels');
-    else if (id === 'endless') this.startEndless();
+    if (id === 'endless') this.startEndless();
     else if (id === 'multi') this.startMulti();
     else if (id === 'online') this.startOnline();
     else if (id === 'online_cancel') this.cancelOnline();
+    else if (id === 'team') this.enterTeamLobby();
+    else if (id === 'team_start') this.startOnline({ mode: 'team', teamCode: (this.teamCodeDraft && this.teamCodeDraft.trim()) || null });
+    else if (id === 'team_back') { this.lobbyField = null; this.setState('menu'); }
+    else if (id === 'team_code') { this.lobbyField = (this.lobbyField === 'code' ? null : 'code'); }
+    else if (id === 'team_invite') {
+      // 邀请好友（§5.1）：没房号就先自动生成一个，再置标志让 main.js（DOM 层）复制邀请链接。
+      // 已有房号（手填或链接带入）直接复用——重复点邀请不会换号，避免好友拿到不同链接。
+      if (!this.teamCodeDraft || !this.teamCodeDraft.trim()) {
+        this.teamCodeDraft = CS.utils.makeTeamCode();
+      }
+      this.inviteRequested = true;
+    }
     else if (id === 'guide') { this.guidePage = 0; this.guideTab = 'items'; this.setState('guide'); }
     else if (id === 'back') this.setState('menu');
     else if (id === 'menu') { this._teardownOnline(); this.setState('menu'); }
     else if (id === 'retry') {
       if (this.online) this.startOnline(); // 在线结算「再来一局」→ 重新匹配
-      else if (this.mode === 'level') this.startLevel(this.levelCfg.level);
       else if (this.mode === 'multi') this.startMulti();
       else this.startEndless();
-    }
-    else if (id === 'next') this.startLevel(this.levelCfg.level + 1);
-    else if (id.indexOf('lv') === 0) {
-      var n = parseInt(id.slice(2), 10);
-      if (n >= 1 && n <= this.unlocked) this.startLevel(n);
     }
   };
 
   // ---------------- 在线对战（v3.0：匹配 → 联机对局，见 js/net/onlineMatch.js） ----------------
 
-  /** 进入在线匹配：mode 置 multi（渲染分支复用），状态切 matching，控制器接管后续 */
-  Game.prototype.startOnline = function () {
+  /** 进入在线团队赛开房间界面（team_lobby）：选填好友房号后开始匹配 */
+  Game.prototype.enterTeamLobby = function () {
+    this.lobbyField = null;
+    this.inviteNotice = null;
+    // 邀请链接带入的房号：进大厅时消费一次（好友点开 ?team=CODE 链接直达大厅，房号已填好）
+    if (this.pendingTeamCode) {
+      this.teamCodeDraft = this.pendingTeamCode;
+      this.pendingTeamCode = null;
+    }
+    this.setState('team_lobby');
+  };
+
+  /** 进入在线匹配：mode 置 multi（渲染分支复用），状态切 matching，控制器接管后续
+   *  @param {object} [opts] 透传给 OnlineMatch：{ mode:'ffa'|'team', teamCode } */
+  Game.prototype.startOnline = function (opts) {
     this._teardownOnline();
     if (!CS.OnlineMatch) return; // 联机模块未加载（极端：script 缺失）→ 静默忽略
     this.mode = 'multi';
-    this.online = new CS.OnlineMatch(this, {});
+    this.online = new CS.OnlineMatch(this, opts || {});
     this.setState('matching');
     this.online.begin();
   };
@@ -952,8 +968,46 @@
 
   // ---------------- 触摸/鼠标入口（main.js 转发，坐标为 CSS 逻辑像素） ----------------
 
+  /**
+   * 本帧期望目标角（§3.7 输入优先级）：
+   *   键盘（8 方向）> 触屏/拖拽摇杆（joystick.active 期间，死区内保持上一角）> 鼠标跟随（PC）。
+   * 鼠标跟随：方向 = 蛇头屏幕坐标 → 光标的 atan2；光标未知或几乎压在蛇头上时返回 null
+   * （保持最后方向，不乱转）。无输入返回 null（调用方保持蛇的上一目标角）。
+   */
+  Game.prototype.steeringAngle = function () {
+    var kv = this.joystick.keyVector();
+    if (kv) return Math.atan2(kv.y, kv.x);
+    if (this.joystick.active) return this.joystick.angle;
+    if (this.cursorX === null || this.cursorY === null || !this.snake) return null;
+    // 世界坐标 → 屏幕坐标：减去相机原点，加上视口偏移（与 renderer 同一换算；事件坐标是 CSS 像素）
+    var l = this.layout();
+    var hx = l.viewX + (this.snake.x - this.camera.x);
+    var hy = l.viewY + (this.snake.y - this.camera.y);
+    var dx = this.cursorX - hx, dy = this.cursorY - hy;
+    if (dx * dx + dy * dy < 9) return null; // 光标几乎在蛇头上（<3px）：方向保持，避免原地乱转
+    return Math.atan2(dy, dx);
+  };
+
+  /** PC 光标跟踪（main.js mousemove 无条件转发）：play 态立即应用鼠标跟随转向 */
+  Game.prototype.onCursorMove = function (x, y) {
+    this.cursorX = x; this.cursorY = y;
+    this._applySteeringNow();
+  };
+
+  /**
+   * 即帧生效（§3.7）：touch/mouse 事件路径更新输入后立即 setTargetAngle，不等下一帧 update。
+   * 键盘优先语义由 steeringAngle 内部保证。在线局跳过：输入走 onlineMatch.update
+   * 节流上行 + 预测体每帧取 steeringAngle，事件路径不直接改预测蛇。
+   */
+  Game.prototype._applySteeringNow = function () {
+    if (this.state !== 'play' || !this.snake || this.online) return;
+    if (this.mode === 'multi' && this.mp && this.mp.playerEntry && !this.mp.playerEntry.alive) return;
+    var ang = this.steeringAngle();
+    if (ang !== null) this.snake.setTargetAngle(ang);
+  };
+
   Game.prototype.onTouchStart = function (x, y, id) {
-    if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); return; }
+    if (this.state === 'play') { this.joystick.onTouchStart(x, y, id); this._applySteeringNow(); return; }
     // 非 play 态也要登记触点：否则「倒计时按住手指 → 开局」时摇杆不知道手指还在屏上，
     // 后续只有 touchmove 在流，原实现会整局锁死（见 docs/design §3.7）。
     this.joystick.touches[id] = { x: x, y: y };
@@ -992,7 +1046,7 @@
   };
 
   Game.prototype.onTouchMove = function (x, y, id) {
-    if (this.state === 'play') { this.joystick.onTouchMove(x, y, id); return; }
+    if (this.state === 'play') { this.joystick.onTouchMove(x, y, id); this._applySteeringNow(); return; }
     // 非 play 态同样跟踪触点位置，保证进入 play 时 latchExisting 能拿到最新坐标
     if (this.joystick.touches[id]) { this.joystick.touches[id].x = x; this.joystick.touches[id].y = y; }
   };
