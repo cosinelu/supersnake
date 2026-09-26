@@ -2,7 +2,7 @@
 // bench.cpu.js — 一次性 profiling：分解 tick 模拟 / snap encode / deflate 的 CPU 占比
 var path = require('path');
 var JS = path.join(__dirname, '..', '..', 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'ai', 'multiplayer']
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles', 'ai', 'multiplayer']
   .forEach(function (f) { require(path.join(JS, f + '.js')); });
 ['protocol', 'transport', 'headlessGame']
   .forEach(function (f) { require(path.join(JS, 'net', f + '.js')); });

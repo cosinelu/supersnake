@@ -11,7 +11,7 @@
  */
 var path = require('path');
 var JS = path.join(__dirname, '..', 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles', 'ai', 'multiplayer']
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles', 'ai', 'multiplayer']
   .forEach(function (f) { require(path.join(JS, f + '.js')); });
 ['protocol', 'transport', 'headlessGame', 'binCodec', 'binProtocol']
   .forEach(function (f) { require(path.join(JS, 'net', f + '.js')); });
@@ -45,24 +45,54 @@ function Room(opts) {
   this._lowFreqAt = 0;      // 低频通道（昵称/计分/色块全量校正）上次发送时刻
 
   var self = this;
+  this.mode = opts.teams ? 'team' : 'ffa'; // 团队战（2v2v2v2v2）走 team 分支
   this.game = new CS.HeadlessGame({
     onEvent: function (kind, data) { self._broadcast(P.event(kind, data)); }
   });
-  var names = opts.players.map(function (p) { return p.name; });
-  var entries = this.game.setup(names);
 
   this.humans = {}; // connId → human
-  var self2 = this;
-  opts.players.forEach(function (p, i) {
-    self2.humans[p.connId] = {
-      connId: p.connId, name: p.name, send: p.send,
-      entry: entries[i], connected: true,
-      angle: entries[i].snake.angle, boost: 0,
-      lastSeq: 0,           // 已应用的输入 seq（快照 ack）
-      overSent: false
-    };
-  });
-  this.totalHumans = opts.players.length;
+  this.totalHumans = 0;
+
+  if (this.mode === 'team') {
+    // 团队模式：根据匹配器给的 5×2 编制一次性建场（人类占位 + AI 补位）
+    this.teamSpecs = opts.teams;            // 2D：teams[teamId][slot] = {isHuman,name,connId?}
+    var tsetup = this.game.setupTeams(opts.teams);
+    this.teamEntries = tsetup.teams;       // 与 teamSpecs 对齐的 Entry 二维数组
+    var sendOf = {};
+    (opts.players || []).forEach(function (p) { sendOf[p.connId] = p.send; });
+    var self2 = this;
+    for (var t = 0; t < opts.teams.length; t++) {
+      for (var s = 0; s < opts.teams[t].length; s++) {
+        var spec = opts.teams[t][s];
+        if (spec && spec.isHuman) {
+          var cid = spec.connId;
+          self2.humans[cid] = {
+            connId: cid, name: spec.name, send: sendOf[cid],
+            entry: self2.teamEntries[t][s], connected: true,
+            angle: self2.teamEntries[t][s].snake.angle, boost: 0,
+            lastSeq: 0, overSent: false, deadSent: false, team: t
+          };
+          self2.totalHumans++;
+        }
+      }
+    }
+  } else {
+    var names = opts.players.map(function (p) { return p.name; });
+    var entries = this.game.setup(names);
+
+    this.humans = {}; // connId → human
+    var self3 = this;
+    opts.players.forEach(function (p, i) {
+      self3.humans[p.connId] = {
+        connId: p.connId, name: p.name, send: p.send,
+        entry: entries[i], connected: true,
+        angle: entries[i].snake.angle, boost: 0,
+        lastSeq: 0,           // 已应用的输入 seq（快照 ack）
+        overSent: false, deadSent: false
+      };
+    });
+    this.totalHumans = opts.players.length;
+  }
 }
 
 /**
@@ -106,6 +136,19 @@ Room.prototype.start = function () {
   for (var cid in this.humans) {
     players.push({ id: this.humans[cid].entry.id, name: this.humans[cid].name });
   }
+  // 团队模式：队伍编制（5×2）一并发下，供客户端着色 / 名牌 / 结算
+  var teamsPayload = null;
+  if (this.mode === 'team' && this.teamEntries) {
+    teamsPayload = [];
+    for (var tt = 0; tt < this.teamEntries.length; tt++) {
+      var tp = [];
+      for (var ss = 0; ss < this.teamEntries[tt].length; ss++) {
+        var te = this.teamEntries[tt][ss];
+        tp.push({ id: te.id, name: te.name, isHuman: te.isPlayer ? 1 : 0 });
+      }
+      teamsPayload.push(tp);
+    }
+  }
   // 初始墙体一并下发（后续新增墙体走 wall 事件增量广播）
   var walls = this.game.walls.rects.map(function (r) { return [r.x | 0, r.y | 0, r.w | 0, r.h | 0]; });
   for (var c in this.humans) {
@@ -129,6 +172,12 @@ Room.prototype.start = function () {
       // 缺省必须是不显示：旧客户端读不到该字段时等同 false，与 official 行为一致。
       debugHud: this.config.DEBUG_HUD === true
     };
+    // 团队模式附加字段
+    msg.mode = this.mode;
+    if (this.mode === 'team') {
+      msg.teams = teamsPayload;
+      msg.myTeam = h.team;
+    }
     // 加速通道接入信息（可选）：客户端据此打洞；拿不到就全程走 TCP
     // （见 02-udp-transport.md §4.3）。
     // **两条通道都下发**（裸 UDP + WebTransport），由客户端按自身能力挑一条：
@@ -366,46 +415,101 @@ Room.prototype._blockDelta = function (blocks) {
   return { add: add, del: del };
 };
 
-/** 真人自然死亡（撞墙/被撞）→ 立即给本人发 over(dead)（对手继续） */
+/** 真人自然死亡（撞墙/被撞）→ 立即给本人发结算/观战事件（对手继续） */
 Room.prototype._checkPlayerDeaths = function () {
-  for (var cid in this.humans) {
-    var h = this.humans[cid];
-    if (h.connected && !h.overSent && !h.entry.alive) {
-      h.overSent = true;
-      safeSend(h, { t: P.S2C.OVER, reason: P.OVER_REASON.DEAD, ranks: this._ranks() });
+  if (this.mode === 'team') {
+    for (var cid in this.humans) {
+      var h = this.humans[cid];
+      if (!h.connected || h.entry.alive) continue;
+      // 本人已死：若仍有存活队友 → 转观战（不结算，相机跟随队友）
+      if (!h.deadSent) {
+        h.deadSent = true;
+        if (this.game.mp.aliveMemberOfTeam(h.team)) {
+          safeSend(h, { t: P.S2C.EVENT, k: P.EVENT_KIND.YOU_DIED, team: h.team });
+          continue; // 不置 overSent，等待整队淘汰或全局结束再结算
+        }
+      }
+      // 整队已无人存活（或先前已发 you_died 且队友此时也亡）→ 结算负。
+      // 必须带 teams 队伍总排行（§4.3-4：团队模式所有 OVER 都带），
+      // 否则客户端组不出队伍结算卡，会退化成 FFA 通用卡片。
+      // 关键：每次都要重查队友存活——you_died 之后只要队友还活着就继续观战，
+      // 绝不能在下个 tick 无条件补发 OVER（v3.1 实测：队友 1 存活却被弹「惜败」结算卡）。
+      if (!h.overSent && !this.game.mp.aliveMemberOfTeam(h.team)) {
+        h.overSent = true;
+        safeSend(h, { t: P.S2C.OVER, reason: P.OVER_REASON.DEAD, ranks: this._ranks(), teams: this._teamRanks() });
+      }
+    }
+    return;
+  }
+  for (var cid2 in this.humans) {
+    var h2 = this.humans[cid2];
+    if (h2.connected && !h2.overSent && !h2.entry.alive) {
+      h2.overSent = true;
+      safeSend(h2, { t: P.S2C.OVER, reason: P.OVER_REASON.DEAD, ranks: this._ranks() });
     }
   }
 };
 
 /** 结算条件：存活真人 ≤1（多真人局）或团灭 / 到达对局上限 */
 Room.prototype._checkOver = function () {
+  if (this.mode === 'team') {
+    var aliveTeams = this.game.mp.aliveTeamCount();
+    var reason = null;
+    if (aliveTeams <= 1) reason = P.OVER_REASON.WIN;        // 仅存 1 队 → 该队胜
+    else if (this.game.mp.timeMs >= this.config.MATCH_MAX_MS) reason = P.OVER_REASON.TIMEOUT; // 超时 → 按队伍总分
+    if (!reason) return;
+
+    this.state = 'over';
+    var ranks = this._ranks();
+    var teamRanks = this._teamRanks();
+    var self = this;
+    for (var cid in this.humans) {
+      var h = this.humans[cid];
+      if (!h.connected || h.overSent) continue;
+      h.overSent = true;
+      var r;
+      if (reason === P.OVER_REASON.WIN) {
+        // 仅存队伍获胜：只要本人所属队仍有存活成员即胜
+        r = this.game.mp.aliveMemberOfTeam(h.team) ? P.OVER_REASON.WIN : P.OVER_REASON.LOSE;
+      } else {
+        // 超时：按队伍总分排名，第一名为胜
+        var myTeam = teamRanks.filter(function (t) { return t.id === h.team; })[0];
+        r = (myTeam && myTeam.rank === 1) ? P.OVER_REASON.WIN : P.OVER_REASON.LOSE;
+      }
+      safeSend(h, { t: P.S2C.OVER, reason: r, ranks: ranks, teams: teamRanks });
+    }
+    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    this._overTimer = setTimeout(function () { self.onEmpty(self); }, this.config.OVER_LINGER_MS);
+    return;
+  }
+
   var alive = this.game.mp.alivePlayerCount();
   var threshold = this.totalHumans > 1 ? 1 : 0;
-  var reason = null;
-  if (alive <= threshold) reason = P.OVER_REASON.WIN;
-  else if (this.game.mp.timeMs >= this.config.MATCH_MAX_MS) reason = P.OVER_REASON.TIMEOUT;
-  if (!reason) return;
+  var reason2 = null;
+  if (alive <= threshold) reason2 = P.OVER_REASON.WIN;
+  else if (this.game.mp.timeMs >= this.config.MATCH_MAX_MS) reason2 = P.OVER_REASON.TIMEOUT;
+  if (!reason2) return;
 
   this.state = 'over';
-  var ranks = this._ranks();
-  for (var cid in this.humans) {
-    var h = this.humans[cid];
-    if (!h.connected || h.overSent) continue;
-    h.overSent = true;
-    var r = h.entry.alive ? reason : P.OVER_REASON.DEAD;
-    safeSend(h, { t: P.S2C.OVER, reason: r, ranks: ranks });
+  var ranks2 = this._ranks();
+  for (var cid2 in this.humans) {
+    var h2 = this.humans[cid2];
+    if (!h2.connected || h2.overSent) continue;
+    h2.overSent = true;
+    var r2 = h2.entry.alive ? reason2 : P.OVER_REASON.DEAD;
+    safeSend(h2, { t: P.S2C.OVER, reason: r2, ranks: ranks2 });
   }
   if (this._timer) { clearInterval(this._timer); this._timer = null; }
-  var self = this;
-  this._overTimer = setTimeout(function () { self.onEmpty(self); }, this.config.OVER_LINGER_MS);
+  var self2 = this;
+  this._overTimer = setTimeout(function () { self2.onEmpty(self2); }, this.config.OVER_LINGER_MS);
 };
 
-/** 最终排行：存活优先，其后按总分（生存+消除+彩色星加成）降序 */
+/** 最终排行：存活优先，其后按总分（生存+消除+彩色星加成）降序（含 team 字段供团队模式用） */
 Room.prototype._ranks = function () {
   var arr = this.game.mp.allEntries().map(function (e) {
     return {
       id: e.id, name: e.name, isPlayer: e.isPlayer, alive: e.alive,
-      score: (e.survivalScore || 0) + (e.elimScore || 0) + (e.mpBonusScore || 0),
+      team: e.teamId, score: (e.survivalScore || 0) + (e.elimScore || 0) + (e.mpBonusScore || 0),
       length: e.snake.length(), kills: e.kills
     };
   });
@@ -413,6 +517,24 @@ Room.prototype._ranks = function () {
     if (!!a.alive !== !!b.alive) return a.alive ? -1 : 1;
     return b.score - a.score;
   });
+  for (var i = 0; i < arr.length; i++) arr[i].rank = i + 1;
+  return arr;
+};
+
+/** 队伍总排行（团队模式）：按 teamScore 降序，附存活人数与成员 */
+Room.prototype._teamRanks = function () {
+  var mp = this.game.mp;
+  var map = {};
+  mp.allEntries().forEach(function (e) {
+    if (e.teamId < 0) return;
+    if (!map[e.teamId]) map[e.teamId] = { id: e.teamId, aliveCount: 0, score: 0, members: [] };
+    map[e.teamId].score += (e.survivalScore || 0) + (e.elimScore || 0) + (e.mpBonusScore || 0);
+    if (e.alive) map[e.teamId].aliveCount++;
+    map[e.teamId].members.push({ id: e.id, name: e.name, isPlayer: e.isPlayer ? 1 : 0 });
+  });
+  var arr = [];
+  for (var k in map) arr.push(map[k]);
+  arr.sort(function (a, b) { return b.score - a.score; });
   for (var i = 0; i < arr.length; i++) arr[i].rank = i + 1;
   return arr;
 };

@@ -62,7 +62,7 @@ fi
 # ---------- 4. 逻辑模块不依赖 DOM ----------
 # 依据：README 承诺「逻辑模块不依赖 DOM，可在 node 中直接加载」——
 #       这是 smoke 测试与联机 headless 回放成立的前提，破了它测试直接跑不起来
-LOGIC="config utils storage levels walls snake spawner particles ai multiplayer"
+LOGIC="config utils storage walls snake spawner particles ai multiplayer"
 DOM_HIT=""
 for m in $LOGIC; do
   f="js/$m.js"

@@ -56,9 +56,44 @@
     };
   }
 
+  /**
+   * 生成团队赛邀请房号（docs/design/02-team-mode.md §5.1）。
+   * 字符集/长度读 config（TEAM_CODE_CHARS / TEAM_CODE_LEN），缺省有兜底，保证 utils 独立可加载。
+   * @param {function(): number} [rng] 默认 Math.random；测试可传 makeRng(seed) 保证确定性
+   * @returns {string} 如 'K7Q2'
+   */
+  function makeTeamCode(rng) {
+    var rnd = rng || Math.random;
+    var chars = (CS.config && CS.config.TEAM_CODE_CHARS) || '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+    var len = (CS.config && CS.config.TEAM_CODE_LEN) || 4;
+    var s = '';
+    for (var i = 0; i < len; i++) s += chars[Math.floor(rnd() * chars.length) % chars.length];
+    return s;
+  }
+
+  /**
+   * 解析邀请链接里的房号：`?team=K7Q2` / `?x=1&team=k7q2` → 'K7Q2'；无/非法 → null。
+   * 只保留字母数字并转大写，最长 24（与 matchmaker 的 teamCode 透传长度对齐）。
+   * 纯函数、DOM 无关：main.js 把 location.search 传进来即可。
+   * @param {string} search 形如 '?team=K7Q2' 的 query string（也容忍裸 'team=K7Q2'）
+   */
+  function parseTeamInvite(search) {
+    if (!search || typeof search !== 'string') return null;
+    var q = search.charAt(0) === '?' ? search.slice(1) : search;
+    var parts = q.split('&');
+    for (var i = 0; i < parts.length; i++) {
+      var kv = parts[i].split('=');
+      if (kv[0] === 'team' && kv[1]) {
+        var code = String(kv[1]).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24);
+        return code || null;
+      }
+    }
+    return null;
+  }
+
   CS.utils = {
     hash2: hash2, clamp: clamp, manhattan: manhattan,
     dist: dist, normAngle: normAngle, turnToward: turnToward,
-    makeRng: makeRng
+    makeRng: makeRng, makeTeamCode: makeTeamCode, parseTeamInvite: parseTeamInvite
   };
 })(typeof window !== 'undefined' ? window : globalThis);

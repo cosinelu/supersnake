@@ -57,7 +57,7 @@ if (!WS_URL || !UDP_HOST) {
 var ROOT = path.join(__dirname, '..');
 var WebSocket = require(path.join(ROOT, 'server', 'node_modules', 'ws'));
 var JS = path.join(ROOT, 'js');
-['config', 'utils', 'storage', 'levels', 'walls', 'snake', 'spawner', 'particles',
+['config', 'utils', 'storage', 'walls', 'snake', 'spawner', 'particles',
   'ai', 'multiplayer'].forEach(function (f) { require(path.join(JS, f + '.js')); });
 ['protocol', 'binCodec', 'binProtocol'].forEach(function (f) {
   require(path.join(JS, 'net', f + '.js'));
